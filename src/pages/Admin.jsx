@@ -1732,11 +1732,10 @@ function VsdPlansTab() {
 function PlanScaleTab() {
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedPlan, setSelectedPlan] = useState(null);
   const [scaleConfigs, setScaleConfigs] = useState({});
-  const [calibrating, setCalibrating] = useState(null);
-  const [calibrationData, setCalibrationData] = useState({ points: [], distance: '' });
-  const canvasRef = useRef(null);
+  const [editingPlan, setEditingPlan] = useState(null);
+  const [scaleRatio, setScaleRatio] = useState('');
+  const [saving, setSaving] = useState(false);
 
   // Fetch plans
   const fetchPlans = async () => {
@@ -1768,99 +1767,58 @@ function PlanScaleTab() {
 
   useEffect(() => { fetchPlans(); }, []);
 
-  // Handle canvas click for calibration
-  const handleCanvasClick = (e) => {
-    if (!calibrating || calibrationData.points.length >= 2) return;
+  // Save scale from ratio
+  // For architectural plans: 1:100 means 1cm on plan = 100cm real = 1m
+  // PDF rendered at ~150 DPI: 1 inch = 150 pixels = 25.4mm
+  // 1 pixel = 25.4/150 = 0.169mm = 0.000169m
+  // At scale 1:X, 1 pixel represents 0.000169 * X meters
+  const saveScaleFromRatio = async (plan, ratio) => {
+    if (!plan || !ratio || ratio <= 0) return;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / rect.width;
-    const y = (e.clientY - rect.top) / rect.height;
-
-    setCalibrationData(prev => ({
-      ...prev,
-      points: [...prev.points, { x, y }]
-    }));
-  };
-
-  // Draw calibration points
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !calibrating) return;
-
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Draw points
-    calibrationData.points.forEach((pt, i) => {
-      const x = pt.x * canvas.width;
-      const y = pt.y * canvas.height;
-
-      ctx.beginPath();
-      ctx.arc(x, y, 10, 0, Math.PI * 2);
-      ctx.fillStyle = '#f59e0b';
-      ctx.fill();
-      ctx.strokeStyle = 'white';
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 14px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(i === 0 ? 'A' : 'B', x, y);
-    });
-
-    // Draw line
-    if (calibrationData.points.length === 2) {
-      ctx.beginPath();
-      ctx.moveTo(calibrationData.points[0].x * canvas.width, calibrationData.points[0].y * canvas.height);
-      ctx.lineTo(calibrationData.points[1].x * canvas.width, calibrationData.points[1].y * canvas.height);
-      ctx.strokeStyle = '#f59e0b';
-      ctx.lineWidth = 3;
-      ctx.setLineDash([10, 5]);
-      ctx.stroke();
-    }
-  }, [calibrating, calibrationData.points]);
-
-  // Save scale
-  const saveScale = async () => {
-    if (!calibrating || calibrationData.points.length !== 2 || !calibrationData.distance) return;
-
+    setSaving(true);
     try {
+      // Approximate: PDF at 150 DPI, 1 pixel on plan = (25.4/150) mm
+      // At scale 1:ratio, real distance = pixel_mm * ratio / 1000 meters
+      const pixelSizeMm = 25.4 / 150; // ~0.169 mm per pixel
+      const metersPerPixel = (pixelSizeMm * ratio) / 1000;
+
       const res = await fetch('/api/measurements/scale', {
         method: 'POST',
         ...getAuthOptions(),
         body: JSON.stringify({
-          planId: calibrating.id,
+          planId: plan.id,
           pageIndex: 0,
-          point1: calibrationData.points[0],
-          point2: calibrationData.points[1],
-          realDistanceMeters: parseFloat(calibrationData.distance),
+          point1: { x: 0, y: 0 },
+          point2: { x: 1, y: 0 },
+          realDistanceMeters: metersPerPixel * 1000, // Distance for 1000 pixels
           imageWidth: 1000,
-          imageHeight: 750
+          imageHeight: 750,
+          scaleRatio: ratio
         })
       });
       const data = await res.json();
       if (data.ok) {
-        setScaleConfigs(prev => ({ ...prev, [calibrating.id]: data.scale }));
-        setCalibrating(null);
-        setCalibrationData({ points: [], distance: '' });
+        setScaleConfigs(prev => ({ ...prev, [plan.id]: { ...data.scale, scale_ratio: ratio } }));
+        setEditingPlan(null);
+        setScaleRatio('');
       }
     } catch (err) {
       console.error('Error saving scale:', err);
+    } finally {
+      setSaving(false);
     }
   };
 
-  // Calculate pixel distance
-  const pixelDistance = calibrationData.points.length === 2
-    ? Math.sqrt(
-        Math.pow((calibrationData.points[1].x - calibrationData.points[0].x) * 1000, 2) +
-        Math.pow((calibrationData.points[1].y - calibrationData.points[0].y) * 750, 2)
-      )
-    : null;
+  // Get ratio from existing scale config
+  const getRatioFromScale = (scaleConfig) => {
+    if (scaleConfig?.scale_ratio) return scaleConfig.scale_ratio;
+    if (scaleConfig?.scale_meters_per_pixel) {
+      const pixelSizeMm = 25.4 / 150;
+      const ratio = (parseFloat(scaleConfig.scale_meters_per_pixel) * 1000) / pixelSizeMm;
+      return Math.round(ratio);
+    }
+    return null;
+  };
 
   if (loading) return <LoadingSpinner text="Chargement des plans..." />;
 
@@ -1875,8 +1833,8 @@ function PlanScaleTab() {
           <div>
             <h3 className="font-semibold text-amber-900">Configuration de l'echelle des plans</h3>
             <p className="text-sm text-amber-700 mt-1">
-              Definissez l'echelle de chaque plan pour permettre les mesures de distance et de surface.
-              Cliquez sur 2 points de reference sur le plan et entrez la distance reelle entre eux.
+              Entrez l'echelle de chaque plan (ex: 1:100 pour un plan ou 1 cm = 1 m).
+              Cette echelle permet ensuite de mesurer des distances et surfaces sur les cartes.
             </p>
           </div>
         </div>
@@ -1905,6 +1863,8 @@ function PlanScaleTab() {
             {plans.map(plan => {
               const scaleConfig = scaleConfigs[plan.id];
               const hasScale = !!scaleConfig;
+              const existingRatio = getRatioFromScale(scaleConfig);
+              const isEditing = editingPlan?.id === plan.id;
 
               return (
                 <div key={plan.id} className="p-4 hover:bg-gray-50 transition-colors">
@@ -1923,36 +1883,58 @@ function PlanScaleTab() {
                         </span>
                         {hasScale ? (
                           <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full flex items-center gap-1">
-                            <Check size={12} /> Echelle configuree
+                            <Check size={12} /> 1:{existingRatio || '?'}
                           </span>
                         ) : (
                           <span className="px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full flex items-center gap-1">
-                            <AlertTriangle size={12} /> Echelle requise
+                            <AlertTriangle size={12} /> Non configure
                           </span>
                         )}
                       </div>
-                      {hasScale && (
-                        <p className="text-sm text-gray-500 mt-0.5">
-                          1 px = {(parseFloat(scaleConfig.scale_meters_per_pixel) * 100).toFixed(4)} cm
-                        </p>
-                      )}
                     </div>
 
-                    {/* Actions */}
-                    <button
-                      onClick={() => {
-                        setCalibrating(plan);
-                        setCalibrationData({ points: [], distance: '' });
-                      }}
-                      className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors ${
-                        hasScale
-                          ? 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                          : 'bg-amber-500 hover:bg-amber-600 text-white'
-                      }`}
-                    >
-                      <Ruler size={16} />
-                      {hasScale ? 'Reconfigurer' : 'Configurer'}
-                    </button>
+                    {/* Edit Scale */}
+                    {isEditing ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-gray-600">1 :</span>
+                        <input
+                          type="number"
+                          value={scaleRatio}
+                          onChange={(e) => setScaleRatio(e.target.value)}
+                          placeholder="100"
+                          className="w-24 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                          autoFocus
+                        />
+                        <button
+                          onClick={() => saveScaleFromRatio(plan, parseFloat(scaleRatio))}
+                          disabled={!scaleRatio || saving}
+                          className="p-2 bg-green-500 hover:bg-green-600 text-white rounded-lg disabled:opacity-50"
+                        >
+                          {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                        </button>
+                        <button
+                          onClick={() => { setEditingPlan(null); setScaleRatio(''); }}
+                          className="p-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setEditingPlan(plan);
+                          setScaleRatio(existingRatio?.toString() || '');
+                        }}
+                        className={`px-4 py-2 rounded-lg flex items-center gap-2 transition-colors ${
+                          hasScale
+                            ? 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                            : 'bg-amber-500 hover:bg-amber-600 text-white'
+                        }`}
+                      >
+                        <Ruler size={16} />
+                        {hasScale ? 'Modifier' : 'Configurer'}
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -1961,153 +1943,19 @@ function PlanScaleTab() {
         )}
       </div>
 
-      {/* Calibration Modal */}
-      {calibrating && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setCalibrating(null)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
-            {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-100">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white">
-                  <Ruler size={18} />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-gray-900">
-                    Calibrer: {calibrating.display_name || calibrating.logical_name}
-                  </h3>
-                  <p className="text-sm text-gray-500">
-                    Cliquez sur 2 points de reference et entrez la distance reelle
-                  </p>
-                </div>
-              </div>
-              <button onClick={() => setCalibrating(null)} className="p-2 hover:bg-gray-100 rounded-lg">
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 overflow-auto p-4">
-              <div className="grid md:grid-cols-3 gap-4">
-                {/* PDF Preview with Canvas Overlay */}
-                <div className="md:col-span-2 relative">
-                  <div className="relative aspect-[4/3] bg-gray-100 rounded-xl overflow-hidden">
-                    <iframe
-                      src={`/api/vsd/maps/planFile?logical_name=${encodeURIComponent(calibrating.logical_name)}&site=Default#page=1`}
-                      className="absolute inset-0 w-full h-full border-0"
-                    />
-                    <canvas
-                      ref={canvasRef}
-                      width={800}
-                      height={600}
-                      onClick={handleCanvasClick}
-                      className="absolute inset-0 w-full h-full cursor-crosshair"
-                      style={{ backgroundColor: 'transparent' }}
-                    />
-                  </div>
-
-                  {/* Instructions */}
-                  <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                    <p className="text-sm text-amber-800">
-                      {calibrationData.points.length === 0
-                        ? "1. Cliquez sur le premier point de reference (ex: coin d'un mur)"
-                        : calibrationData.points.length === 1
-                        ? "2. Cliquez sur le deuxieme point de reference (ex: autre coin du mur)"
-                        : "3. Entrez la distance reelle entre les 2 points en metres"}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Controls */}
-                <div className="space-y-4">
-                  {/* Points info */}
-                  <div className="space-y-2">
-                    <div className={`p-3 rounded-lg ${calibrationData.points.length >= 1 ? 'bg-amber-100' : 'bg-gray-100'}`}>
-                      <div className="text-sm font-medium">Point A</div>
-                      {calibrationData.points[0] ? (
-                        <div className="text-xs text-gray-600">
-                          x: {(calibrationData.points[0].x * 100).toFixed(1)}%, y: {(calibrationData.points[0].y * 100).toFixed(1)}%
-                        </div>
-                      ) : (
-                        <div className="text-xs text-gray-400">Non defini</div>
-                      )}
-                    </div>
-
-                    <div className={`p-3 rounded-lg ${calibrationData.points.length >= 2 ? 'bg-amber-100' : 'bg-gray-100'}`}>
-                      <div className="text-sm font-medium">Point B</div>
-                      {calibrationData.points[1] ? (
-                        <div className="text-xs text-gray-600">
-                          x: {(calibrationData.points[1].x * 100).toFixed(1)}%, y: {(calibrationData.points[1].y * 100).toFixed(1)}%
-                        </div>
-                      ) : (
-                        <div className="text-xs text-gray-400">Non defini</div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Pixel distance */}
-                  {pixelDistance !== null && (
-                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                      <div className="text-sm text-blue-800">Distance pixels</div>
-                      <div className="text-lg font-semibold text-blue-900">
-                        {pixelDistance.toFixed(0)} px
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Distance input */}
-                  {calibrationData.points.length === 2 && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Distance reelle (metres)
-                      </label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0.01"
-                        value={calibrationData.distance}
-                        onChange={(e) => setCalibrationData(prev => ({ ...prev, distance: e.target.value }))}
-                        placeholder="Ex: 10.5"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                      />
-                    </div>
-                  )}
-
-                  {/* Calculated scale */}
-                  {pixelDistance && calibrationData.distance && (
-                    <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
-                      <div className="text-sm text-green-800">Nouvelle echelle</div>
-                      <div className="text-lg font-semibold text-green-900">
-                        1 px = {((parseFloat(calibrationData.distance) / pixelDistance) * 100).toFixed(4)} cm
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Actions */}
-                  <div className="flex gap-2 pt-4">
-                    <button
-                      onClick={() => setCalibrationData({ points: [], distance: '' })}
-                      disabled={calibrationData.points.length === 0}
-                      className="flex-1 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <RefreshCw size={16} />
-                      Reset
-                    </button>
-                    <button
-                      onClick={saveScale}
-                      disabled={calibrationData.points.length !== 2 || !calibrationData.distance}
-                      className="flex-1 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Check size={16} />
-                      Enregistrer
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Help section */}
+      <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+        <h4 className="font-medium text-blue-900 mb-2">Comment trouver l'echelle ?</h4>
+        <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
+          <li><strong>1:50</strong> - Plans de details (1 cm = 50 cm)</li>
+          <li><strong>1:100</strong> - Plans d'etage standards (1 cm = 1 m)</li>
+          <li><strong>1:200</strong> - Plans de batiment (1 cm = 2 m)</li>
+          <li><strong>1:500</strong> - Plans de site (1 cm = 5 m)</li>
+        </ul>
+        <p className="text-xs text-blue-600 mt-2">
+          L'echelle est generalement indiquee dans le cartouche du plan.
+        </p>
+      </div>
     </div>
   );
 }
