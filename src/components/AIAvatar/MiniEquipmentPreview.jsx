@@ -153,7 +153,7 @@ const EQUIPMENT_CONFIGS = {
       planFileUrl: (logical_name) => api.datahub.maps.planFileUrlAuto(logical_name, { bust: false }),
       getEquipment: (id) => api.datahub.get(id),
     },
-    idField: 'equipment_id',
+    idField: 'item_id', // dh_positions uses item_id, not equipment_id
   },
   infrastructure: {
     name: 'Infrastructure',
@@ -731,11 +731,12 @@ export default function MiniEquipmentPreview({
         const myPosition = positions.find(p =>
           idsMatch(p[config.idField], equipmentId) ||
           idsMatch(p.equipment_id, equipmentId) ||
+          idsMatch(p.item_id, equipmentId) ||  // datahub uses item_id
           idsMatch(p.id, equipmentId)
         );
 
         if (!myPosition && positions.length > 0) {
-          console.log('[MiniEquipmentPreview] Position not found. Looking for:', equipmentId, 'Available IDs:', positions.slice(0, 5).map(p => p.equipment_id || p[config.idField] || p.id));
+          console.log('[MiniEquipmentPreview] Position not found. Looking for:', equipmentId, 'Available IDs:', positions.slice(0, 5).map(p => p.item_id || p.equipment_id || p[config.idField] || p.id));
         }
 
         if (myPosition) {
