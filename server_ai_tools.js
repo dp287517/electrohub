@@ -2393,14 +2393,43 @@ function createToolHandlers(pool, site) {
           }
 
           if (allResults.length > 0) {
-            return {
+            // Déterminer si tous les équipements sont du même type pour suggérer le transfert
+            const equipmentTypes = [...new Set(allResults.map(r => r.equipment_type))];
+            const singleType = equipmentTypes.length === 1 ? equipmentTypes[0] : null;
+
+            // Mapping agent par type
+            const agentMap = {
+              vsd: { name: 'Shakira', type: 'vsd' },
+              meca: { name: 'Titan', type: 'meca' },
+              glo: { name: 'Lumina', type: 'glo' },
+              hv: { name: 'Voltaire', type: 'hv' },
+              mobile: { name: 'Nomad', type: 'mobile' },
+              atex: { name: 'Phoenix', type: 'atex' },
+              switchboard: { name: 'Matrix', type: 'switchboard' },
+              doors: { name: 'Portal', type: 'doors' },
+              datahub: { name: 'Nexus', type: 'datahub' },
+              infrastructure: { name: 'Nexus', type: 'datahub' }
+            };
+
+            const result = {
               success: true,
               count: allResults.length,
-              equipment_type: 'all',
+              equipment_type: singleType || 'mixed',
               filters: { name },
               equipment: allResults.slice(0, limit),
               summary: `${allResults.length} équipement(s) trouvé(s) correspondant à "${name}".`
             };
+
+            // Si un seul type trouvé, suggérer le transfert vers l'agent spécialisé
+            if (singleType && agentMap[singleType]) {
+              const agent = agentMap[singleType];
+              result.suggest_transfer = true;
+              result.suggested_agent = agent.type;
+              result.suggested_agent_name = agent.name;
+              result.transfer_message = `Cet équipement est de type **${singleType}**. Voulez-vous que je vous transfère à **${agent.name}** (l'agent spécialisé) pour plus de détails ?`;
+            }
+
+            return result;
           }
 
           // === RECHERCHE DE SUGGESTIONS si rien trouvé ===
@@ -2548,7 +2577,7 @@ function createToolHandlers(pool, site) {
 
           const result = await pool.query(datahubQuery, datahubParams);
 
-          return {
+          const response = {
             success: true,
             count: result.rows.length,
             equipment_type: 'datahub',
@@ -2568,6 +2597,16 @@ function createToolHandlers(pool, site) {
               ? `Aucun équipement datahub trouvé avec ces critères.`
               : `${result.rows.length} équipement(s) datahub trouvé(s).`
           };
+
+          // Suggérer le transfert vers Nexus pour datahub
+          if (result.rows.length > 0) {
+            response.suggest_transfer = true;
+            response.suggested_agent = 'datahub';
+            response.suggested_agent_name = 'Nexus';
+            response.transfer_message = `Cet équipement est de type **datahub**. Voulez-vous que je vous transfère à **Nexus** (l'agent spécialisé capteurs/monitoring) pour plus de détails ?`;
+          }
+
+          return response;
         } catch (error) {
           console.error('[TOOL] search_equipment (datahub) error:', error.message);
           return { success: false, error: error.message, equipment: [] };
@@ -3110,7 +3149,7 @@ function createToolHandlers(pool, site) {
           if (!info) continue;
 
           try {
-            // Special handling for datahub - search in categories too
+            // Special handling for datahub - search in categories too AND join with dh_positions for map data
             if (eqType === 'datahub') {
               // For datahub, search in item name, category name, and combined "Category - Name"
               // Also handle case where user searches with "Category - Name" format
@@ -3118,11 +3157,15 @@ function createToolHandlers(pool, site) {
               const categorySearch = searchParts.length > 1 ? searchParts[0] : searchTerm;
               const nameSearch = searchParts.length > 1 ? searchParts[1] : searchTerm;
 
+              // IMPORTANT: Join with dh_positions to get actual map position (logical_name, x_frac, y_frac)
               const datahubQuery = `
                 SELECT dh.id, dh.name, dh.code, dh.building as building_code, dh.floor, dh.location as room,
-                       dhc.name as category_name, 'datahub' as equipment_type
+                       dhc.name as category_name, 'datahub' as equipment_type,
+                       dhp.logical_name as plan_name, dhp.page_index, dhp.x_frac, dhp.y_frac,
+                       dhp.id as position_id
                 FROM dh_items dh
                 LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+                LEFT JOIN dh_positions dhp ON dhp.item_id = dh.id
                 WHERE (
                   LOWER(dh.name) LIKE $1
                   OR LOWER(dhc.name) LIKE $1
@@ -3138,11 +3181,19 @@ function createToolHandlers(pool, site) {
 
               const result = await pool.query(datahubQuery, datahubParams);
               if (result.rows.length > 0) {
-                // Format with category name
+                // Format with category name and position info
                 const formattedRows = result.rows.map(row => ({
                   ...row,
                   name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
-                  original_name: row.name
+                  original_name: row.name,
+                  // Add position data for frontend
+                  has_map_position: !!row.plan_name,
+                  map_position: row.plan_name ? {
+                    plan_name: row.plan_name,
+                    page_index: row.page_index,
+                    x_frac: row.x_frac,
+                    y_frac: row.y_frac
+                  } : null
                 }));
                 equipmentToShow.push(...formattedRows);
                 if (equipmentToShow.length === formattedRows.length) {
@@ -3244,24 +3295,56 @@ function createToolHandlers(pool, site) {
       // Build response with proper frontend instructions
       const foundEquipment = equipmentToShow[0] || null;
 
+      // Vérifier si l'équipement a une position définie
+      // Pour datahub, vérifier has_map_position (position sur plan) en priorité
+      const hasMapPosition = foundEquipment?.has_map_position || foundEquipment?.map_position;
+      const hasBuildingPosition = foundEquipment &&
+        (foundEquipment.building_code || foundEquipment.floor || foundEquipment.room);
+      const hasPosition = hasMapPosition || hasBuildingPosition;
+
+      let summary;
+      if (foundEquipment) {
+        if (hasMapPosition) {
+          const mapPos = foundEquipment.map_position;
+          summary = `📍 Affichage de **${foundEquipment.name || foundEquipment.code}** sur le plan "${mapPos.plan_name}".`;
+        } else if (hasBuildingPosition) {
+          summary = `📍 Affichage de **${foundEquipment.name || foundEquipment.code}** sur la carte (Bât. ${foundEquipment.building_code || '?'}, ${foundEquipment.floor || '?'}).`;
+        } else {
+          summary = `⚠️ **${foundEquipment.name || foundEquipment.code}** trouvé, mais cet équipement n'a pas de position définie sur les plans. Contactez l'administrateur pour ajouter sa localisation.`;
+        }
+      } else {
+        summary = equipment_name
+          ? `Aucun équipement trouvé pour "${equipment_name}".`
+          : 'Aucun équipement trouvé.';
+      }
+
+      // Build frontend instruction with datahub map position if available
+      const frontendInstruction = {
+        showMap: equipmentToShow.length > 0,
+        building: foundEquipment?.building_code || building,
+        floor: foundEquipment?.floor || floor,
+        locationEquipment: foundEquipment,
+        locationEquipmentType: foundEquipment?.equipment_type || detectedType,
+        equipmentList: equipmentToShow
+      };
+
+      // Pour datahub, ajouter les infos de position sur plan
+      if (foundEquipment?.map_position) {
+        frontendInstruction.datahubPosition = foundEquipment.map_position;
+        frontendInstruction.navigateToPlan = foundEquipment.map_position.plan_name;
+        frontendInstruction.highlightItem = foundEquipment.id;
+      }
+
       return {
         success: equipmentToShow.length > 0,
         action: 'show_map',
         count: equipmentToShow.length,
         equipment: equipmentToShow.slice(0, 5),
-        summary: foundEquipment
-          ? `📍 Affichage de ${foundEquipment.name || foundEquipment.code} sur la carte.`
-          : equipment_name
-            ? `Aucun équipement trouvé pour "${equipment_name}".`
-            : 'Aucun équipement trouvé.',
-        frontend_instruction: {
-          showMap: equipmentToShow.length > 0,
-          building: foundEquipment?.building_code || building,
-          floor: foundEquipment?.floor || floor,
-          locationEquipment: foundEquipment,
-          locationEquipmentType: foundEquipment?.equipment_type || detectedType,
-          equipmentList: equipmentToShow
-        }
+        has_position: hasPosition,
+        has_map_position: !!hasMapPosition,
+        position_warning: !hasPosition && foundEquipment ? 'Equipment found but has no position data in database' : null,
+        summary,
+        frontend_instruction: frontendInstruction
       };
     },
 
@@ -4731,6 +4814,17 @@ Quand l'utilisateur demande de parler à un agent par son NOM (pas un équipemen
 
 **IMPORTANT**: Les noms des agents sont personnalisables. "Daniel", "Baptiste", etc. peuvent être des agents IA !
 Si le nom ne correspond pas à un équipement connu, essaie d'abord find_agent_by_name.
+
+## 🎯 TRANSFERT AUTOMATIQUE APRÈS RECHERCHE D'ÉQUIPEMENT
+**TRÈS IMPORTANT** : Quand **search_equipment** retourne des résultats avec suggest_transfer=true :
+1. L'équipement trouvé est d'un TYPE SPÉCIFIQUE (datahub, vsd, switchboard, etc.)
+2. Tu DOIS proposer IMMÉDIATEMENT le transfert vers l'agent spécialisé
+3. N'attends pas que l'utilisateur demande - propose le transfert dans ta réponse
+
+**EXEMPLE** :
+- search_equipment retourne: suggest_transfer=true, suggested_agent="datahub", suggested_agent_name="Nexus"
+- Tu réponds: "J'ai trouvé **Otrivin 3** (équipement Datahub). Voulez-vous que je vous passe **Nexus** pour plus de détails ? [Bouton: Parler à Nexus]"
+- Si l'utilisateur dit "oui" ou clique, utilise **transfer_to_agent** immédiatement
 
 ## 🔗 TRANSFERT VERS AGENTS SPÉCIALISÉS
 Quand l'utilisateur veut parler à l'agent d'un équipement mentionné dans un dépannage:
