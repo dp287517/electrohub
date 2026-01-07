@@ -42,6 +42,8 @@ import Datahub from './pages/Datahub.jsx';
 import DatahubMap from './pages/Datahub_map.jsx';
 import Infrastructure from './pages/Infrastructure.jsx';
 import InfrastructureMap from './pages/Infrastructure_map.jsx';
+import CustomModule from './pages/CustomModule.jsx';
+import CustomModuleMap from './pages/CustomModule_map.jsx';
 import Procedures from './pages/Procedures.jsx';
 import FireControl from './pages/FireControl.jsx';
 import FireControlMap from './pages/FireControl_map.jsx';
@@ -128,6 +130,10 @@ export default function App() {
           <Route path="/app/troubleshooting" element={<ProtectedRoute><TroubleshootingDashboard /></ProtectedRoute>} />
           <Route path="/app/infrastructure" element={<ProtectedRoute><Infrastructure /></ProtectedRoute>} />
           <Route path="/app/infrastructure/map" element={<ProtectedRoute><InfrastructureMap /></ProtectedRoute>} />
+
+          {/* Dynamic Custom Modules (created by admins) */}
+          <Route path="/app/m/:slug" element={<ProtectedRoute><CustomModule /></ProtectedRoute>} />
+          <Route path="/app/m/:slug/map" element={<ProtectedRoute><CustomModuleMap /></ProtectedRoute>} />
 
           {/* Fallback - redirect to signin */}
           <Route path="*" element={<Navigate to="/" replace />} />

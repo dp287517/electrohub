@@ -3024,6 +3024,69 @@ export const api = {
     getEquipmentZones: (equipmentId) =>
       get(`/api/fire-control/equipment/${encodeURIComponent(equipmentId)}/zones`),
   },
+
+  // ========== CUSTOM MODULES (Dynamic pages created by admins) ==========
+  customModules: {
+    // Modules CRUD
+    listModules: () => get("/api/custom-modules/modules"),
+    listAllModules: () => get("/api/custom-modules/modules/all"),
+    getModule: (slug) => get(`/api/custom-modules/modules/${encodeURIComponent(slug)}`),
+    createModule: (payload) => post("/api/custom-modules/modules", payload),
+    updateModule: (slug, payload) => put(`/api/custom-modules/modules/${encodeURIComponent(slug)}`, payload),
+    deleteModule: (slug) => del(`/api/custom-modules/modules/${encodeURIComponent(slug)}`),
+
+    // Categories CRUD
+    listCategories: (slug) => get(`/api/custom-modules/${encodeURIComponent(slug)}/categories`),
+    createCategory: (slug, payload) => post(`/api/custom-modules/${encodeURIComponent(slug)}/categories`, payload),
+    updateCategory: (id, payload) => put(`/api/custom-modules/categories/${encodeURIComponent(id)}`, payload),
+    deleteCategory: (id) => del(`/api/custom-modules/categories/${encodeURIComponent(id)}`),
+
+    // Items CRUD
+    listItems: (slug, params) => get(`/api/custom-modules/${encodeURIComponent(slug)}/items`, params),
+    getItem: (slug, id) => get(`/api/custom-modules/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}`),
+    createItem: (slug, payload) => post(`/api/custom-modules/${encodeURIComponent(slug)}/items`, payload),
+    updateItem: (slug, id, payload) => put(`/api/custom-modules/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}`, payload),
+    deleteItem: (slug, id) => del(`/api/custom-modules/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}`),
+
+    // Photo
+    uploadPhoto: (slug, id, file) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      return upload(`/api/custom-modules/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}/photo`, fd);
+    },
+    photoUrl: (slug, id, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/custom-modules/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}/photo?site=${currentSite()}`, bust),
+
+    // Files
+    listFiles: (slug, id) => get(`/api/custom-modules/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}/files`),
+    uploadFile: (slug, id, file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return upload(`/api/custom-modules/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}/files`, fd);
+    },
+    deleteFile: (fileId) => del(`/api/custom-modules/files/${encodeURIComponent(fileId)}`),
+    fileUrl: (fileId) => `${API_BASE}/api/custom-modules/files/${encodeURIComponent(fileId)}/download?site=${currentSite()}`,
+
+    // Stats
+    stats: (slug) => get(`/api/custom-modules/${encodeURIComponent(slug)}/stats`),
+
+    // Maps (uses VSD plans)
+    maps: {
+      listPlans: (slug) => get(`/api/custom-modules/${encodeURIComponent(slug)}/maps/plans`),
+      planFileUrl: (slug, plan, { bust = true } = {}) => {
+        const site = currentSite();
+        const key = typeof plan === "string" ? plan : plan?.id || plan?.logical_name || "";
+        const url = `${API_BASE}/api/custom-modules/${encodeURIComponent(slug)}/maps/plan/${encodeURIComponent(key)}/file?site=${site}`;
+        return withBust(url, bust);
+      },
+      positions: (slug, logical_name, page_index = 0) =>
+        get(`/api/custom-modules/${encodeURIComponent(slug)}/maps/positions`, { logical_name, page_index }),
+      setPosition: (slug, itemId, { logical_name, plan_id, page_index = 0, x_frac, y_frac }) =>
+        put(`/api/custom-modules/${encodeURIComponent(slug)}/maps/positions/${encodeURIComponent(itemId)}`, { logical_name, plan_id, page_index, x_frac, y_frac }),
+      deletePosition: (slug, positionId) => del(`/api/custom-modules/${encodeURIComponent(slug)}/maps/positions/${encodeURIComponent(positionId)}`),
+      placedIds: (slug) => get(`/api/custom-modules/${encodeURIComponent(slug)}/maps/placed-ids`),
+    },
+  },
 };
 
 // Default export for convenience
