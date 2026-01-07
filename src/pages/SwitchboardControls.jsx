@@ -3239,7 +3239,7 @@ function PdfExportModal({ filters: currentFilters, filterOptions, records, onClo
     dateFrom: currentFilters.dateFrom || '',
     dateTo: currentFilters.dateTo || '',
     performers: currentFilters.performers || [],
-    equipmentType: '', // 'switchboard', 'device', 'vsd', 'meca', 'mobile', 'hv', 'glo', 'datahub', or '' for all
+    equipmentType: '', // 'switchboard', 'device', 'vsd', 'meca', 'mobile', 'hv', 'glo', 'datahub', 'infrastructure', or '' for all
     includeDevices: true, // Include device control tables for switchboard reports
   });
   const [exporting, setExporting] = useState(false);

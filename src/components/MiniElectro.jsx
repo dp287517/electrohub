@@ -16,7 +16,7 @@ import { VideoAvatar, AGENT_NAMES } from './AIAvatar/VideoAvatar';
  */
 export default function MiniElectro({
   equipment,
-  equipmentType = 'generic', // vsd, meca, atex, glo, datahub, hv, mobile, doors, switchboard
+  equipmentType = 'generic', // vsd, meca, atex, glo, datahub, infrastructure, hv, mobile, doors, switchboard
   onAction,
   className = ''
 }) {
