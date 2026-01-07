@@ -1,6 +1,6 @@
 // ==============================
 // server_infrastructure.js — Infrastructure microservice (ESM)
-// Port: 3025
+// Port: 3027
 // VERSION 1.0 - AUDIT TRAIL + MULTI-TENANT
 // Similar to Datahub but for infrastructure management
 // ==============================
@@ -70,7 +70,7 @@ app.use(
 
 app.use(express.json({ limit: "16mb" }));
 
-const PORT = Number(process.env.INFRASTRUCTURE_PORT || 3025);
+const PORT = Number(process.env.INFRASTRUCTURE_PORT || 3027);
 const HOST = process.env.INFRASTRUCTURE_HOST || "0.0.0.0";
 
 // Storage layout

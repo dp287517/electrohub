@@ -3561,6 +3561,8 @@ const mobileEquipTarget = process.env.MOBILE_EQUIP_BASE_URL || "http://127.0.0.1
 const gloTarget = process.env.GLO_BASE_URL || "http://127.0.0.1:3023";
 // 🔵 Datahub (Custom categories with map markers) — microservice sur 3024
 const datahubTarget = process.env.DATAHUB_BASE_URL || "http://127.0.0.1:3024";
+// 🏗️ Infrastructure (Gestion infrastructure bâtiments) — microservice sur 3027
+const infrastructureTarget = process.env.INFRASTRUCTURE_BASE_URL || "http://127.0.0.1:3027";
 // 🤖 AI Assistant (avatar intelligent avec OpenAI/Gemini) — microservice sur 3025
 const aiAssistantTarget = process.env.AI_ASSISTANT_BASE_URL || "http://127.0.0.1:3025";
 // 📋 Procedures (Procédures opérationnelles avec création guidée par IA) — microservice sur 3026
@@ -3683,6 +3685,9 @@ app.use("/api/glo", mkProxy(gloTarget, { withRestream: true }));
 
 // >>> Datahub (Custom categories with map markers) : re-stream pour uploads
 app.use("/api/datahub", mkProxy(datahubTarget, { withRestream: true }));
+
+// >>> Infrastructure (Gestion infrastructure bâtiments) : re-stream pour uploads
+app.use("/api/infrastructure", mkProxy(infrastructureTarget, { withRestream: true }));
 
 // >>> Procedures (Procédures opérationnelles avec création guidée par IA) : re-stream pour uploads photos
 app.use("/api/procedures", mkProxy(proceduresTarget, { withRestream: true }));
