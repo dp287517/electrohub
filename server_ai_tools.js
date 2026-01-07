@@ -556,9 +556,13 @@ POUR LES PORTES COUPE-FEU:
       description: `Affiche la carte/plan avec la localisation d'équipements.
 
 UTILISE CETTE FONCTION QUAND l'utilisateur demande:
-- "montre sur la carte", "voir le plan"
+- "montre sur la carte", "voir le plan", "localise"
 - "où se trouve...", "localisation de..."
-- "carte du bâtiment X"`,
+- "carte du bâtiment X"
+- "affiche X sur le plan"
+
+Tu peux utiliser soit equipment_ids (si tu connais les IDs), soit equipment_name (pour rechercher par nom).
+IMPORTANT: Si l'utilisateur demande de voir un équipement sur la carte, utilise TOUJOURS cette fonction avec le nom de l'équipement.`,
       parameters: {
         type: "object",
         properties: {
@@ -573,11 +577,15 @@ UTILISE CETTE FONCTION QUAND l'utilisateur demande:
           equipment_ids: {
             type: "array",
             items: { type: "string" },
-            description: "Liste des IDs d'équipements à mettre en évidence"
+            description: "Liste des IDs d'équipements à mettre en évidence (si connus)"
+          },
+          equipment_name: {
+            type: "string",
+            description: "Nom ou code de l'équipement à rechercher et afficher sur la carte (ex: 'Tableau Général', '27-9-G')"
           },
           equipment_type: {
             type: "string",
-            enum: ["switchboard", "vsd", "meca", "mobile"],
+            enum: ["switchboard", "vsd", "meca", "mobile", "hv", "glo", "atex", "datahub", "infrastructure", "doors", "firecontrol"],
             description: "Type d'équipement pour le contexte"
           }
         }
@@ -2579,25 +2587,91 @@ function createToolHandlers(pool, site) {
     // CARTE / NAVIGATION
     // -----------------------------------------------------------------------
     show_map: async (params) => {
-      const { building, floor, equipment_ids, equipment_type = 'switchboard' } = params;
+      const { building, floor, equipment_ids, equipment_name, equipment_type } = params;
+
+      // Table mapping for all equipment types
+      const tableMap = {
+        switchboard: { table: 'switchboards', cols: 'id, name, code, building_code, floor, room', nameCol: 'name', codeCol: 'code', siteCol: 'site' },
+        vsd: { table: 'vsd_equipments', cols: 'id, name, building as building_code, floor, location as room', nameCol: 'name', codeCol: null, siteCol: 'site' },
+        meca: { table: 'meca_equipments', cols: 'id, name, building as building_code, floor, location as room', nameCol: 'name', codeCol: null, siteCol: null },
+        mobile: { table: 'me_equipments', cols: 'id, name, code, building as building_code, floor, location as room', nameCol: 'name', codeCol: 'code', siteCol: null },
+        hv: { table: 'hv_equipments', cols: 'id, name, code, building_code, floor, room', nameCol: 'name', codeCol: 'code', siteCol: null },
+        glo: { table: 'glo_equipments', cols: 'id, name, tag as code, building as building_code, floor, location as room', nameCol: 'name', codeCol: 'tag', siteCol: null },
+        atex: { table: 'atex_equipments', cols: 'id, name, tag as code, building as building_code, floor, location as room', nameCol: 'name', codeCol: 'tag', siteCol: null },
+        datahub: { table: 'dh_items', cols: 'id, name, code, building as building_code, floor, location as room', nameCol: 'name', codeCol: 'code', siteCol: null },
+        infrastructure: { table: 'inf_items', cols: 'id, name, code, building as building_code, floor, location as room', nameCol: 'name', codeCol: 'code', siteCol: null },
+        doors: { table: 'door_items', cols: 'id, name, code, building as building_code, floor, location as room', nameCol: 'name', codeCol: 'code', siteCol: null },
+        firecontrol: { table: 'fc_items', cols: 'id, name, code, building as building_code, floor, location as room', nameCol: 'name', codeCol: 'code', siteCol: null }
+      };
 
       // Ce handler retourne des instructions pour le frontend
       let equipmentToShow = [];
+      let detectedType = equipment_type || 'switchboard';
 
-      if (equipment_ids && equipment_ids.length > 0) {
-        // Récupérer les équipements spécifiés (noms de tables corrects)
-        const tableMap = {
-          switchboard: { table: 'switchboards', cols: 'id, name, code, building_code, floor, room' },
-          vsd: { table: 'vsd_equipments', cols: 'id, name, building as building_code, floor, location as room' },
-          meca: { table: 'meca_equipments', cols: 'id, name, building as building_code, floor, location as room' },
-          mobile: { table: 'me_equipments', cols: 'id, name, code, building as building_code, floor, location as room' },
-          hv: { table: 'hv_equipments', cols: 'id, name, code, building_code, floor, room' },
-          glo: { table: 'glo_equipments', cols: 'id, name, tag as code, building as building_code, floor, location as room' },
-          atex: { table: 'atex_equipments', cols: 'id, name, tag as code, building as building_code, floor, location as room' },
-          datahub: { table: 'dh_items', cols: 'id, name, code, building as building_code, floor, location as room' },
-          infrastructure: { table: 'inf_items', cols: 'id, name, code, building as building_code, floor, location as room' }
-        };
-        const info = tableMap[equipment_type] || tableMap.switchboard;
+      // Case 1: Search by equipment name (NEW - priority for user requests like "show X on map")
+      if (equipment_name && (!equipment_ids || equipment_ids.length === 0)) {
+        console.log('[TOOL] show_map: Searching by name:', equipment_name);
+        const searchTerm = equipment_name.toLowerCase().trim();
+
+        // If type is specified, search only that type
+        const typesToSearch = equipment_type ? [equipment_type] : Object.keys(tableMap);
+
+        for (const eqType of typesToSearch) {
+          const info = tableMap[eqType];
+          if (!info) continue;
+
+          try {
+            // Build search query - search by name and code
+            let query = `SELECT ${info.cols}, '${eqType}' as equipment_type FROM ${info.table} WHERE (`;
+            const conditions = [];
+            const queryParams = [];
+            let paramIndex = 1;
+
+            // Search by name (always available)
+            conditions.push(`LOWER(${info.nameCol}) LIKE $${paramIndex}`);
+            queryParams.push(`%${searchTerm}%`);
+            paramIndex++;
+
+            // Search by code if available
+            if (info.codeCol) {
+              conditions.push(`LOWER(${info.codeCol}) LIKE $${paramIndex}`);
+              queryParams.push(`%${searchTerm}%`);
+              paramIndex++;
+            }
+
+            query += conditions.join(' OR ') + ')';
+
+            // Add site filter if available
+            if (info.siteCol) {
+              query += ` AND ${info.siteCol} = $${paramIndex}`;
+              queryParams.push(site);
+              paramIndex++;
+            }
+
+            query += ' LIMIT 5';
+
+            const result = await pool.query(query, queryParams);
+            if (result.rows.length > 0) {
+              equipmentToShow.push(...result.rows);
+              // Use the first found equipment's type
+              if (equipmentToShow.length === result.rows.length) {
+                detectedType = eqType;
+              }
+            }
+          } catch (e) {
+            console.error(`[TOOL] show_map search ${eqType} error:`, e.message);
+          }
+
+          // Stop searching if we found enough
+          if (equipmentToShow.length >= 5) break;
+        }
+
+        console.log('[TOOL] show_map: Found', equipmentToShow.length, 'equipment(s) for name search');
+      }
+
+      // Case 2: Search by equipment IDs
+      if (equipmentToShow.length === 0 && equipment_ids && equipment_ids.length > 0) {
+        const info = tableMap[detectedType] || tableMap.switchboard;
 
         try {
           const result = await pool.query(`
@@ -2609,39 +2683,52 @@ function createToolHandlers(pool, site) {
         } catch (e) {
           console.error('[TOOL] show_map equipment query error:', e.message);
         }
-      } else if (building) {
-        // Récupérer les équipements du bâtiment
+      }
+
+      // Case 3: Search by building (fallback)
+      if (equipmentToShow.length === 0 && building) {
         try {
           let query = `
             SELECT id, name, code, building_code, floor, room
             FROM switchboards
             WHERE site = $1 AND UPPER(building_code) = $2
           `;
-          const params = [site, building.toUpperCase()];
+          const queryParams = [site, building.toUpperCase()];
 
           if (floor) {
             query += ` AND UPPER(floor) = $3`;
-            params.push(floor.toUpperCase());
+            queryParams.push(floor.toUpperCase());
           }
 
           query += ` ORDER BY floor, name LIMIT 20`;
 
-          const result = await pool.query(query, params);
+          const result = await pool.query(query, queryParams);
           equipmentToShow = result.rows;
+          detectedType = 'switchboard';
         } catch (e) {
           console.error('[TOOL] show_map building query error:', e.message);
         }
       }
 
+      // Build response with proper frontend instructions
+      const foundEquipment = equipmentToShow[0] || null;
+
       return {
-        success: true,
+        success: equipmentToShow.length > 0,
         action: 'show_map',
+        count: equipmentToShow.length,
+        equipment: equipmentToShow.slice(0, 5),
+        summary: foundEquipment
+          ? `📍 Affichage de ${foundEquipment.name || foundEquipment.code} sur la carte.`
+          : equipment_name
+            ? `Aucun équipement trouvé pour "${equipment_name}".`
+            : 'Aucun équipement trouvé.',
         frontend_instruction: {
-          showMap: true,
-          building,
-          floor,
-          locationEquipment: equipmentToShow[0] || null,
-          locationEquipmentType: equipment_type,
+          showMap: equipmentToShow.length > 0,
+          building: foundEquipment?.building_code || building,
+          floor: foundEquipment?.floor || floor,
+          locationEquipment: foundEquipment,
+          locationEquipmentType: foundEquipment?.equipment_type || detectedType,
           equipmentList: equipmentToShow
         }
       };
@@ -3816,7 +3903,7 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 | "contrôles en retard", "planning contrôles", "prochains contrôles", "état équipement" | get_controls |
 | "dernier contrôle porte", "historique contrôle porte", "contrôle porte coupe-feu" | get_controls (equipment_type="doors") |
 | "NC ouvertes", "non-conformités", "anomalies" | get_non_conformities |
-| "montre sur la carte", "localise", "plan" | show_map |
+| "montre sur la carte", "localise X", "voir X sur le plan", "où est X" | show_map (avec equipment_name) |
 | "statistiques", "vue d'ensemble", "résumé", "combien de..." | get_statistics |
 | "documentation", "fiche technique", "datasheet", "manuel" | search_documentation |
 | "parler à l'agent de l'équipement", "agent spécialisé" | get_troubleshooting_equipment_context puis transfer_to_agent |
@@ -3856,6 +3943,13 @@ tu peux et DOIS utiliser la fonction get_controls pour répondre aux questions s
 - Les échéances de contrôle
 - Le planning de maintenance
 Utilise le paramètre "building" pour filtrer par bâtiment si l'utilisateur est sur un équipement spécifique.
+
+## 🗺️ LOCALISATION SUR LA CARTE
+**IMPORTANT**: Quand l'utilisateur demande de voir un équipement sur la carte/plan:
+- Utilise **show_map** avec le paramètre **equipment_name** (nom ou code de l'équipement)
+- Exemple: "Montre-moi Tableau Général sur la carte" → show_map(equipment_name="Tableau Général")
+- Exemple: "Localise 27-9-G" → show_map(equipment_name="27-9-G")
+- La carte s'affichera automatiquement dans le chat avec la position de l'équipement
 
 ## SYNONYMES IMPORTANTS
 - Panne = dépannage = incident = défaillance = breakdown = dysfonctionnement
