@@ -103,7 +103,7 @@ router.get("/scale/:planId", async (req, res) => {
  * Sauvegarde la configuration d'échelle d'un plan
  * Body: { planId, pageIndex, point1, point2, realDistanceMeters, imageWidth, imageHeight, scaleRatio }
  */
-router.post("/scale", requireTenant, async (req, res) => {
+router.post("/scale", requireTenant(), async (req, res) => {
   console.log("[measurements] POST /scale called");
   console.log("[measurements] req.body:", JSON.stringify(req.body));
   console.log("[measurements] req.tenant:", req.tenant);
@@ -190,7 +190,7 @@ router.post("/scale", requireTenant, async (req, res) => {
  * DELETE /api/measurements/scale/:planId
  * Supprime la configuration d'échelle d'un plan
  */
-router.delete("/scale/:planId", requireTenant, async (req, res) => {
+router.delete("/scale/:planId", requireTenant(), async (req, res) => {
   try {
     const { planId } = req.params;
     const pageIndex = parseInt(req.query.page) || 0;
@@ -221,7 +221,7 @@ router.delete("/scale/:planId", requireTenant, async (req, res) => {
  * GET /api/measurements/plans-without-scale
  * Liste les plans qui n'ont pas d'échelle configurée
  */
-router.get("/plans-without-scale", requireTenant, async (req, res) => {
+router.get("/plans-without-scale", requireTenant(), async (req, res) => {
   try {
     const { company_id, site_id } = req.tenant;
 
@@ -287,7 +287,7 @@ router.get("/:planId", async (req, res) => {
  * Crée une nouvelle mesure
  * Body: { planId, pageIndex, type, points, label?, color? }
  */
-router.post("/", requireTenant, async (req, res) => {
+router.post("/", requireTenant(), async (req, res) => {
   try {
     const { planId, pageIndex = 0, type, points, label, color } = req.body;
     const { company_id, site_id } = req.tenant;
@@ -374,7 +374,7 @@ router.post("/", requireTenant, async (req, res) => {
  * PUT /api/measurements/:id
  * Met à jour une mesure existante
  */
-router.put("/:id", requireTenant, async (req, res) => {
+router.put("/:id", requireTenant(), async (req, res) => {
   try {
     const { id } = req.params;
     const { points, label, color } = req.body;
