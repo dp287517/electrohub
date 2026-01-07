@@ -298,10 +298,18 @@ const SwitchboardCard = ({
   onClick,
   onPlace,
 }) => {
+  const cardRef = useRef(null);
   const isOverdue = controlStatus?.status === 'overdue';
+
+  useEffect(() => {
+    if (isSelected && cardRef.current) {
+      cardRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [isSelected]);
 
   return (
     <div
+      ref={cardRef}
       className={`p-3 rounded-xl border transition-all cursor-pointer group
         ${isOverdue ? "bg-red-50 border-red-300 ring-2 ring-red-200 animate-pulse" :
           isSelected

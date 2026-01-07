@@ -1481,6 +1481,11 @@ export default function DatahubMap() {
     if (mapRef.current && imgSizeRef.current.w > 0 && drawMarkersRef.current) {
       drawMarkersRef.current();
     }
+    // Scroll to selected item in sidebar
+    if (selectedItem?.id) {
+      const el = document.querySelector(`[data-datahub-item-id="${selectedItem.id}"]`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }, [selectedItem]);
 
   // Focus on item from URL - triggered when pdfReady becomes true
@@ -1820,6 +1825,7 @@ export default function DatahubMap() {
                   return (
                     <div
                       key={item.id}
+                      data-datahub-item-id={item.id}
                       onClick={() => handleItemClick(item)}
                       className={`p-3 rounded-xl border transition-all cursor-pointer group ${
                         isSelected ? 'bg-indigo-50 border-indigo-300 shadow-sm' :
