@@ -614,6 +614,11 @@ export default function CustomModuleMap() {
   useEffect(() => {
     selectedItemIdRef.current = selectedItem?.id || null;
     if (mapRef.current && positions.length > 0) drawMarkers();
+    // Scroll to selected item in sidebar
+    if (selectedItem?.id) {
+      const el = document.querySelector(`[data-module-item-id="${selectedItem.id}"]`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }, [selectedItem, positions, drawMarkers]);
 
   // Handle map click for placement
@@ -812,6 +817,7 @@ export default function CustomModuleMap() {
 
                   return (
                     <div key={item.id}
+                      data-module-item-id={item.id}
                       className={`flex items-center gap-2 p-2 rounded-xl cursor-pointer transition-all ${isActive ? 'ring-2' : 'hover:bg-gray-50'}`}
                       style={isActive ? { backgroundColor: `${module.color}10`, ringColor: module.color } : {}}
                       onClick={() => {

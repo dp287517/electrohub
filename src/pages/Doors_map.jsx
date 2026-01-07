@@ -222,8 +222,17 @@ function ContextMenu({ x, y, onDelete, onClose }) {
 
 /* ----------------------------- Sidebar Card ----------------------------- */
 const DoorCard = ({ door, isPlacedHere, isPlacedSomewhere, isPlacedElsewhere, isSelected, onClick, onPlace }) => {
+  const cardRef = useRef(null);
+
+  useEffect(() => {
+    if (isSelected && cardRef.current) {
+      cardRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [isSelected]);
+
   return (
     <div
+      ref={cardRef}
       className={`p-3 rounded-xl border transition-all cursor-pointer group
         ${isSelected ? "bg-rose-50 border-rose-300 shadow-sm" : "bg-white border-gray-200 hover:border-gray-300 hover:shadow-sm"}`}
       onClick={onClick}
