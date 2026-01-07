@@ -251,6 +251,10 @@ export default function MeasurementTools({
   const allLayersRef = useRef([]);
   const drawingLayerRef = useRef(null);
 
+  // Click timing to distinguish single vs double click
+  const clickTimeoutRef = useRef(null);
+  const pendingClickRef = useRef(null);
+
   // API hooks
   const {
     measurements,
@@ -438,22 +442,46 @@ export default function MeasurementTools({
     });
   }, [mapRef, imageBounds, mode, drawingPoints, scalePoints, hoverPoint, fracToLatLng]);
 
-  // Map event handlers
+  // Map event handlers - use delayed click to distinguish from double-click
   const handleMapClick = useCallback((e) => {
     if (!mode) return;
     const point = screenToFrac(e.latlng);
     if (!point) return;
-    if (mode === "scale") {
-      if (scalePoints.length < 2) setScalePoints((prev) => [...prev, point]);
-    } else {
-      setDrawingPoints((prev) => [...prev, point]);
+
+    // Clear any pending click
+    if (clickTimeoutRef.current) {
+      clearTimeout(clickTimeoutRef.current);
+      clickTimeoutRef.current = null;
     }
+
+    // Store the pending click and delay execution
+    pendingClickRef.current = point;
+    clickTimeoutRef.current = setTimeout(() => {
+      const pt = pendingClickRef.current;
+      if (!pt) return;
+      pendingClickRef.current = null;
+
+      if (mode === "scale") {
+        if (scalePoints.length < 2) setScalePoints((prev) => [...prev, pt]);
+      } else {
+        setDrawingPoints((prev) => [...prev, pt]);
+      }
+    }, 200); // 200ms delay to wait for potential double-click
   }, [mode, screenToFrac, scalePoints.length]);
 
   const handleMapDblClick = useCallback((e) => {
     if (!mode || mode === "scale") return;
     L.DomEvent.stopPropagation(e);
     L.DomEvent.preventDefault(e);
+
+    // Cancel pending click - we're finishing instead
+    if (clickTimeoutRef.current) {
+      clearTimeout(clickTimeoutRef.current);
+      clickTimeoutRef.current = null;
+    }
+    pendingClickRef.current = null;
+
+    // Finish if we have enough points
     if ((mode === "line" && drawingPoints.length >= 2) || (mode === "polygon" && drawingPoints.length >= 3)) {
       finishDrawingRef.current();
     }
@@ -467,6 +495,13 @@ export default function MeasurementTools({
   // Finish drawing
   const finishDrawingRef = useRef(null);
   const finishDrawing = useCallback(async () => {
+    // Clear any pending click timeout
+    if (clickTimeoutRef.current) {
+      clearTimeout(clickTimeoutRef.current);
+      clickTimeoutRef.current = null;
+    }
+    pendingClickRef.current = null;
+
     if (mode === "line" && drawingPoints.length >= 2) {
       const measurement = await createMeasurement({ type: "line", points: drawingPoints, color: COLORS[measurements.length % COLORS.length] });
       if (measurement) setSelectedId(measurement.id);
@@ -483,6 +518,13 @@ export default function MeasurementTools({
   useEffect(() => { finishDrawingRef.current = finishDrawing; }, [finishDrawing]);
 
   const cancelDrawing = () => {
+    // Clear any pending click timeout
+    if (clickTimeoutRef.current) {
+      clearTimeout(clickTimeoutRef.current);
+      clickTimeoutRef.current = null;
+    }
+    pendingClickRef.current = null;
+
     setMode(null);
     setDrawingPoints([]);
     setHoverPoint(null);
@@ -556,6 +598,11 @@ export default function MeasurementTools({
       map.off("mousemove", handleMapMouseMove);
       try { map.doubleClickZoom.enable(); } catch (e) {}
       map.getContainer().style.cursor = "";
+      // Clear any pending click timeout
+      if (clickTimeoutRef.current) {
+        clearTimeout(clickTimeoutRef.current);
+        clickTimeoutRef.current = null;
+      }
     };
   }, [mapRef, mode, handleMapClick, handleMapDblClick, handleMapMouseMove]);
 
