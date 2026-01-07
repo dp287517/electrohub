@@ -38,8 +38,6 @@ function canDeleteEquipment(equipment) {
   // Allow if user is the creator
   const creatorEmail = equipment?.created_by_email?.toLowerCase();
   if (creatorEmail && creatorEmail === currentEmail) return true;
-  // Allow deletion for legacy equipment without creator info
-  if (!equipment?.created_by_email) return true;
   return false;
 }
 import ImageLightbox, { useLightbox } from '../components/ImageLightbox';

@@ -482,15 +482,11 @@ app.delete("/api/infrastructure/items/:id", async (req, res) => {
     const item = itemRows[0];
     const creatorEmail = item.created_by_email;
 
-    // Allow deletion if:
-    // 1. User is admin
-    // 2. User is the creator
-    // 3. No creator recorded (legacy items)
+    // Allow deletion if user is admin or creator
     const userIsAdmin = isAdmin(user.email);
     const userIsCreator = creatorEmail && user.email.toLowerCase() === creatorEmail.toLowerCase();
-    const isLegacyItem = !creatorEmail;
 
-    if (!userIsAdmin && !userIsCreator && !isLegacyItem) {
+    if (!userIsAdmin && !userIsCreator) {
       return res.status(403).json({
         ok: false,
         error: "Vous n'avez pas la permission de supprimer cet élément. Seul le créateur ou un administrateur peut le supprimer."

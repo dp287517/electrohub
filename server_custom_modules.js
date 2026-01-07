@@ -654,8 +654,8 @@ app.delete("/api/custom-modules/:slug/items/:id", async (req, res) => {
                       item.created_by.toLowerCase() === userEmail.toLowerCase();
     const isUserAdmin = isAdmin(userEmail);
 
-    // Check permissions - allow if creator, admin, or item has no creator (legacy)
-    if (!isCreator && !isUserAdmin && item.created_by) {
+    // Check permissions - allow if creator or admin only
+    if (!isCreator && !isUserAdmin) {
       console.log(`[CUSTOM_MODULES] Delete denied - user: ${userEmail}, creator: ${item.created_by}`);
       return res.status(403).json({
         error: 'Vous n\'êtes pas autorisé à supprimer cet élément. Seul le créateur ou un administrateur peut le supprimer.',

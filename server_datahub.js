@@ -482,12 +482,11 @@ app.delete("/api/datahub/items/:id", async (req, res) => {
     const item = itemRows[0];
     const creatorEmail = item.created_by_email;
 
-    // Check permissions: allow if user is creator, admin, or item has no creator (legacy)
+    // Check permissions: allow if user is creator or admin
     const userIsCreator = creatorEmail && user.email && creatorEmail.toLowerCase() === user.email.toLowerCase();
     const userIsAdmin = isAdmin(user.email);
-    const isLegacyItem = !creatorEmail; // Legacy items without creator can be deleted by anyone
 
-    if (!userIsCreator && !userIsAdmin && !isLegacyItem) {
+    if (!userIsCreator && !userIsAdmin) {
       return res.status(403).json({
         ok: false,
         error: "Forbidden: Only the creator or an admin can delete this item"
