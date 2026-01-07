@@ -11,6 +11,34 @@ import {
   XCircle, HelpCircle, History, ClipboardCheck, Settings, QrCode, Cpu, Sparkles, Printer
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { getUserPermissions } from '../lib/permissions';
+
+// ==================== PERMISSION HELPERS ====================
+
+function getCurrentUserEmail() {
+  try {
+    const ehUser = localStorage.getItem('eh_user');
+    if (ehUser) {
+      const user = JSON.parse(ehUser);
+      if (user?.email) return user.email.toLowerCase();
+    }
+    const email = localStorage.getItem('email') || localStorage.getItem('user.email');
+    if (email) return email.toLowerCase();
+  } catch (e) {}
+  return null;
+}
+
+function canDeleteEquipment(equipment) {
+  const currentEmail = getCurrentUserEmail();
+  if (!currentEmail) return false;
+  const permissions = getUserPermissions(currentEmail);
+  if (permissions?.isAdmin) return true;
+  const creatorEmail = equipment?.created_by_email?.toLowerCase();
+  if (creatorEmail && creatorEmail === currentEmail) return true;
+  if (!equipment?.created_by_email) return true;
+  return false;
+}
+
 import { EquipmentAIChat } from '../components/AIAvatar';
 import MiniElectro from '../components/MiniElectro';
 import ImageLightbox, { useLightbox } from '../components/ImageLightbox';
@@ -968,13 +996,15 @@ const DetailPanel = ({
           <Printer size={18} />
           Imprimer QR Code
         </a>
-        <button
-          onClick={() => onDelete(equipment)}
-          className="w-full py-3 px-4 rounded-xl bg-red-50 text-red-600 font-medium hover:bg-red-100 flex items-center justify-center gap-2 transition-all"
-        >
-          <Trash2 size={18} />
-          Supprimer
-        </button>
+        {canDeleteEquipment(equipment) && (
+          <button
+            onClick={() => onDelete(equipment)}
+            className="w-full py-3 px-4 rounded-xl bg-red-50 text-red-600 font-medium hover:bg-red-100 flex items-center justify-center gap-2 transition-all"
+          >
+            <Trash2 size={18} />
+            Supprimer
+          </button>
+        )}
       </div>
 
       {/* AI Chat Modal */}
