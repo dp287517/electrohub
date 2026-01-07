@@ -6,7 +6,7 @@ import MiniEquipmentPreview from './MiniEquipmentPreview';
 import {
   X, Send, Mic, MicOff, Settings,
   AlertTriangle, Calendar, Search, FileText,
-  Building, Wrench, Zap, RefreshCw, ChevronDown,
+  Building, Wrench, Zap, RefreshCw, ChevronDown, ChevronRight,
   ExternalLink, CheckCircle, Clock, TrendingUp,
   Volume2, VolumeX, BarChart3, Play, Loader2,
   ClipboardList, Camera, Image, Upload, FileUp, FileSearch,
@@ -570,6 +570,11 @@ Demande-moi n'importe quoi !`,
         showTransferConfirmation: response.showTransferConfirmation,
         showTransferCandidates: response.showTransferCandidates,
         transferComplete: response.transferComplete,
+        // ===============================
+        // EQUIPMENT SUGGESTIONS
+        // ===============================
+        equipmentSuggestions: response.equipmentSuggestions,
+        showEquipmentSuggestions: response.showEquipmentSuggestions,
         timestamp: new Date()
       };
 
@@ -833,30 +838,22 @@ Demande-moi n'importe quoi !`,
                       const isBullet = line.trim().startsWith('•') || line.trim().startsWith('-');
                       const isNumbered = /^\d+[\.\)]\s/.test(line.trim());
 
-                      // Parser le markdown inline - version améliorée
+                      // Parser le markdown inline - méthode split (plus robuste)
                       const parseInlineMarkdown = (text) => {
-                        const parts = [];
-                        let remaining = text;
-                        let keyIndex = 0;
-
-                        while (remaining.length > 0) {
-                          // Chercher **bold** avec regex non-greedy pour capturer le premier match
-                          const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
-                          if (boldMatch && boldMatch.index !== undefined) {
-                            // Texte avant le bold
-                            if (boldMatch.index > 0) {
-                              parts.push(<span key={keyIndex++}>{remaining.slice(0, boldMatch.index)}</span>);
-                            }
-                            // Le texte bold (sans les **)
-                            parts.push(<strong key={keyIndex++} className="font-semibold text-gray-900">{boldMatch[1]}</strong>);
-                            remaining = remaining.slice(boldMatch.index + boldMatch[0].length);
-                          } else {
-                            // Pas de markdown, ajouter le reste
-                            parts.push(<span key={keyIndex++}>{remaining}</span>);
-                            break;
+                        if (!text) return null;
+                        // Utilise split avec regex capturante: sépare le texte en parties
+                        // Résultat: [texte_avant, bold1, texte_entre, bold2, texte_après, ...]
+                        // Index pairs = texte normal, index impairs = texte en gras
+                        const parts = text.split(/\*\*([^*]+)\*\*/g);
+                        return parts.map((part, idx) => {
+                          if (!part) return null;
+                          if (idx % 2 === 1) {
+                            // Index impair = contenu capturé = en gras
+                            return <strong key={idx} className="font-semibold text-gray-900">{part}</strong>;
                           }
-                        }
-                        return parts.length > 0 ? parts : [<span key="0">{text}</span>];
+                          // Index pair = texte normal
+                          return <span key={idx}>{part}</span>;
+                        }).filter(Boolean);
                       };
 
                       return (
@@ -1145,6 +1142,42 @@ Demande-moi n'importe quoi !`,
                   <div className="mt-2 inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
                     <CheckCircle className="w-3 h-3" />
                     Transfert effectué
+                  </div>
+                )}
+
+                {/* Equipment Suggestions UI - Clickable options */}
+                {message.showEquipmentSuggestions && message.equipmentSuggestions && message.equipmentSuggestions.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <p className="text-xs font-medium text-gray-500 mb-2">🔍 Équipements trouvés :</p>
+                    <div className="space-y-2">
+                      {message.equipmentSuggestions.map((eq, i) => (
+                        <button
+                          key={i}
+                          onClick={() => handleSend(`C'est ${eq.name}${eq.building_code ? ` (bâtiment ${eq.building_code})` : ''}`)}
+                          className="flex items-center gap-3 w-full px-3 py-2.5 bg-white rounded-xl text-left text-sm hover:bg-blue-50 hover:border-blue-300 transition-all border shadow-sm hover:shadow"
+                        >
+                          <div className="p-2 bg-gradient-to-br from-blue-100 to-indigo-100 rounded-lg">
+                            <Search className="w-4 h-4 text-blue-600" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-gray-900 truncate">{eq.name}</p>
+                            <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 bg-gray-100 rounded text-gray-600">{eq.equipment_type || 'équipement'}</span>
+                              {eq.building_code && (
+                                <>
+                                  <span>•</span>
+                                  <span>Bât. {eq.building_code}</span>
+                                </>
+                              )}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1 text-blue-600">
+                            <span className="text-xs">Choisir</span>
+                            <ChevronRight className="w-4 h-4" />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
 
