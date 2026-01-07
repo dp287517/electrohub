@@ -705,6 +705,7 @@ const SwitchboardLeafletViewer = forwardRef(
     const imageLayerRef = useRef(null);
     const markersLayerRef = useRef(null);
     const connectionsLayerRef = useRef(null); // Layer for equipment link polylines
+    const svgRendererRef = useRef(null); // SVG renderer for polylines (CSS animations need SVG, not Canvas)
     const markersMapRef = useRef(new Map()); // switchboard_id -> marker
 
     const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
@@ -915,7 +916,8 @@ const SwitchboardLeafletViewer = forwardRef(
           opacity: 0.8,
           dashArray: '10, 5',
           className: animClass,
-          pane: 'connectionsPane'
+          pane: 'connectionsPane',
+          renderer: svgRendererRef.current
         });
 
         polyline.addTo(g);
@@ -1249,6 +1251,8 @@ const SwitchboardLeafletViewer = forwardRef(
           // Créer un pane personnalisé pour les connexions avec z-index élevé
           const connectionsPane = m.createPane('connectionsPane');
           connectionsPane.style.zIndex = 450; // Au-dessus de overlayPane (400) mais sous markerPane (600)
+          // SVG renderer pour les polylines (CSS animations ne fonctionnent qu'avec SVG, pas Canvas)
+          svgRendererRef.current = L.svg({ pane: 'connectionsPane' });
 
           // Créer le layer group pour les connexions (polylines) - au-dessus des markers
           connectionsLayerRef.current = L.layerGroup().addTo(m);
