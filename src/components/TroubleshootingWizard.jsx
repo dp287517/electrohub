@@ -333,20 +333,20 @@ function DescriptionStep({ formData, setFormData, onNext, onBack, isAnalyzing, a
           />
         </div>
 
-        {/* AI Suggestion */}
+        {/* Analyse photo */}
         {isAnalyzing ? (
           <div className="p-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border border-purple-200">
             <div className="flex items-center gap-3">
               <Loader2 className="w-5 h-5 text-purple-500 animate-spin" />
-              <span className="text-purple-700 font-medium">Analyse IA en cours...</span>
+              <span className="text-purple-700 font-medium">Analyse photo en cours...</span>
             </div>
           </div>
         ) : aiSuggestion && (
           <div className="p-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border border-purple-200">
             <div className="flex items-start gap-3">
-              <Sparkles className="w-5 h-5 text-purple-500 flex-shrink-0 mt-0.5" />
+              <Image className="w-5 h-5 text-purple-500 flex-shrink-0 mt-0.5" />
               <div>
-                <p className="text-purple-700 font-medium text-sm">Suggestion IA</p>
+                <p className="text-purple-700 font-medium text-sm">Analyse photo</p>
                 <p className="text-purple-600 text-sm mt-1">{aiSuggestion}</p>
               </div>
             </div>

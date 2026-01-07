@@ -413,12 +413,12 @@ function TroubleshootingDetailModal({ record, onClose, onDelete, onRefresh }) {
                 </div>
               )}
 
-              {/* Diagnostic IA si présent */}
+              {/* Analyse photo si présent */}
               {record.ai_diagnosis && (
                 <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl p-4 border border-purple-200">
                   <h3 className="font-semibold text-purple-700 mb-2 flex items-center gap-2">
-                    <Sparkles size={16} />
-                    Diagnostic IA
+                    <Image size={16} />
+                    Analyse photo
                   </h3>
                   <p className="text-sm text-purple-600">{record.ai_diagnosis}</p>
                 </div>

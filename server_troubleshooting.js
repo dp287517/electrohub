@@ -3,6 +3,7 @@
 import express from 'express';
 import PDFDocument from 'pdfkit';
 import pg from 'pg';
+import { createCanvas } from 'canvas';
 
 const router = express.Router();
 
@@ -106,6 +107,124 @@ export async function initTroubleshootingTables(poolInstance) {
   } catch (error) {
     console.error('[TROUBLESHOOTING] ❌ Table initialization error:', error.message);
     return false;
+  }
+}
+
+// ============================================================
+// HELPER FUNCTIONS FOR MINI PLAN
+// ============================================================
+
+// Position table mapping for different equipment types
+const POSITION_TABLE_MAP = {
+  switchboard: { table: 'switchboard_positions', idCol: 'switchboard_id', planCol: 'logical_name', planTable: 'switchboard_plans', planNamesTable: 'switchboard_plan_names' },
+  vsd: { table: 'vsd_positions', idCol: 'equipment_id', planCol: 'logical_name', planTable: 'vsd_plans', planNamesTable: 'vsd_plan_names' },
+  meca: { table: 'meca_positions', idCol: 'equipment_id', planCol: 'logical_name', planTable: 'meca_plans', planNamesTable: 'meca_plan_names' },
+  mobile: { table: 'me_equipment_positions', idCol: 'equipment_id', planCol: 'plan_logical_name', planTable: 'vsd_plans', planNamesTable: 'vsd_plan_names' },
+  hv: { table: 'hv_positions', idCol: 'equipment_id', planCol: 'logical_name', planTable: 'hv_plans', planNamesTable: 'hv_plan_names' },
+  glo: { table: 'glo_positions', idCol: 'equipment_id', planCol: 'logical_name', planTable: 'glo_plans', planNamesTable: 'glo_plan_names' },
+  datahub: { table: 'dh_positions', idCol: 'item_id', planCol: 'logical_name', planTable: 'dh_plans', planNamesTable: null },
+  atex: { table: 'atex_positions', idCol: 'equipment_id', planCol: 'logical_name', planTable: 'atex_plans', planNamesTable: null },
+  infrastructure: { table: 'infra_positions', idCol: 'equipment_id', planCol: 'logical_name', planTable: 'infrastructure_plans', planNamesTable: null }
+};
+
+// Get equipment position and plan data for mini plan
+async function getEquipmentPlanData(equipmentType, equipmentId) {
+  const config = POSITION_TABLE_MAP[equipmentType];
+  if (!config || !equipmentId) {
+    return null;
+  }
+
+  try {
+    // Get position
+    const posQuery = `SELECT ${config.planCol} as plan_key, page_index, x_frac, y_frac FROM ${config.table} WHERE ${config.idCol} = $1 LIMIT 1`;
+    const posResult = await pool.query(posQuery, [equipmentId]);
+
+    if (posResult.rows.length === 0) {
+      return null;
+    }
+
+    const pos = posResult.rows[0];
+
+    // Get plan thumbnail
+    let thumbnail = null;
+    let displayName = pos.plan_key;
+
+    try {
+      const planQuery = `SELECT thumbnail, content FROM ${config.planTable} WHERE logical_name = $1 ORDER BY version DESC LIMIT 1`;
+      const planResult = await pool.query(planQuery, [pos.plan_key]);
+
+      if (planResult.rows.length > 0) {
+        thumbnail = planResult.rows[0].thumbnail || planResult.rows[0].content;
+      }
+
+      // Try to get display name
+      if (config.planNamesTable) {
+        const nameQuery = `SELECT display_name FROM ${config.planNamesTable} WHERE logical_name = $1 LIMIT 1`;
+        const nameResult = await pool.query(nameQuery, [pos.plan_key]);
+        if (nameResult.rows.length > 0 && nameResult.rows[0].display_name) {
+          displayName = nameResult.rows[0].display_name;
+        }
+      }
+    } catch (planErr) {
+      console.warn(`[TROUBLESHOOTING] Plan query error for ${equipmentType}:`, planErr.message);
+    }
+
+    return {
+      x_frac: pos.x_frac,
+      y_frac: pos.y_frac,
+      page_index: pos.page_index || 0,
+      plan_key: pos.plan_key,
+      display_name: displayName,
+      thumbnail: thumbnail
+    };
+  } catch (err) {
+    console.error(`[TROUBLESHOOTING] getEquipmentPlanData error:`, err.message);
+    return null;
+  }
+}
+
+// Generate mini plan image with marker
+async function generateMiniPlanImage(planData, markerColor = '#3b82f6') {
+  if (!planData?.thumbnail) return null;
+
+  try {
+    const { loadImage } = await import('canvas');
+    const thumbnailBuffer = Buffer.isBuffer(planData.thumbnail)
+      ? planData.thumbnail
+      : Buffer.from(planData.thumbnail);
+
+    const img = await loadImage(thumbnailBuffer);
+    const canvas = createCanvas(img.width, img.height);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    // Draw marker if position is valid
+    if (planData.x_frac !== null && planData.y_frac !== null &&
+        !isNaN(planData.x_frac) && !isNaN(planData.y_frac)) {
+      const markerX = planData.x_frac * img.width;
+      const markerY = planData.y_frac * img.height;
+      const markerRadius = Math.max(12, img.width / 25);
+
+      // Outer circle
+      ctx.beginPath();
+      ctx.arc(markerX, markerY, markerRadius, 0, 2 * Math.PI);
+      ctx.fillStyle = markerColor;
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // Inner dot
+      ctx.beginPath();
+      ctx.arc(markerX, markerY, markerRadius / 3, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    }
+
+    return canvas.toBuffer('image/png');
+  } catch (err) {
+    console.error('[TROUBLESHOOTING] generateMiniPlanImage error:', err.message);
+    return null;
   }
 }
 
@@ -735,8 +854,44 @@ router.get('/:id/pdf', async (req, res) => {
     doc.font('Helvetica-Bold').text('Type de panne:', 320, y + 60);
     doc.font('Helvetica').text(getFaultTypeLabel(record.fault_type), 430, y + 60);
 
+    // Mini plan section (if equipment has a position on a plan)
+    y = 210;
+    let miniPlanRendered = false;
+    if (record.equipment_id && record.equipment_type) {
+      try {
+        const planData = await getEquipmentPlanData(record.equipment_type, record.equipment_id);
+        if (planData?.thumbnail) {
+          const miniPlanImage = await generateMiniPlanImage(planData);
+          if (miniPlanImage) {
+            // Mini plan section with header
+            doc.rect(50, y, 495, 25).fill('#dbeafe');
+            doc.fontSize(11).fillColor('#1e40af').font('Helvetica-Bold').text('LOCALISATION SUR PLAN', 60, y + 7);
+            y += 30;
+
+            const planWidth = 200;
+            const planHeight = 140;
+
+            try {
+              doc.image(miniPlanImage, 50, y, { fit: [planWidth, planHeight], align: 'center' });
+              doc.rect(50, y, planWidth, planHeight).stroke('#93c5fd');
+
+              // Plan name label
+              doc.fontSize(8).fillColor('#6b7280').text(planData.display_name || 'Plan', 50, y + planHeight + 3, { width: planWidth, align: 'center' });
+
+              y += planHeight + 20;
+              miniPlanRendered = true;
+            } catch (imgErr) {
+              console.warn('[TROUBLESHOOTING PDF] Mini plan image error:', imgErr.message);
+            }
+          }
+        }
+      } catch (planErr) {
+        console.warn('[TROUBLESHOOTING PDF] Mini plan error:', planErr.message);
+      }
+    }
+
     // Title section
-    y = 220;
+    if (!miniPlanRendered) y = 220;
     doc.rect(50, y, 495, 30).fill('#1e40af');
     doc.fontSize(14).fillColor('#ffffff').text('DESCRIPTION DU PROBLÈME', 60, y + 9);
     y += 40;
@@ -782,7 +937,7 @@ router.get('/:id/pdf', async (req, res) => {
       if (y > 550) { doc.addPage(); y = 50; }
 
       doc.rect(50, y, 495, 30).fill('#8b5cf6');
-      doc.fontSize(12).fillColor('#ffffff').text('🤖 ANALYSE IA', 60, y + 9);
+      doc.fontSize(12).fillColor('#ffffff').text('ANALYSE PHOTO', 60, y + 9);
       y += 40;
 
       if (record.ai_diagnosis) {
