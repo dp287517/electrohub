@@ -1773,7 +1773,11 @@ function PlanScaleTab() {
   // 1 pixel = 25.4/150 = 0.169mm = 0.000169m
   // At scale 1:X, 1 pixel represents 0.000169 * X meters
   const saveScaleFromRatio = async (plan, ratio) => {
-    if (!plan || !ratio || ratio <= 0) return;
+    console.log('[PlanScaleTab] saveScaleFromRatio called', { plan: plan?.id, ratio });
+    if (!plan || !ratio || ratio <= 0) {
+      console.log('[PlanScaleTab] Invalid params, aborting');
+      return;
+    }
 
     setSaving(true);
     try {
@@ -1782,28 +1786,40 @@ function PlanScaleTab() {
       const pixelSizeMm = 25.4 / 150; // ~0.169 mm per pixel
       const metersPerPixel = (pixelSizeMm * ratio) / 1000;
 
+      const payload = {
+        planId: plan.id,
+        pageIndex: 0,
+        point1: { x: 0, y: 0 },
+        point2: { x: 1, y: 0 },
+        realDistanceMeters: metersPerPixel * 1000, // Distance for 1000 pixels
+        imageWidth: 1000,
+        imageHeight: 750,
+        scaleRatio: ratio
+      };
+      console.log('[PlanScaleTab] Sending payload:', payload);
+
       const res = await fetch('/api/measurements/scale', {
         method: 'POST',
         ...getAuthOptions(),
-        body: JSON.stringify({
-          planId: plan.id,
-          pageIndex: 0,
-          point1: { x: 0, y: 0 },
-          point2: { x: 1, y: 0 },
-          realDistanceMeters: metersPerPixel * 1000, // Distance for 1000 pixels
-          imageWidth: 1000,
-          imageHeight: 750,
-          scaleRatio: ratio
-        })
+        body: JSON.stringify(payload)
       });
+      console.log('[PlanScaleTab] Response status:', res.status);
+
       const data = await res.json();
+      console.log('[PlanScaleTab] Response data:', data);
+
       if (data.ok) {
         setScaleConfigs(prev => ({ ...prev, [plan.id]: { ...data.scale, scale_ratio: ratio } }));
         setEditingPlan(null);
         setScaleRatio('');
+        console.log('[PlanScaleTab] Scale saved successfully');
+      } else {
+        console.error('[PlanScaleTab] Server returned error:', data.error);
+        alert('Erreur: ' + (data.error || 'Erreur inconnue'));
       }
     } catch (err) {
-      console.error('Error saving scale:', err);
+      console.error('[PlanScaleTab] Error saving scale:', err);
+      alert('Erreur réseau: ' + err.message);
     } finally {
       setSaving(false);
     }
