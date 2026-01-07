@@ -571,6 +571,11 @@ Demande-moi n'importe quoi !`,
         showTransferCandidates: response.showTransferCandidates,
         transferComplete: response.transferComplete,
         // ===============================
+        // AGENT TRANSFER (agent-to-agent handoff)
+        // ===============================
+        agentTransfer: response.agentTransfer,
+        agentTransferComplete: response.agentTransferComplete,
+        // ===============================
         // EQUIPMENT SUGGESTIONS
         // ===============================
         equipmentSuggestions: response.equipmentSuggestions,

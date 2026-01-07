@@ -848,8 +848,12 @@ UTILISE CETTE FONCTION QUAND:
 - L'utilisateur veut plus de détails d'un agent spécialisé
 - Tu as identifié un équipement et l'utilisateur veut interagir avec son agent
 - Suite à un dépannage, l'utilisateur veut en savoir plus via l'agent
+- Suite à search_equipment avec suggest_transfer=true
 
-Cette fonction retourne les informations pour ouvrir le chat avec l'agent spécialisé.`,
+**IMPORTANT**: Après avoir appelé cette fonction, tu DOIS IMMÉDIATEMENT parler en tant que le NOUVEL agent !
+Le nouvel agent doit se présenter et proposer son aide avec le contexte de l'équipement.
+
+Cette fonction retourne les informations pour basculer vers l'agent spécialisé.`,
       parameters: {
         type: "object",
         properties: {
