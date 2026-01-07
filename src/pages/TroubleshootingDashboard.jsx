@@ -5,9 +5,10 @@ import {
   Wrench, Download, Search, Calendar, Building2, Layers,
   Filter, X, ChevronRight, ChevronDown, AlertTriangle,
   CheckCircle, Clock, BarChart3, TrendingUp, FileText,
-  Zap, MapPin, RefreshCw, Sparkles, Eye, Image, Users
+  Zap, MapPin, RefreshCw, Sparkles, Eye, Image, Users, Trash2, Loader2
 } from 'lucide-react';
 import { get, API_BASE } from '../lib/api';
+import MiniEquipmentPreview from '../components/AIAvatar/MiniEquipmentPreview';
 
 // ============================================================
 // ANIMATION STYLES
@@ -98,7 +99,9 @@ function EquipmentTypeBadge({ type }) {
     hv: { label: 'HT', icon: Zap, color: 'text-yellow-600 bg-yellow-50' },
     glo: { label: 'GLO', icon: Zap, color: 'text-emerald-600 bg-emerald-50' },
     mobile: { label: 'Mobile', icon: Zap, color: 'text-cyan-600 bg-cyan-50' },
-    datahub: { label: 'Datahub', icon: Zap, color: 'text-purple-600 bg-purple-50' }
+    datahub: { label: 'Datahub', icon: Zap, color: 'text-purple-600 bg-purple-50' },
+    atex: { label: 'ATEX', icon: Zap, color: 'text-purple-600 bg-purple-50' },
+    infrastructure: { label: 'Infra', icon: Zap, color: 'text-violet-600 bg-violet-50' }
   };
   const { label, icon: Icon, color } = config[type] || { label: type, icon: Wrench, color: 'text-gray-600 bg-gray-50' };
 
@@ -107,6 +110,329 @@ function EquipmentTypeBadge({ type }) {
       <Icon size={12} />
       {label}
     </span>
+  );
+}
+
+// ============================================================
+// TROUBLESHOOTING DETAIL MODAL - Affiche les détails avec mini plan
+// ============================================================
+function TroubleshootingDetailModal({ record, onClose, onDelete, onRefresh }) {
+  const [photos, setPhotos] = useState([]);
+  const [loadingPhotos, setLoadingPhotos] = useState(true);
+  const [deleting, setDeleting] = useState(false);
+
+  // Charger les photos du dépannage
+  useEffect(() => {
+    if (record?.id) {
+      loadPhotos();
+    }
+  }, [record?.id]);
+
+  const loadPhotos = async () => {
+    setLoadingPhotos(true);
+    try {
+      const response = await get(`/api/troubleshooting/${record.id}`);
+      if (response?.photos) {
+        setPhotos(response.photos);
+      }
+    } catch (e) {
+      console.error('Load photos error:', e);
+    } finally {
+      setLoadingPhotos(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer le dépannage "${record.title}" ?\n\nCette action est irréversible.`)) {
+      return;
+    }
+
+    setDeleting(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/troubleshooting/${record.id}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+
+      if (response.ok) {
+        onDelete?.(record.id);
+        onClose();
+      } else {
+        alert('Erreur lors de la suppression');
+      }
+    } catch (e) {
+      console.error('Delete error:', e);
+      alert('Erreur lors de la suppression: ' + e.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  if (!record) return null;
+
+  const severityConfig = {
+    critical: { label: 'Critique', bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-300' },
+    major: { label: 'Majeur', bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-300' },
+    minor: { label: 'Mineur', bg: 'bg-yellow-100', text: 'text-yellow-700', border: 'border-yellow-300' },
+    cosmetic: { label: 'Cosmétique', bg: 'bg-gray-100', text: 'text-gray-700', border: 'border-gray-300' }
+  };
+  const sev = severityConfig[record.severity] || severityConfig.cosmetic;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 p-4 sm:p-6 text-white">
+          <div className="flex items-start justify-between">
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-white/20 rounded-xl">
+                <Wrench size={24} />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold">{record.title}</h2>
+                <div className="flex items-center gap-3 mt-1 text-white/80 text-sm">
+                  <span className="flex items-center gap-1">
+                    <Calendar size={14} />
+                    {new Date(record.created_at).toLocaleDateString('fr-FR', {
+                      day: '2-digit',
+                      month: 'long',
+                      year: 'numeric'
+                    })}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Users size={14} />
+                    {record.technician_name}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-white/20 rounded-xl transition-colors"
+            >
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Colonne gauche - Informations */}
+            <div className="space-y-6">
+              {/* Équipement et localisation */}
+              <div className="bg-gray-50 rounded-xl p-4">
+                <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                  <MapPin size={16} className="text-orange-500" />
+                  Équipement
+                </h3>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-500">Nom</span>
+                    <span className="font-medium text-gray-900">{record.equipment_name || 'N/A'}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-500">Code</span>
+                    <span className="font-medium text-gray-900">{record.equipment_code || 'N/A'}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-500">Type</span>
+                    <EquipmentTypeBadge type={record.equipment_type} />
+                  </div>
+                  {record.building_code && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-500">Bâtiment</span>
+                      <span className="font-medium text-gray-900 flex items-center gap-1">
+                        <Building2 size={14} />
+                        {record.building_code}
+                      </span>
+                    </div>
+                  )}
+                  {record.floor && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-500">Étage</span>
+                      <span className="font-medium text-gray-900">{record.floor}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Classification */}
+              <div className="bg-gray-50 rounded-xl p-4">
+                <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                  <AlertTriangle size={16} className="text-orange-500" />
+                  Classification
+                </h3>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${sev.bg} ${sev.text}`}>
+                    {sev.label}
+                  </span>
+                  {record.category && (
+                    <span className="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-700">
+                      {record.category}
+                    </span>
+                  )}
+                  {record.fault_type && (
+                    <span className="px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-700">
+                      {record.fault_type}
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-4 mt-3">
+                  <div className="text-center p-3 bg-white rounded-lg">
+                    <p className="text-2xl font-bold text-gray-900">{record.duration_minutes || 0}</p>
+                    <p className="text-xs text-gray-500">min intervention</p>
+                  </div>
+                  <div className="text-center p-3 bg-white rounded-lg">
+                    <p className="text-2xl font-bold text-red-600">{record.downtime_minutes || 0}</p>
+                    <p className="text-xs text-gray-500">min arrêt</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Description et solution */}
+              <div className="space-y-4">
+                {record.description && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 mb-1">Description du problème</h4>
+                    <p className="text-gray-600 text-sm bg-gray-50 rounded-lg p-3">{record.description}</p>
+                  </div>
+                )}
+                {record.root_cause && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 mb-1">Cause identifiée</h4>
+                    <p className="text-gray-600 text-sm bg-gray-50 rounded-lg p-3">{record.root_cause}</p>
+                  </div>
+                )}
+                {record.solution && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 mb-1">Solution appliquée</h4>
+                    <p className="text-gray-600 text-sm bg-green-50 rounded-lg p-3 border border-green-200">{record.solution}</p>
+                  </div>
+                )}
+                {record.parts_replaced && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 mb-1">Pièces remplacées</h4>
+                    <p className="text-gray-600 text-sm bg-gray-50 rounded-lg p-3">{record.parts_replaced}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Colonne droite - Mini plan et photos */}
+            <div className="space-y-6">
+              {/* Mini plan de localisation */}
+              {record.equipment_id && record.equipment_type && (
+                <div>
+                  <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    <MapPin size={16} className="text-blue-500" />
+                    Localisation sur le plan
+                  </h3>
+                  <MiniEquipmentPreview
+                    equipment={{
+                      id: record.equipment_id,
+                      name: record.equipment_name,
+                      code: record.equipment_code,
+                      building_code: record.building_code,
+                      floor: record.floor
+                    }}
+                    equipmentType={record.equipment_type}
+                    className="w-full"
+                  />
+                </div>
+              )}
+
+              {/* Photos */}
+              {photos.length > 0 && (
+                <div>
+                  <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    <Image size={16} className="text-purple-500" />
+                    Photos ({photos.length})
+                  </h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {photos.map((photo, idx) => (
+                      <div key={idx} className="relative group">
+                        <div className="aspect-video rounded-lg overflow-hidden border border-gray-200">
+                          <img
+                            src={photo.photo_data || `${API_BASE}/api/troubleshooting/photo/${photo.id}`}
+                            alt={photo.caption || `Photo ${idx + 1}`}
+                            className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"
+                            onClick={() => window.open(photo.photo_data || `${API_BASE}/api/troubleshooting/photo/${photo.id}`, '_blank')}
+                          />
+                        </div>
+                        {photo.photo_type && (
+                          <span className={`absolute top-1 left-1 px-2 py-0.5 text-xs rounded-full font-medium ${
+                            photo.photo_type === 'before' ? 'bg-red-500 text-white' :
+                            photo.photo_type === 'during' ? 'bg-orange-500 text-white' :
+                            'bg-green-500 text-white'
+                          }`}>
+                            {photo.photo_type === 'before' ? 'Avant' : photo.photo_type === 'during' ? 'Pendant' : 'Après'}
+                          </span>
+                        )}
+                        {photo.caption && (
+                          <p className="text-xs text-gray-500 mt-1 truncate">{photo.caption}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {loadingPhotos && (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 text-gray-400 animate-spin" />
+                </div>
+              )}
+
+              {/* Diagnostic IA si présent */}
+              {record.ai_diagnosis && (
+                <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl p-4 border border-purple-200">
+                  <h3 className="font-semibold text-purple-700 mb-2 flex items-center gap-2">
+                    <Sparkles size={16} />
+                    Diagnostic IA
+                  </h3>
+                  <p className="text-sm text-purple-600">{record.ai_diagnosis}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="border-t bg-gray-50 p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="flex items-center gap-2 px-4 py-2 text-red-600 bg-red-50 rounded-xl hover:bg-red-100 transition-colors disabled:opacity-50"
+          >
+            {deleting ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Trash2 size={16} />
+            )}
+            Supprimer
+          </button>
+
+          <div className="flex items-center gap-3">
+            <a
+              href={`${API_BASE}/api/troubleshooting/${record.id}/pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors"
+            >
+              <Download size={16} />
+              Télécharger PDF
+            </a>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border border-gray-300 text-gray-700 rounded-xl hover:bg-gray-100 transition-colors"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -123,6 +449,7 @@ export default function TroubleshootingDashboard() {
   const [loading, setLoading] = useState(true);
   const [locationStats, setLocationStats] = useState([]);
   const [problematicEquipment, setProblematicEquipment] = useState([]);
+  const [selectedRecord, setSelectedRecord] = useState(null);
 
   // Filters
   const [filters, setFilters] = useState({
@@ -482,6 +809,13 @@ export default function TroubleshootingDashboard() {
                       </div>
 
                       <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t">
+                        <button
+                          onClick={() => setSelectedRecord(record)}
+                          className="flex items-center gap-1 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                        >
+                          <Eye size={14} />
+                          Voir
+                        </button>
                         <a
                           href={`${API_BASE}/api/troubleshooting/${record.id}/pdf`}
                           target="_blank"
@@ -710,6 +1044,18 @@ export default function TroubleshootingDashboard() {
           </>
         )}
       </div>
+
+      {/* Detail Modal */}
+      {selectedRecord && (
+        <TroubleshootingDetailModal
+          record={selectedRecord}
+          onClose={() => setSelectedRecord(null)}
+          onDelete={(deletedId) => {
+            setRecords(prev => prev.filter(r => r.id !== deletedId));
+          }}
+          onRefresh={loadData}
+        />
+      )}
     </div>
   );
 }
