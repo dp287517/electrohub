@@ -258,8 +258,7 @@ export default function MeasurementTools({
   const drawingLayerRef = useRef(null);
 
   // Click timing to distinguish single vs double click
-  const clickTimeoutRef = useRef(null);
-  const pendingClickRef = useRef(null);
+  const lastClickTimeRef = useRef(0);
 
   // API hooks
   const {
@@ -454,31 +453,29 @@ export default function MeasurementTools({
     });
   }, [mapRef, imageBounds, mode, drawingPoints, scalePoints, hoverPoint, fracToLatLng]);
 
-  // Map event handlers - use delayed click to distinguish from double-click
+  // Map event handlers
+  // Strategy: Add points immediately, detect double-click by timing
   const handleMapClick = useCallback((e) => {
     if (!mode) return;
     const point = screenToFrac(e.latlng);
     if (!point) return;
 
-    // Clear any pending click
-    if (clickTimeoutRef.current) {
-      clearTimeout(clickTimeoutRef.current);
-      clickTimeoutRef.current = null;
+    const now = Date.now();
+    const timeSinceLastClick = now - lastClickTimeRef.current;
+    lastClickTimeRef.current = now;
+
+    // If this click is part of a double-click (< 300ms), ignore it for adding points
+    // The dblclick handler will handle finishing
+    if (timeSinceLastClick < 300) {
+      return;
     }
 
-    // Store the pending click and delay execution
-    pendingClickRef.current = point;
-    clickTimeoutRef.current = setTimeout(() => {
-      const pt = pendingClickRef.current;
-      if (!pt) return;
-      pendingClickRef.current = null;
-
-      if (mode === "scale") {
-        if (scalePoints.length < 2) setScalePoints((prev) => [...prev, pt]);
-      } else {
-        setDrawingPoints((prev) => [...prev, pt]);
-      }
-    }, 200); // 200ms delay to wait for potential double-click
+    // Add point immediately
+    if (mode === "scale") {
+      if (scalePoints.length < 2) setScalePoints((prev) => [...prev, point]);
+    } else {
+      setDrawingPoints((prev) => [...prev, point]);
+    }
   }, [mode, screenToFrac, scalePoints.length]);
 
   const handleMapDblClick = useCallback((e) => {
@@ -489,13 +486,6 @@ export default function MeasurementTools({
     if (!currentMode || currentMode === "scale") return;
     L.DomEvent.stopPropagation(e);
     L.DomEvent.preventDefault(e);
-
-    // Cancel pending click - we're finishing instead
-    if (clickTimeoutRef.current) {
-      clearTimeout(clickTimeoutRef.current);
-      clickTimeoutRef.current = null;
-    }
-    pendingClickRef.current = null;
 
     // Finish if we have enough points
     if ((currentMode === "line" && currentPoints.length >= 2) || (currentMode === "polygon" && currentPoints.length >= 3)) {
@@ -511,13 +501,6 @@ export default function MeasurementTools({
   // Finish drawing - uses refs to get current values
   const finishDrawingRef = useRef(null);
   finishDrawingRef.current = async () => {
-    // Clear any pending click timeout
-    if (clickTimeoutRef.current) {
-      clearTimeout(clickTimeoutRef.current);
-      clickTimeoutRef.current = null;
-    }
-    pendingClickRef.current = null;
-
     // Use refs to get current values
     const currentMode = modeRef.current;
     const currentPoints = [...drawingPointsRef.current]; // Copy to avoid mutation issues
@@ -540,13 +523,6 @@ export default function MeasurementTools({
   };
 
   const cancelDrawing = () => {
-    // Clear any pending click timeout
-    if (clickTimeoutRef.current) {
-      clearTimeout(clickTimeoutRef.current);
-      clickTimeoutRef.current = null;
-    }
-    pendingClickRef.current = null;
-
     setMode(null);
     setDrawingPoints([]);
     setHoverPoint(null);
