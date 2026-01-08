@@ -473,10 +473,9 @@ const DoorLeafletViewer = forwardRef(({
       const isSelected = p.door_id === selectedIdRef.current;
       const icon = makeDoorIcon(isSelected, p.status);
 
-      const wantsDraggable = !disabled && !placementActiveRef.current;
       const mk = L.marker(latlng, {
         icon,
-        draggable: getMarkerDraggableOption(wantsDraggable),
+        draggable: getMarkerDraggableOption(!disabled && !placementActiveRef.current),
         autoPan: true,
         bubblingMouseEvents: false,
         keyboard: false,
@@ -518,8 +517,6 @@ const DoorLeafletViewer = forwardRef(({
       mk.on("contextmenu", (e) => {
         L.DomEvent.stopPropagation(e);
         L.DomEvent.preventDefault(e);
-        // Ne pas afficher le menu si le drag mobile est actif
-        if (mk._mobileDragActive) return;
         const containerPoint = map.latLngToContainerPoint(e.latlng);
         const rect = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
         onContextMenu?.(mk.__meta, { x: rect.left + containerPoint.x, y: rect.top + containerPoint.y });
@@ -527,10 +524,6 @@ const DoorLeafletViewer = forwardRef(({
 
       mk.addTo(g);
       markersMapRef.current.set(p.door_id, mk);
-
-      // 📱 Mobile: activer le drag par long-press uniquement
-      if (wantsDraggable) {
-      }
 
       // Long press for mobile
       setTimeout(() => {
@@ -540,8 +533,6 @@ const DoorLeafletViewer = forwardRef(({
         const startLongPress = (clientX, clientY) => {
           longPressTriggeredRef.current = false;
           longPressTimerRef.current = setTimeout(() => {
-            // Ne pas afficher le menu si le drag mobile est actif
-            if (mk._mobileDragActive) return;
             longPressTriggeredRef.current = true;
             onContextMenu?.(mk.__meta, { x: clientX, y: clientY });
           }, 600);
@@ -645,6 +636,7 @@ const DoorLeafletViewer = forwardRef(({
 
         // 🚀 JPEG compressé sur mobile, PNG sur desktop
         const dataUrl = getOptimalImageFormat(canvas);
+import { getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
         setImgSize({ w: canvas.width, h: canvas.height });
 
         const m = L.map(wrapRef.current, {

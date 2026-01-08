@@ -8,7 +8,6 @@ import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "../styles/atex-map.css";
-import { getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 import {
   Building2, Search, ChevronLeft, ChevronRight, MapPin, X, RefreshCw,
   Trash2, ArrowLeft, Plus, Circle, Square, Triangle, Star, Heart, Target, Menu,
@@ -563,7 +562,6 @@ export default function CustomModuleMap() {
       const lng = boundsW * pos.x_frac;
       const marker = L.marker([lat, lng], { icon, draggable: getMarkerDraggableOption(true), riseOnHover: true }).addTo(map);
       marker.__meta = { id: pos.position_id, item_id: pos.item_id };
-      // 📱 Mobile: activer le drag par long-press uniquement
 
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e);

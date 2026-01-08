@@ -672,6 +672,7 @@ const LeafletViewer = forwardRef(({
 
         // 🚀 JPEG compressé sur mobile, PNG sur desktop
         const dataUrl = getOptimalImageFormat(canvas);
+import { getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
         const bounds = [[0, 0], [vp.height, vp.width]];
 
         if (imageLayerRef.current) map.removeLayer(imageLayerRef.current);
@@ -758,8 +759,7 @@ const LeafletViewer = forwardRef(({
         iconAnchor: [16, 16],
       });
 
-      const wantsDraggable = !disabled;
-      const marker = L.marker([lat, lng], { icon, draggable: getMarkerDraggableOption(wantsDraggable) });
+      const marker = L.marker([lat, lng], { icon, draggable: !disabled });
 
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e);
@@ -777,8 +777,6 @@ const LeafletViewer = forwardRef(({
       marker.on("contextmenu", (e) => {
         L.DomEvent.stopPropagation(e);
         L.DomEvent.preventDefault(e);
-        // Ne pas afficher le menu si le drag mobile est actif
-        if (marker._mobileDragActive) return;
         onContextMenu?.(pt, e.containerPoint);
       });
 
@@ -791,10 +789,6 @@ const LeafletViewer = forwardRef(({
 
       marker.addTo(layer);
       markersMapRef.current.set(pt.equipment_id, marker);
-
-      // 📱 Mobile: activer le drag par long-press uniquement
-      if (wantsDraggable) {
-      }
     });
   }, [initialPoints, selectedId, controlStatuses, imgSize, disabled, onClickPoint, onMovePoint, onContextMenu]);
 

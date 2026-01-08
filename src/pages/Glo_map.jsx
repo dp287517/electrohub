@@ -589,10 +589,9 @@ const GloLeafletViewer = forwardRef(({
       const isSelected = p.equipment_id === selectedIdRef.current;
       const icon = makeGloIcon(isSelected, p.equipment_id);
 
-      const wantsDraggable = !disabled && !placementActiveRef.current;
       const mk = L.marker(latlng, {
         icon,
-        draggable: getMarkerDraggableOption(wantsDraggable),
+        draggable: getMarkerDraggableOption(!disabled && !placementActiveRef.current),
         autoPan: true,
         bubblingMouseEvents: false,
         keyboard: false,
@@ -638,8 +637,6 @@ const GloLeafletViewer = forwardRef(({
       mk.on("contextmenu", (e) => {
         L.DomEvent.stopPropagation(e);
         L.DomEvent.preventDefault(e);
-        // Ne pas afficher le menu si le drag mobile est actif
-        if (mk._mobileDragActive) return;
         const containerPoint = map.latLngToContainerPoint(e.latlng);
         const rect = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
         onContextMenu?.(mk.__meta, { x: rect.left + containerPoint.x, y: rect.top + containerPoint.y });
@@ -649,10 +646,6 @@ const GloLeafletViewer = forwardRef(({
       // Store with String key for consistent lookup (URL params are always strings)
       markersMapRef.current.set(String(p.equipment_id), mk);
 
-      // 📱 Mobile: activer le drag par long-press uniquement
-      if (wantsDraggable) {
-      }
-
       setTimeout(() => {
         const el = mk.getElement();
         if (!el) return;
@@ -660,8 +653,6 @@ const GloLeafletViewer = forwardRef(({
         const startLongPress = (clientX, clientY) => {
           longPressTriggeredRef.current = false;
           longPressTimerRef.current = setTimeout(() => {
-            // Ne pas afficher le menu si le drag mobile est actif
-            if (mk._mobileDragActive) return;
             longPressTriggeredRef.current = true;
             onContextMenu?.(mk.__meta, { x: clientX, y: clientY });
           }, 600);
@@ -820,6 +811,7 @@ const GloLeafletViewer = forwardRef(({
         if (cancelled) return;
 
         const dataUrl = getOptimalImageFormat(canvas);
+import { getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
         setImgSize({ w: canvas.width, h: canvas.height });
 
         const m = L.map(wrapRef.current, {

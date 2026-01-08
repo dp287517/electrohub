@@ -22,8 +22,8 @@ import "../styles/atex-map.css"; // Styles de netteté pour les plans
 
 // Mobile optimization
 import { getOptimalImageFormat } from "../config/mobile-optimization.js";
-import { getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 
+import { getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 // icons
 import {
   Zap,
@@ -912,10 +912,9 @@ const SwitchboardLeafletViewer = forwardRef(
           const isSelected = p.switchboard_id === selectedIdRef.current;
           const icon = makeSwitchboardIcon(!!p.is_principal, isSelected, p.switchboard_id);
 
-          const wantsDraggable = !disabled && !placementActiveRef.current;
           const mk = L.marker(latlng, {
             icon,
-            draggable: getMarkerDraggableOption(wantsDraggable),
+            draggable: getMarkerDraggableOption(!disabled && !placementActiveRef.current),
             autoPan: true,
             bubblingMouseEvents: false,
             keyboard: false,
@@ -980,8 +979,6 @@ const SwitchboardLeafletViewer = forwardRef(
           mk.on("contextmenu", (e) => {
             L.DomEvent.stopPropagation(e);
             L.DomEvent.preventDefault(e);
-            // Ne pas afficher le menu si le drag mobile est actif
-            if (mk._mobileDragActive) return;
             const containerPoint = map.latLngToContainerPoint(e.latlng);
             const rect = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
             onContextMenu?.(mk.__meta, {
@@ -996,10 +993,6 @@ const SwitchboardLeafletViewer = forwardRef(
           markersMapRef.current.set(markerKey, mk);
           console.log('[MARKERS] Registered marker with key:', markerKey, 'type:', typeof markerKey);
 
-          // 📱 Mobile: activer le drag par long-press uniquement
-          if (wantsDraggable) {
-          }
-
           // Setup long press after marker is added
           setTimeout(() => {
             const el = mk.getElement();
@@ -1008,8 +1001,6 @@ const SwitchboardLeafletViewer = forwardRef(
             const startLongPress = (clientX, clientY) => {
               longPressTriggeredRef.current = false;
               longPressTimerRef.current = setTimeout(() => {
-                // Ne pas afficher le menu si le drag mobile est actif
-                if (mk._mobileDragActive) return;
                 longPressTriggeredRef.current = true;
                 onContextMenu?.(mk.__meta, { x: clientX, y: clientY });
               }, 600);

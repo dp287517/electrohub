@@ -7,7 +7,6 @@ import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "../styles/atex-map.css"; // Styles de netteté pour les plans
-import { getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 import {
   Database, Search, ChevronLeft, ChevronRight, Building2, MapPin, X, RefreshCw,
   Trash2, ArrowLeft, ArrowUp, ArrowDown, Plus, Circle, Square, Triangle, Star, Heart, Target, Menu,
@@ -1144,7 +1143,6 @@ export default function DatahubMap() {
       const lng = boundsW * pos.x_frac;
       const marker = L.marker([lat, lng], { icon, draggable: getMarkerDraggableOption(true), riseOnHover: true }).addTo(map);
       marker.__meta = { id: pos.id, item_id: pos.item_id, lat, lng };
-      // 📱 Mobile: activer le drag par long-press uniquement
 
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e);
