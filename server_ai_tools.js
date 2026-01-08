@@ -2704,25 +2704,6 @@ function createToolHandlers(pool, site) {
       try {
         const result = await pool.query(query, queryParams);
 
-        return {
-          success: true,
-          count: result.rows.length,
-          equipment_type: actualType,
-          filters: { building, floor, name, code },
-          equipment: result.rows.map(eq => ({
-            id: eq.id,
-            name: eq.name,
-            code: eq.code,
-            building_code: eq.building_code,
-            floor: eq.floor,
-            room: eq.room,
-            equipment_type: actualType
-          })),
-          summary: result.rows.length === 0
-            ? `Aucun équipement ${actualType} trouvé avec ces critères.`
-            : `${result.rows.length} équipement(s) ${actualType} trouvé(s).`
-        };
-
         // ========== SUGGESTIONS SI AUCUN RÉSULTAT ==========
         // Si aucun résultat, chercher des suggestions dans le même type d'équipement
         if (result.rows.length === 0 && name) {
