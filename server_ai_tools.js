@@ -1284,9 +1284,12 @@ function createToolHandlers(pool, site) {
           paramIdx++;
         } else if (source_equipment_name) {
           // Filtrer par l'équipement source (celui où l'utilisateur se trouve)
-          troubleQuery += ` AND LOWER(equipment_name) LIKE $${paramIdx}`;
+          // Inclut recherche avec mots collés (ex: "portailsite" → "portail site")
+          const sourceCompact = source_equipment_name.replace(/\s+/g, '').toLowerCase();
+          troubleQuery += ` AND (LOWER(equipment_name) LIKE $${paramIdx} OR LOWER(REPLACE(equipment_name, ' ', '')) LIKE $${paramIdx + 1})`;
           troubleParams.push(`%${source_equipment_name.toLowerCase()}%`);
-          paramIdx++;
+          troubleParams.push(`%${sourceCompact}%`);
+          paramIdx += 2;
           troubleQuery += ` ORDER BY started_at DESC LIMIT 1`;
         } else {
           troubleQuery += ` ORDER BY started_at DESC LIMIT 1`;
@@ -1342,6 +1345,10 @@ function createToolHandlers(pool, site) {
         const compactPattern = target_equipment_name.replace(/\s+/g, '').toLowerCase();
         const alternatePattern = compactPattern !== target_equipment_name.toLowerCase() ? `%${compactPattern}%` : null;
 
+        // NOUVEAU: Pattern compact pour chercher "portailsite" → "portail site"
+        // Si l'utilisateur tape un mot sans espace, on cherche aussi dans les noms en retirant leurs espaces
+        const compactSearchPattern = `%${compactPattern}%`;
+
         for (const eqType of typesToSearch) {
           const config = tableMap[eqType];
           if (!config) continue;
@@ -1364,13 +1371,15 @@ function createToolHandlers(pool, site) {
                     OR LOWER(dhc.name) LIKE $1
                     OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $1
                     OR LOWER(REPLACE(COALESCE(dhc.name, '') || dh.name, ' ', '')) LIKE $1
+                    OR LOWER(REPLACE(dh.name, ' ', '')) LIKE $2
+                    OR LOWER(REPLACE(dhc.name, ' ', '')) LIKE $2
                     OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $1)
                   )
                 `;
-                let datahubParams = [pattern];
+                let datahubParams = [pattern, compactSearchPattern];
 
                 if (target_building) {
-                  datahubQuery += ` AND UPPER(dh.building) = $2`;
+                  datahubQuery += ` AND UPPER(dh.building) = $3`;
                   datahubParams.push(target_building.toUpperCase());
                 }
 
@@ -1428,44 +1437,49 @@ function createToolHandlers(pool, site) {
             // Construire la requête selon la configuration du site
             let searchQuery;
             let searchParams;
+            // Condition de nom avec recherche exacte + recherche compact (sans espaces)
+            // $PATTERN = pattern exact, $COMPACT = pattern sans espaces
             const nameCondition = config.codeCol
-              ? `(LOWER(e.${config.nameCol}) LIKE $PATTERN OR LOWER(e.${config.codeCol}) LIKE $PATTERN)`
-              : `LOWER(e.${config.nameCol}) LIKE $PATTERN`;
+              ? `(LOWER(e.${config.nameCol}) LIKE $PATTERN OR LOWER(e.${config.codeCol}) LIKE $PATTERN OR LOWER(REPLACE(e.${config.nameCol}, ' ', '')) LIKE $COMPACT)`
+              : `(LOWER(e.${config.nameCol}) LIKE $PATTERN OR LOWER(REPLACE(e.${config.nameCol}, ' ', '')) LIKE $COMPACT)`;
             const buildingCondition = target_building ? `AND UPPER(e.${config.buildingCol}) = $BUILDING` : '';
 
             if (config.siteJoin) {
               // Tables avec join sur sites (meca, atex, doors)
+              // $1=site, $2=exactPattern, $3=compactSearchPattern, $4=building
               searchQuery = `
                 SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
                        '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
                 FROM ${config.table} e
                 ${config.siteJoin.replace('{table}', 'e')}
-                WHERE ${config.siteCondition} AND ${nameCondition.replace(/\$PATTERN/g, '$2')} ${buildingCondition.replace('$BUILDING', '$3')}
+                WHERE ${config.siteCondition} AND ${nameCondition.replace(/\$PATTERN/g, '$2').replace(/\$COMPACT/g, '$3')} ${buildingCondition.replace('$BUILDING', '$4')}
                 LIMIT 5
               `;
-              searchParams = [site, exactPattern];
+              searchParams = [site, exactPattern, compactSearchPattern];
               if (target_building) searchParams.push(target_building.toUpperCase());
             } else if (config.siteColumn) {
               // Tables avec colonne site directe (switchboard, vsd, datahub)
+              // $1=site, $2=exactPattern, $3=compactSearchPattern, $4=building
               searchQuery = `
                 SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
                        '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
                 FROM ${config.table} e
-                WHERE e.${config.siteColumn} = $1 AND ${nameCondition.replace(/\$PATTERN/g, '$2')} ${buildingCondition.replace('$BUILDING', '$3')}
+                WHERE e.${config.siteColumn} = $1 AND ${nameCondition.replace(/\$PATTERN/g, '$2').replace(/\$COMPACT/g, '$3')} ${buildingCondition.replace('$BUILDING', '$4')}
                 LIMIT 5
               `;
-              searchParams = [site, exactPattern];
+              searchParams = [site, exactPattern, compactSearchPattern];
               if (target_building) searchParams.push(target_building.toUpperCase());
             } else {
               // Tables sans filtre site (hv, mobile, glo)
+              // $1=exactPattern, $2=compactSearchPattern, $3=building
               searchQuery = `
                 SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
                        '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
                 FROM ${config.table} e
-                WHERE ${nameCondition.replace(/\$PATTERN/g, '$1')} ${buildingCondition.replace('$BUILDING', '$2')}
+                WHERE ${nameCondition.replace(/\$PATTERN/g, '$1').replace(/\$COMPACT/g, '$2')} ${buildingCondition.replace('$BUILDING', '$3')}
                 LIMIT 5
               `;
-              searchParams = [exactPattern];
+              searchParams = [exactPattern, compactSearchPattern];
               if (target_building) searchParams.push(target_building.toUpperCase());
             }
 
@@ -2375,6 +2389,9 @@ function createToolHandlers(pool, site) {
         try {
           const allResults = [];
           const searchTerms = name.toLowerCase().split(/\s+/).filter(t => t.length > 2);
+          // Pattern compact pour mots collés (ex: "portailsite" → "portail site")
+          const compactName = name.replace(/\s+/g, '').toLowerCase();
+          const compactPattern = `%${compactName}%`;
 
           for (const [eqType, tableInfo] of Object.entries(tableMap)) {
             try {
@@ -2393,10 +2410,12 @@ function createToolHandlers(pool, site) {
                     LOWER(dh.name) LIKE $1
                     OR LOWER(dhc.name) LIKE $1
                     OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $1
+                    OR LOWER(REPLACE(dh.name, ' ', '')) LIKE $2
+                    OR LOWER(REPLACE(dhc.name, ' ', '')) LIKE $2
                   )
                   LIMIT 5
                 `;
-                queryParams = [`%${name.toLowerCase()}%`];
+                queryParams = [`%${name.toLowerCase()}%`, compactPattern];
 
                 const result = await pool.query(query, queryParams);
                 // Formater avec catégorie
@@ -2436,32 +2455,33 @@ function createToolHandlers(pool, site) {
 
               if (tableInfo.siteJoin) {
                 // Tables avec join sur sites
+                // Inclut recherche compact pour mots collés (ex: "portailsite" → "portail site")
                 query = `
                   SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
                   FROM ${tableInfo.table} e
                   ${tableInfo.siteJoin.replace('{table}', 'e')}
-                  WHERE ${tableInfo.siteCondition} AND LOWER(e.name) LIKE $2
+                  WHERE ${tableInfo.siteCondition} AND (LOWER(e.name) LIKE $2 OR LOWER(REPLACE(e.name, ' ', '')) LIKE $3)
                   LIMIT 5
                 `;
-                queryParams = [site, `%${name.toLowerCase()}%`];
+                queryParams = [site, `%${name.toLowerCase()}%`, compactPattern];
               } else if (tableInfo.siteColumn) {
                 // Tables avec colonne site directe
                 query = `
                   SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
                   FROM ${tableInfo.table}
-                  WHERE ${tableInfo.siteColumn} = $1 AND LOWER(name) LIKE $2
+                  WHERE ${tableInfo.siteColumn} = $1 AND (LOWER(name) LIKE $2 OR LOWER(REPLACE(name, ' ', '')) LIKE $3)
                   LIMIT 5
                 `;
-                queryParams = [site, `%${name.toLowerCase()}%`];
+                queryParams = [site, `%${name.toLowerCase()}%`, compactPattern];
               } else {
                 // Tables sans filtre site
                 query = `
                   SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
                   FROM ${tableInfo.table}
-                  WHERE LOWER(name) LIKE $1
+                  WHERE (LOWER(name) LIKE $1 OR LOWER(REPLACE(name, ' ', '')) LIKE $2)
                   LIMIT 5
                 `;
-                queryParams = [`%${name.toLowerCase()}%`];
+                queryParams = [`%${name.toLowerCase()}%`, compactPattern];
               }
 
               const result = await pool.query(query, queryParams);
