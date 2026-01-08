@@ -7194,8 +7194,75 @@ app.post("/api/ai-assistant/analyze-equipment", express.json(), async (req, res)
       });
     }
 
-    // 2. Check control dates
-    if (equipment.lastControl) {
+    // 2. Check control dates - with special handling for mobile equipment
+    if (equipmentType === 'mobile') {
+      // Mobile equipment uses me_checks table with due_date
+      try {
+        const overdueRes = await pool.query(`
+          SELECT c.due_date,
+                 EXTRACT(DAY FROM CURRENT_DATE - c.due_date)::int as days_overdue
+          FROM me_checks c
+          WHERE c.equipment_id = $1 AND c.closed_at IS NULL AND c.due_date < CURRENT_DATE
+          ORDER BY c.due_date ASC
+          LIMIT 1
+        `, [equipment.id]);
+
+        if (overdueRes.rows.length > 0) {
+          const daysOverdue = overdueRes.rows[0].days_overdue;
+          issues.push(`Contrôle en retard de ${daysOverdue} jour${daysOverdue > 1 ? 's' : ''}`);
+          suggestions.push({
+            icon: 'calendar',
+            title: 'Contrôle en retard',
+            description: `Ce contrôle devait être fait il y a ${daysOverdue} jours`,
+            action: 'scheduleControl',
+            params: { equipmentId: equipment.id, priority: 'high' },
+            color: 'bg-red-100'
+          });
+          stats['Retard ctrl'] = `${daysOverdue}j`;
+        } else {
+          // Check next upcoming control
+          const nextRes = await pool.query(`
+            SELECT c.due_date,
+                   EXTRACT(DAY FROM c.due_date - CURRENT_DATE)::int as days_until
+            FROM me_checks c
+            WHERE c.equipment_id = $1 AND c.closed_at IS NULL AND c.due_date >= CURRENT_DATE
+            ORDER BY c.due_date ASC
+            LIMIT 1
+          `, [equipment.id]);
+
+          if (nextRes.rows.length > 0) {
+            const daysUntil = nextRes.rows[0].days_until;
+            if (daysUntil <= 7) {
+              suggestions.push({
+                icon: 'calendar',
+                title: 'Contrôle imminent',
+                description: `Prochain contrôle dans ${daysUntil} jour${daysUntil > 1 ? 's' : ''}`,
+                action: 'scheduleControl',
+                params: { equipmentId: equipment.id },
+                color: 'bg-orange-100'
+              });
+            }
+            stats['Prochain ctrl'] = `${daysUntil}j`;
+          }
+        }
+
+        // Also check last completed control
+        const lastRes = await pool.query(`
+          SELECT c.closed_at,
+                 EXTRACT(DAY FROM CURRENT_DATE - c.closed_at)::int as days_since
+          FROM me_checks c
+          WHERE c.equipment_id = $1 AND c.closed_at IS NOT NULL
+          ORDER BY c.closed_at DESC
+          LIMIT 1
+        `, [equipment.id]);
+
+        if (lastRes.rows.length > 0) {
+          stats['Dernier ctrl'] = `-${lastRes.rows[0].days_since}j`;
+        }
+      } catch (e) {
+        console.error('[AI] Mobile equipment control check error:', e.message);
+      }
+    } else if (equipment.lastControl) {
       const lastDate = new Date(equipment.lastControl);
       const daysSince = Math.floor((new Date() - lastDate) / (1000 * 60 * 60 * 24));
 
@@ -7221,16 +7288,145 @@ app.post("/api/ai-assistant/analyze-equipment", express.json(), async (req, res)
       }
 
       stats['Dernier ctrl'] = `${daysSince}j`;
-    } else {
-      issues.push('Aucun contrôle enregistré');
-      suggestions.push({
-        icon: 'calendar',
-        title: 'Premier contrôle',
-        description: 'Planifier le premier contrôle de cet équipement',
-        action: 'scheduleControl',
-        params: { equipmentId: equipment.id },
-        color: 'bg-yellow-100'
-      });
+    } else if (equipmentType === 'doors' || equipmentType === 'door') {
+      // Doors use fd_checks table
+      try {
+        const overdueRes = await pool.query(`
+          SELECT c.due_date,
+                 EXTRACT(DAY FROM CURRENT_DATE - c.due_date)::int as days_overdue
+          FROM fd_checks c
+          JOIN fd_doors d ON c.door_id = d.id
+          WHERE d.id = $1 AND c.closed_at IS NULL AND c.due_date < CURRENT_DATE
+          ORDER BY c.due_date ASC
+          LIMIT 1
+        `, [equipment.id]);
+
+        if (overdueRes.rows.length > 0) {
+          const daysOverdue = overdueRes.rows[0].days_overdue;
+          issues.push(`Contrôle porte en retard de ${daysOverdue} jour${daysOverdue > 1 ? 's' : ''}`);
+          suggestions.push({
+            icon: 'calendar',
+            title: 'Contrôle en retard',
+            description: `Ce contrôle devait être fait il y a ${daysOverdue} jours`,
+            action: 'scheduleControl',
+            params: { equipmentId: equipment.id, priority: 'high' },
+            color: 'bg-red-100'
+          });
+          stats['Retard ctrl'] = `${daysOverdue}j`;
+        }
+      } catch (e) { console.error('[AI] Door control check error:', e.message); }
+    } else if (equipmentType === 'switchboard') {
+      // Switchboards use scheduled_controls table
+      try {
+        const overdueRes = await pool.query(`
+          SELECT sc.next_control_date,
+                 EXTRACT(DAY FROM CURRENT_DATE - sc.next_control_date)::int as days_overdue
+          FROM scheduled_controls sc
+          WHERE sc.switchboard_id = $1 AND sc.next_control_date < CURRENT_DATE
+          ORDER BY sc.next_control_date ASC
+          LIMIT 1
+        `, [equipment.id]);
+
+        if (overdueRes.rows.length > 0) {
+          const daysOverdue = overdueRes.rows[0].days_overdue;
+          issues.push(`Contrôle tableau en retard de ${daysOverdue} jour${daysOverdue > 1 ? 's' : ''}`);
+          suggestions.push({
+            icon: 'calendar',
+            title: 'Contrôle en retard',
+            description: `Ce contrôle devait être fait il y a ${daysOverdue} jours`,
+            action: 'scheduleControl',
+            params: { equipmentId: equipment.id, priority: 'high' },
+            color: 'bg-red-100'
+          });
+          stats['Retard ctrl'] = `${daysOverdue}j`;
+        }
+      } catch (e) { console.error('[AI] Switchboard control check error:', e.message); }
+    } else if (['vsd', 'meca', 'hv', 'glo', 'datahub'].includes(equipmentType)) {
+      // These types use control_schedules table
+      const idColumnMap = {
+        vsd: 'vsd_equipment_id',
+        meca: 'meca_equipment_id',
+        hv: 'hv_equipment_id',
+        glo: 'glo_equipment_id',
+        datahub: 'datahub_equipment_id'
+      };
+      const idCol = idColumnMap[equipmentType];
+
+      try {
+        const overdueRes = await pool.query(`
+          SELECT cs.next_due_date,
+                 EXTRACT(DAY FROM CURRENT_DATE - cs.next_due_date)::int as days_overdue
+          FROM control_schedules cs
+          WHERE cs.${idCol} = $1 AND cs.next_due_date < CURRENT_DATE
+          ORDER BY cs.next_due_date ASC
+          LIMIT 1
+        `, [equipment.id]);
+
+        if (overdueRes.rows.length > 0) {
+          const daysOverdue = overdueRes.rows[0].days_overdue;
+          issues.push(`Contrôle en retard de ${daysOverdue} jour${daysOverdue > 1 ? 's' : ''}`);
+          suggestions.push({
+            icon: 'calendar',
+            title: 'Contrôle en retard',
+            description: `Ce contrôle devait être fait il y a ${daysOverdue} jours`,
+            action: 'scheduleControl',
+            params: { equipmentId: equipment.id, priority: 'high' },
+            color: 'bg-red-100'
+          });
+          stats['Retard ctrl'] = `${daysOverdue}j`;
+        } else {
+          // Check next upcoming control
+          const nextRes = await pool.query(`
+            SELECT cs.next_due_date,
+                   EXTRACT(DAY FROM cs.next_due_date - CURRENT_DATE)::int as days_until
+            FROM control_schedules cs
+            WHERE cs.${idCol} = $1 AND cs.next_due_date >= CURRENT_DATE
+            ORDER BY cs.next_due_date ASC
+            LIMIT 1
+          `, [equipment.id]);
+
+          if (nextRes.rows.length > 0) {
+            const daysUntil = nextRes.rows[0].days_until;
+            if (daysUntil <= 7) {
+              suggestions.push({
+                icon: 'calendar',
+                title: 'Contrôle imminent',
+                description: `Prochain contrôle dans ${daysUntil} jour${daysUntil > 1 ? 's' : ''}`,
+                action: 'scheduleControl',
+                params: { equipmentId: equipment.id },
+                color: 'bg-orange-100'
+              });
+            }
+            stats['Prochain ctrl'] = `${daysUntil}j`;
+          }
+        }
+      } catch (e) { console.error(`[AI] ${equipmentType} control check error:`, e.message); }
+    } else if (equipment.lastControl) {
+      // Fallback for other types with lastControl field
+      const lastDate = new Date(equipment.lastControl);
+      const daysSince = Math.floor((new Date() - lastDate) / (1000 * 60 * 60 * 24));
+
+      if (daysSince > 365) {
+        issues.push(`Contrôle en retard de ${daysSince - 365} jours`);
+        suggestions.push({
+          icon: 'calendar',
+          title: 'Planifier contrôle urgent',
+          description: 'Cet équipement nécessite un contrôle immédiat',
+          action: 'scheduleControl',
+          params: { equipmentId: equipment.id, priority: 'high' },
+          color: 'bg-red-100'
+        });
+      } else if (daysSince > 300) {
+        suggestions.push({
+          icon: 'calendar',
+          title: 'Contrôle à prévoir',
+          description: `Prochain contrôle dans ${365 - daysSince} jours`,
+          action: 'scheduleControl',
+          params: { equipmentId: equipment.id },
+          color: 'bg-orange-100'
+        });
+      }
+      stats['Dernier ctrl'] = `${daysSince}j`;
     }
 
     // 3. Check status
