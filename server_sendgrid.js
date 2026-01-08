@@ -22,6 +22,7 @@ const router = express.Router();
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || '';
 const SENDGRID_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'admin@haleon-tool.io';
 const SENDGRID_FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Haleon-tool';
+const APP_URL = process.env.APP_URL || 'https://autonomix-elec.onrender.com';
 
 if (SENDGRID_API_KEY) {
   sgMail.setApiKey(SENDGRID_API_KEY);
@@ -508,11 +509,12 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
           <table class="outage-table">
             <thead>
               <tr>
-                <th style="width: 25%;">Équipement</th>
-                <th style="width: 30%;">Problème</th>
-                <th style="width: 15%;">Sévérité</th>
-                <th style="width: 15%;">Statut</th>
-                <th style="width: 15%;">Durée</th>
+                <th style="width: 22%;">Équipement</th>
+                <th style="width: 28%;">Problème</th>
+                <th style="width: 12%;">Sévérité</th>
+                <th style="width: 12%;">Statut</th>
+                <th style="width: 13%;">Durée</th>
+                <th style="width: 13%;">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -540,6 +542,9 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
                   ${outage.duration_minutes ? `${outage.duration_minutes} min` : '-'}
                   ${outage.downtime_minutes ? `<br><span style="font-size: 11px; color: #DC2626;">⏱️ ${outage.downtime_minutes} min arrêt</span>` : ''}
                 </td>
+                <td>
+                  <a href="${APP_URL}/troubleshooting/${outage.id}" style="color: #3B82F6; text-decoration: none; font-weight: 500;">Voir →</a>
+                </td>
               </tr>
               `).join('')}
             </tbody>
@@ -561,7 +566,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
       <p style="margin-top: 10px;">
         <a href="#">Se désinscrire</a> |
         <a href="#">Préférences email</a> |
-        <a href="https://haleon-tool.io">Accéder à Haleon-tool</a>
+        <a href="${APP_URL}">Accéder à l'application</a>
       </p>
       <p style="margin-top: 15px; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Tous droits réservés</p>
     </div>
