@@ -2,77 +2,73 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Wrench, AlertTriangle, CheckCircle, Clock, TrendingUp, Plus, Minus,
+  Wrench, AlertTriangle, CheckCircle, Clock, TrendingUp,
   Zap, Cog, Battery, Shield, Flame, Activity, RefreshCw, Users,
-  ChevronRight, ChevronDown, Sparkles, Building2, Calendar, Target,
-  MessageCircle, Play, Pause, Volume2, VolumeX, ArrowRight, Package,
-  ClipboardList, AlertCircle, FileText, Trash2, UserCircle, Bot,
-  Timer, ThumbsUp, ThumbsDown, Bell, ExternalLink, Settings
+  ChevronRight, ChevronDown, Sparkles, Calendar,
+  MessageCircle, Play, Pause, ArrowRight,
+  ClipboardList, AlertCircle, Bot, Bell, ExternalLink
 } from 'lucide-react';
 import { aiAssistant } from '../lib/ai-assistant';
+import { getUserPermissions } from '../lib/permissions';
 
-// Animated AI Avatar - Personnage animé avec idle/speaking states
-const AnimatedAvatar = ({ agent, isActive, isSpeaking, onClick }) => {
-  const [blinkState, setBlinkState] = useState(false);
+// Mapping agent type to app permission
+const AGENT_TO_APP_MAP = {
+  main: null, // Always visible
+  switchboard: 'switchboards',
+  vsd: 'vsd',
+  meca: 'meca',
+  hv: 'hv',
+  glo: 'glo',
+  mobile: 'mobile-equipments',
+  atex: 'atex',
+  doors: 'doors',
+  datahub: 'datahub',
+  infrastructure: 'infrastructure',
+  firecontrol: 'fire-control'
+};
 
-  // Blinking animation
-  useEffect(() => {
-    const blinkInterval = setInterval(() => {
-      setBlinkState(true);
-      setTimeout(() => setBlinkState(false), 150);
-    }, 3000 + Math.random() * 2000);
-    return () => clearInterval(blinkInterval);
-  }, []);
+// Agent emoji mapping
+const AGENT_EMOJIS = {
+  main: '⚡',
+  switchboard: '🔌',
+  vsd: '🎛️',
+  meca: '⚙️',
+  hv: '⚡',
+  glo: '💡',
+  mobile: '📱',
+  atex: '🔥',
+  doors: '🚪',
+  datahub: '📊',
+  infrastructure: '🏗️',
+  firecontrol: '🧯'
+};
 
-  const avatarConfig = {
-    maintenance: {
-      color: '#f59e0b',
-      bgGradient: 'from-amber-500 to-orange-600',
-      skinTone: '#e0ac69',
-      hairColor: '#4a3728',
-      shirtColor: '#f59e0b',
-      name: 'Alex',
-      role: 'Maintenance'
-    },
-    troubleshooting: {
-      color: '#ef4444',
-      bgGradient: 'from-red-500 to-rose-600',
-      skinTone: '#c68642',
-      hairColor: '#1a1a1a',
-      shirtColor: '#ef4444',
-      name: 'Sam',
-      role: 'Dépannages'
-    },
-    equipment: {
-      color: '#3b82f6',
-      bgGradient: 'from-blue-500 to-indigo-600',
-      skinTone: '#ffd5c8',
-      hairColor: '#8b4513',
-      shirtColor: '#3b82f6',
-      name: 'Jordan',
-      role: 'Équipements'
-    },
-    security: {
-      color: '#10b981',
-      bgGradient: 'from-emerald-500 to-green-600',
-      skinTone: '#d4a574',
-      hairColor: '#2d1b0e',
-      shirtColor: '#10b981',
-      name: 'Morgan',
-      role: 'Sécurité'
-    },
-    procedures: {
-      color: '#8b5cf6',
-      bgGradient: 'from-violet-500 to-purple-600',
-      skinTone: '#e8beac',
-      hairColor: '#4a0e0e',
-      shirtColor: '#8b5cf6',
-      name: 'Taylor',
-      role: 'Procédures'
-    }
-  };
+// Agent color schemes
+const AGENT_COLORS = {
+  main: { bg: 'from-blue-500 to-cyan-600', ring: 'ring-blue-400', text: 'text-blue-600', bgLight: 'bg-blue-50' },
+  switchboard: { bg: 'from-amber-500 to-orange-600', ring: 'ring-amber-400', text: 'text-amber-600', bgLight: 'bg-amber-50' },
+  vsd: { bg: 'from-purple-500 to-violet-600', ring: 'ring-purple-400', text: 'text-purple-600', bgLight: 'bg-purple-50' },
+  meca: { bg: 'from-slate-500 to-gray-600', ring: 'ring-slate-400', text: 'text-slate-600', bgLight: 'bg-slate-50' },
+  hv: { bg: 'from-yellow-500 to-amber-600', ring: 'ring-yellow-400', text: 'text-yellow-600', bgLight: 'bg-yellow-50' },
+  glo: { bg: 'from-emerald-500 to-green-600', ring: 'ring-emerald-400', text: 'text-emerald-600', bgLight: 'bg-emerald-50' },
+  mobile: { bg: 'from-cyan-500 to-blue-600', ring: 'ring-cyan-400', text: 'text-cyan-600', bgLight: 'bg-cyan-50' },
+  atex: { bg: 'from-red-500 to-rose-600', ring: 'ring-red-400', text: 'text-red-600', bgLight: 'bg-red-50' },
+  doors: { bg: 'from-pink-500 to-fuchsia-600', ring: 'ring-pink-400', text: 'text-pink-600', bgLight: 'bg-pink-50' },
+  datahub: { bg: 'from-indigo-500 to-purple-600', ring: 'ring-indigo-400', text: 'text-indigo-600', bgLight: 'bg-indigo-50' },
+  infrastructure: { bg: 'from-violet-500 to-purple-600', ring: 'ring-violet-400', text: 'text-violet-600', bgLight: 'bg-violet-50' },
+  firecontrol: { bg: 'from-orange-500 to-red-600', ring: 'ring-orange-400', text: 'text-orange-600', bgLight: 'bg-orange-50' }
+};
 
-  const config = avatarConfig[agent.type] || avatarConfig.equipment;
+// Video Agent Avatar - Shows real video or animated fallback
+const VideoAgentAvatar = ({ agent, isActive, isSpeaking, onClick, alertCount }) => {
+  const [videoError, setVideoError] = useState(false);
+  const colors = AGENT_COLORS[agent.type] || AGENT_COLORS.main;
+  const emoji = AGENT_EMOJIS[agent.type] || '🤖';
+
+  // Video URLs
+  const idleVideoUrl = `/api/admin/settings/ai-agents/${agent.type}/idle`;
+  const speakingVideoUrl = `/api/admin/settings/ai-agents/${agent.type}/speaking`;
+  const hasVideo = agent.hasIdleVideo || agent.hasSpeakingVideo;
 
   return (
     <motion.button
@@ -83,161 +79,46 @@ const AnimatedAvatar = ({ agent, isActive, isSpeaking, onClick }) => {
       whileHover={{ scale: 1.05 }}
       whileTap={{ scale: 0.95 }}
     >
-      {/* Video-like frame with avatar */}
+      {/* Video frame */}
       <div className={`relative w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden shadow-2xl ${
-        isActive ? 'ring-4 ring-white/50' : ''
+        isActive ? `ring-4 ${colors.ring} ring-opacity-50` : ''
       }`}>
         {/* Background gradient */}
-        <div className={`absolute inset-0 bg-gradient-to-br ${config.bgGradient}`} />
+        <div className={`absolute inset-0 bg-gradient-to-br ${colors.bg}`} />
 
-        {/* Animated character SVG */}
-        <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full">
-          {/* Body/Shoulders */}
-          <motion.ellipse
-            cx="50"
-            cy="95"
-            rx="35"
-            ry="20"
-            fill={config.shirtColor}
-            animate={isSpeaking ? {
-              cy: [95, 93, 95],
-            } : {
-              cy: [95, 94, 95]
-            }}
-            transition={{
-              duration: isSpeaking ? 0.3 : 3,
-              repeat: Infinity,
-              ease: "easeInOut"
-            }}
+        {/* Video or fallback */}
+        {hasVideo && !videoError ? (
+          <video
+            key={isSpeaking ? 'speaking' : 'idle'}
+            src={isSpeaking && agent.hasSpeakingVideo ? speakingVideoUrl : idleVideoUrl}
+            className="absolute inset-0 w-full h-full object-cover"
+            autoPlay
+            loop
+            muted
+            playsInline
+            onError={() => setVideoError(true)}
           />
-
-          {/* Neck */}
-          <rect x="43" y="65" width="14" height="12" fill={config.skinTone} rx="2" />
-
-          {/* Head */}
-          <motion.ellipse
-            cx="50"
-            cy="45"
-            rx="22"
-            ry="26"
-            fill={config.skinTone}
-            animate={isSpeaking ? {
-              cy: [45, 43, 45, 44, 45],
-              scale: [1, 1.02, 1, 1.01, 1]
-            } : {
-              cy: [45, 44.5, 45]
-            }}
-            transition={{
-              duration: isSpeaking ? 0.5 : 4,
-              repeat: Infinity,
-              ease: "easeInOut"
-            }}
-          />
-
-          {/* Hair */}
-          <motion.path
-            d={`M28 40 Q30 15, 50 12 Q70 15, 72 40 Q70 30, 50 28 Q30 30, 28 40`}
-            fill={config.hairColor}
-            animate={isSpeaking ? { d: [
-              "M28 40 Q30 15, 50 12 Q70 15, 72 40 Q70 30, 50 28 Q30 30, 28 40",
-              "M28 39 Q30 14, 50 11 Q70 14, 72 39 Q70 29, 50 27 Q30 29, 28 39",
-              "M28 40 Q30 15, 50 12 Q70 15, 72 40 Q70 30, 50 28 Q30 30, 28 40"
-            ]} : {}}
-            transition={{ duration: 0.5, repeat: Infinity }}
-          />
-
-          {/* Eyes */}
-          <motion.g
-            animate={blinkState ? { scaleY: 0.1 } : { scaleY: 1 }}
-            style={{ originY: '50%' }}
-          >
-            {/* Left eye */}
-            <ellipse cx="40" cy="42" rx="4" ry="5" fill="white" />
-            <motion.circle
-              cx="40"
-              cy="43"
-              r="2.5"
-              fill="#1a1a1a"
-              animate={isActive ? { cx: [40, 41, 40, 39, 40] } : {}}
-              transition={{ duration: 2, repeat: Infinity }}
-            />
-            <circle cx="41" cy="42" r="1" fill="white" />
-
-            {/* Right eye */}
-            <ellipse cx="60" cy="42" rx="4" ry="5" fill="white" />
-            <motion.circle
-              cx="60"
-              cy="43"
-              r="2.5"
-              fill="#1a1a1a"
-              animate={isActive ? { cx: [60, 61, 60, 59, 60] } : {}}
-              transition={{ duration: 2, repeat: Infinity }}
-            />
-            <circle cx="61" cy="42" r="1" fill="white" />
-          </motion.g>
-
-          {/* Eyebrows */}
-          <motion.path
-            d="M35 36 Q40 34, 45 36"
-            stroke={config.hairColor}
-            strokeWidth="2"
-            fill="none"
-            strokeLinecap="round"
-            animate={isSpeaking ? { d: [
-              "M35 36 Q40 34, 45 36",
-              "M35 34 Q40 32, 45 34",
-              "M35 36 Q40 34, 45 36"
-            ]} : {}}
-            transition={{ duration: 0.4, repeat: Infinity }}
-          />
-          <motion.path
-            d="M55 36 Q60 34, 65 36"
-            stroke={config.hairColor}
-            strokeWidth="2"
-            fill="none"
-            strokeLinecap="round"
-            animate={isSpeaking ? { d: [
-              "M55 36 Q60 34, 65 36",
-              "M55 34 Q60 32, 65 34",
-              "M55 36 Q60 34, 65 36"
-            ]} : {}}
-            transition={{ duration: 0.4, repeat: Infinity }}
-          />
-
-          {/* Nose */}
-          <path d="M48 48 Q50 52, 52 48" stroke={config.skinTone} strokeWidth="2" fill="none" filter="brightness(0.9)" />
-
-          {/* Mouth - animated when speaking */}
-          <motion.ellipse
-            cx="50"
-            cy="58"
-            rx={isSpeaking ? "6" : "4"}
-            ry={isSpeaking ? "4" : "2"}
-            fill={isSpeaking ? "#c44" : "#b55"}
-            animate={isSpeaking ? {
-              ry: [2, 5, 3, 6, 2, 4, 2],
-              rx: [4, 7, 5, 8, 4, 6, 4]
-            } : {
-              ry: [2, 2.2, 2]
-            }}
-            transition={{
-              duration: isSpeaking ? 0.4 : 2,
-              repeat: Infinity,
-              ease: "easeInOut"
-            }}
-          />
-
-          {/* Smile line when not speaking */}
-          {!isSpeaking && (
-            <path
-              d="M44 58 Q50 62, 56 58"
-              stroke="#a44"
-              strokeWidth="1.5"
-              fill="none"
-              strokeLinecap="round"
-            />
-          )}
-        </svg>
+        ) : (
+          // Animated emoji fallback
+          <div className="absolute inset-0 flex items-center justify-center">
+            <motion.span
+              className="text-4xl"
+              animate={isSpeaking ? {
+                scale: [1, 1.2, 1, 1.15, 1],
+                rotate: [0, -5, 5, -3, 0]
+              } : {
+                scale: [1, 1.05, 1]
+              }}
+              transition={{
+                duration: isSpeaking ? 0.5 : 3,
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
+            >
+              {emoji}
+            </motion.span>
+          </div>
+        )}
 
         {/* Speaking indicator waves */}
         {isSpeaking && (
@@ -258,7 +139,7 @@ const AnimatedAvatar = ({ agent, isActive, isSpeaking, onClick }) => {
           </div>
         )}
 
-        {/* Active indicator glow */}
+        {/* Active glow */}
         {isActive && (
           <motion.div
             className="absolute inset-0 bg-white/20"
@@ -277,60 +158,46 @@ const AnimatedAvatar = ({ agent, isActive, isSpeaking, onClick }) => {
       </div>
 
       {/* Alert badge */}
-      {agent.alertCount > 0 && (
+      {alertCount > 0 && (
         <motion.span
           className="absolute -top-1 -right-1 w-6 h-6 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center shadow-lg"
           animate={{ scale: [1, 1.1, 1] }}
           transition={{ duration: 1, repeat: Infinity }}
         >
-          {agent.alertCount > 9 ? '9+' : agent.alertCount}
+          {alertCount > 9 ? '9+' : alertCount}
         </motion.span>
       )}
 
       {/* Name tag */}
       <div className="text-center">
         <p className={`text-sm font-bold ${isActive ? 'text-white' : 'text-slate-200'}`}>
-          {config.name}
+          {agent.customName || agent.name}
         </p>
-        <p className="text-xs text-slate-400">{config.role}</p>
+        <p className="text-xs text-slate-400">{agent.role || agent.type}</p>
       </div>
     </motion.button>
   );
 };
 
-// Speech Bubble - Ce que dit l'agent
+// Speech Bubble - What the agent is saying
 const SpeechBubble = ({ agent, items, onItemClick, onClose }) => {
-  const bubbleStyles = {
-    maintenance: { accent: 'border-amber-500', bg: 'bg-amber-50', text: 'text-amber-900', badge: 'bg-amber-100 text-amber-700' },
-    troubleshooting: { accent: 'border-red-500', bg: 'bg-red-50', text: 'text-red-900', badge: 'bg-red-100 text-red-700' },
-    equipment: { accent: 'border-blue-500', bg: 'bg-blue-50', text: 'text-blue-900', badge: 'bg-blue-100 text-blue-700' },
-    security: { accent: 'border-emerald-500', bg: 'bg-emerald-50', text: 'text-emerald-900', badge: 'bg-emerald-100 text-emerald-700' },
-    procedures: { accent: 'border-violet-500', bg: 'bg-violet-50', text: 'text-violet-900', badge: 'bg-violet-100 text-violet-700' },
-    ai: { accent: 'border-cyan-500', bg: 'bg-cyan-50', text: 'text-cyan-900', badge: 'bg-cyan-100 text-cyan-700' }
-  };
-
-  const agentNames = {
-    maintenance: 'Alex - Maintenance',
-    troubleshooting: 'Sam - Dépannages',
-    equipment: 'Jordan - Équipements',
-    security: 'Morgan - Sécurité',
-    procedures: 'Taylor - Procédures'
-  };
-
-  const style = bubbleStyles[agent.type] || bubbleStyles.ai;
+  const colors = AGENT_COLORS[agent.type] || AGENT_COLORS.main;
+  const emoji = AGENT_EMOJIS[agent.type] || '🤖';
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 20, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -10, scale: 0.95 }}
-      className={`bg-white rounded-2xl shadow-xl border-l-4 ${style.accent} overflow-hidden`}
+      className={`bg-white rounded-2xl shadow-xl border-l-4 border-l-${colors.text.replace('text-', '')} overflow-hidden`}
+      style={{ borderLeftColor: colors.text.includes('blue') ? '#2563eb' : colors.text.includes('amber') ? '#d97706' : colors.text.includes('red') ? '#dc2626' : '#6366f1' }}
     >
       {/* Header */}
-      <div className={`${style.bg} px-4 py-3 flex items-center justify-between`}>
+      <div className={`${colors.bgLight} px-4 py-3 flex items-center justify-between`}>
         <div className="flex items-center gap-2">
+          <span className="text-xl">{emoji}</span>
           <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-          <span className={`font-semibold ${style.text}`}>{agentNames[agent.type] || agent.name}</span>
+          <span className={`font-semibold ${colors.text}`}>{agent.customName || agent.name}</span>
           <span className="text-xs text-slate-500">parle...</span>
         </div>
         <button
@@ -359,12 +226,12 @@ const SpeechBubble = ({ agent, items, onItemClick, onClose }) => {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: idx * 0.1 }}
               onClick={() => onItemClick?.(item)}
-              className={`w-full text-left p-3 rounded-xl ${style.bg} hover:shadow-md transition-all group`}
+              className={`w-full text-left p-3 rounded-xl ${colors.bgLight} hover:shadow-md transition-all group`}
             >
               <div className="flex items-start gap-3">
                 <span className="text-lg flex-shrink-0">{item.icon}</span>
                 <div className="flex-1 min-w-0">
-                  <h4 className={`font-medium text-sm ${style.text}`}>{item.title}</h4>
+                  <h4 className={`font-medium text-sm ${colors.text}`}>{item.title}</h4>
                   <p className="text-xs text-slate-600 mt-0.5 line-clamp-2">{item.description}</p>
                   {item.time && (
                     <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
@@ -385,7 +252,7 @@ const SpeechBubble = ({ agent, items, onItemClick, onClose }) => {
         <div className="px-4 py-3 bg-slate-50 border-t border-slate-100">
           <button
             onClick={() => onItemClick?.({ url: agent.actionUrl })}
-            className={`w-full text-center text-sm font-medium ${style.text} hover:underline flex items-center justify-center gap-1`}
+            className={`w-full text-center text-sm font-medium ${colors.text} hover:underline flex items-center justify-center gap-1`}
           >
             Voir tout
             <ArrowRight size={14} />
@@ -396,48 +263,13 @@ const SpeechBubble = ({ agent, items, onItemClick, onClose }) => {
   );
 };
 
-// Activity Feed Item
-const ActivityItem = ({ activity, onClick }) => {
-  const colorMap = {
-    green: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-    red: 'bg-red-100 text-red-700 border-red-200',
-    amber: 'bg-amber-100 text-amber-700 border-amber-200',
-    blue: 'bg-blue-100 text-blue-700 border-blue-200',
-    violet: 'bg-violet-100 text-violet-700 border-violet-200'
-  };
-
-  return (
-    <motion.button
-      onClick={onClick}
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
-      className="w-full flex items-center gap-3 p-3 bg-white/80 backdrop-blur rounded-xl hover:bg-white hover:shadow-md transition-all text-left"
-    >
-      <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${
-        colorMap[activity.color] || colorMap.blue
-      }`}>
-        {activity.icon}
-      </span>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-slate-800 truncate">{activity.title}</p>
-        <p className="text-xs text-slate-500 truncate">{activity.description}</p>
-      </div>
-      <div className="text-right flex-shrink-0">
-        <p className="text-xs text-slate-400">{activity.timeAgo}</p>
-        <p className="text-xs text-slate-300">{activity.actor}</p>
-      </div>
-    </motion.button>
-  );
-};
-
 // Quick Stat Card
-const QuickStat = ({ icon: Icon, value, label, trend, color = 'blue', onClick }) => {
+const QuickStat = ({ icon: Icon, value, label, color = 'blue', onClick }) => {
   const colors = {
     blue: 'from-blue-500 to-blue-600',
     green: 'from-emerald-500 to-emerald-600',
     amber: 'from-amber-500 to-amber-600',
     red: 'from-red-500 to-red-600',
-    violet: 'from-violet-500 to-violet-600'
   };
 
   return (
@@ -453,18 +285,40 @@ const QuickStat = ({ icon: Icon, value, label, trend, color = 'blue', onClick })
           <Icon size={20} className="text-white" />
         </div>
         <div>
-          <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold text-slate-900">{value}</span>
-            {trend !== undefined && trend !== 0 && (
-              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                trend > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-              }`}>
-                {trend > 0 ? '+' : ''}{trend}
-              </span>
-            )}
-          </div>
+          <span className="text-2xl font-bold text-slate-900">{value}</span>
           <p className="text-xs text-slate-500">{label}</p>
         </div>
+      </div>
+    </motion.button>
+  );
+};
+
+// Activity Item
+const ActivityItem = ({ activity, onClick }) => {
+  const colorMap = {
+    green: 'bg-emerald-100 text-emerald-700',
+    red: 'bg-red-100 text-red-700',
+    amber: 'bg-amber-100 text-amber-700',
+    blue: 'bg-blue-100 text-blue-700',
+    violet: 'bg-violet-100 text-violet-700'
+  };
+
+  return (
+    <motion.button
+      onClick={onClick}
+      initial={{ opacity: 0, x: -20 }}
+      animate={{ opacity: 1, x: 0 }}
+      className="w-full flex items-center gap-3 p-3 bg-white/80 backdrop-blur rounded-xl hover:bg-white hover:shadow-md transition-all text-left"
+    >
+      <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${colorMap[activity.color] || colorMap.blue}`}>
+        {activity.icon}
+      </span>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-slate-800 truncate">{activity.title}</p>
+        <p className="text-xs text-slate-500 truncate">{activity.description}</p>
+      </div>
+      <div className="text-right flex-shrink-0">
+        <p className="text-xs text-slate-400">{activity.timeAgo}</p>
       </div>
     </motion.button>
   );
@@ -475,10 +329,17 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(true);
   const [activeAgent, setActiveAgent] = useState(null);
-  const [briefingData, setBriefingData] = useState(null);
+  const [agents, setAgents] = useState([]);
+  const [agentData, setAgentData] = useState({});
   const [activities, setActivities] = useState([]);
+  const [stats, setStats] = useState({});
   const [isAutoPlay, setIsAutoPlay] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+
+  // Get user permissions
+  const userPermissions = useMemo(() => getUserPermissions(userEmail), [userEmail]);
+  const userApps = userPermissions?.apps || [];
+  const isAdmin = userPermissions?.isAdmin || false;
 
   // Update time every minute
   useEffect(() => {
@@ -486,65 +347,77 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
     return () => clearInterval(timer);
   }, []);
 
-  // Load all briefing data
+  // Load agents and data
   useEffect(() => {
     loadBriefingData();
-  }, []);
+  }, [userEmail]);
 
   // Auto-play through agents
   useEffect(() => {
-    if (!isAutoPlay || !briefingData?.agents) return;
+    if (!isAutoPlay || agents.length === 0) return;
 
-    const agentKeys = Object.keys(briefingData.agents);
-    let currentIndex = agentKeys.indexOf(activeAgent);
+    let currentIndex = agents.findIndex(a => a.type === activeAgent);
 
     const timer = setInterval(() => {
-      currentIndex = (currentIndex + 1) % agentKeys.length;
-      setActiveAgent(agentKeys[currentIndex]);
+      currentIndex = (currentIndex + 1) % agents.length;
+      setActiveAgent(agents[currentIndex].type);
     }, 5000);
 
     return () => clearInterval(timer);
-  }, [isAutoPlay, briefingData, activeAgent]);
+  }, [isAutoPlay, agents, activeAgent]);
 
   const loadBriefingData = async () => {
     setIsLoading(true);
     try {
-      // Fetch all data in parallel using fetch directly
-      const [morningBrief, activitiesRes, troubleshootingRes] = await Promise.all([
-        aiAssistant.getMorningBrief().catch(e => null),
-        fetch('/api/dashboard/activities?limit=20').then(r => r.json()).catch(e => ({ recent: [] })),
-        fetch('/api/troubleshooting/list?limit=10').then(r => r.json()).catch(e => ({ records: [] }))
+      // Fetch all data in parallel
+      const [agentListRes, agentNamesRes, morningBrief, activitiesRes, troubleshootingRes] = await Promise.all([
+        fetch('/api/admin/settings/ai-agents/list').then(r => r.json()).catch(() => ({ agents: [] })),
+        fetch('/api/admin/settings/ai-agents/names').then(r => r.json()).catch(() => ({ names: {} })),
+        aiAssistant.getMorningBrief().catch(() => null),
+        fetch('/api/dashboard/activities?limit=20').then(r => r.json()).catch(() => ({ recent: [] })),
+        fetch('/api/troubleshooting/list?limit=10').then(r => r.json()).catch(() => ({ records: [] }))
       ]);
 
-      // Process activities for timeline
-      const recentActivities = (activitiesRes?.recent || []).map(a => ({
-        ...a,
-        timeAgo: getTimeAgo(a.timestamp)
+      // Filter agents based on user permissions
+      const filteredAgents = (agentListRes.agents || []).filter(agent => {
+        const requiredApp = AGENT_TO_APP_MAP[agent.type];
+        if (!requiredApp) return true; // main agent always visible
+        if (isAdmin) return true; // admin sees all
+        return userApps.includes(requiredApp);
+      }).map(agent => ({
+        ...agent,
+        customName: agentNamesRes.names?.[agent.type] || agent.name?.split(' ')[0],
+        role: getRoleDescription(agent.type)
       }));
 
-      // Build agents data
-      const agents = buildAgentsData(morningBrief, troubleshootingRes?.records || [], recentActivities);
+      setAgents(filteredAgents);
 
-      setBriefingData({
-        brief: morningBrief,
-        agents,
-        stats: {
-          healthScore: morningBrief?.healthScore || 85,
-          totalEquipment: morningBrief?.stats?.totalEquipment || 0,
-          overdueControls: morningBrief?.stats?.controls?.overdue || 0,
-          completedToday: morningBrief?.stats?.controls?.completedThisWeek || 0,
-          troubleshootingToday: troubleshootingRes?.records?.filter(r =>
-            new Date(r.created_at).toDateString() === new Date().toDateString()
-          ).length || 0
-        }
+      // Build agent data (what each agent will "say")
+      const data = buildAgentData(morningBrief, troubleshootingRes?.records || [], activitiesRes?.recent || []);
+      setAgentData(data);
+
+      // Set stats
+      setStats({
+        healthScore: morningBrief?.healthScore || 85,
+        overdueControls: morningBrief?.stats?.controls?.overdue || 0,
+        completedToday: morningBrief?.stats?.controls?.completedThisWeek || 0,
+        troubleshootingToday: (troubleshootingRes?.records || []).filter(r =>
+          new Date(r.created_at).toDateString() === new Date().toDateString()
+        ).length
       });
-      setActivities(recentActivities.slice(0, 10));
+
+      // Set activities
+      setActivities((activitiesRes?.recent || []).slice(0, 10).map(a => ({
+        ...a,
+        timeAgo: getTimeAgo(a.timestamp)
+      })));
 
       // Start with first agent that has alerts
-      const firstAlertAgent = Object.entries(agents).find(([, a]) => a.alertCount > 0);
+      const firstAlertAgent = filteredAgents.find(a => (data[a.type]?.items?.length || 0) > 0);
       if (firstAlertAgent) {
-        setActiveAgent(firstAlertAgent[0]);
+        setActiveAgent(firstAlertAgent.type);
       }
+
     } catch (err) {
       console.error('Failed to load briefing data:', err);
     } finally {
@@ -552,136 +425,151 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
     }
   };
 
-  // Build agents data structure
-  const buildAgentsData = (brief, troubleshooting, activities) => {
-    const now = new Date();
+  const getRoleDescription = (type) => {
+    const roles = {
+      main: 'Assistant Principal',
+      switchboard: 'Tableaux Électriques',
+      vsd: 'Variateurs',
+      meca: 'Mécanique',
+      hv: 'Haute Tension',
+      glo: 'Éclairage Sécurité',
+      mobile: 'Équipements Mobiles',
+      atex: 'Zones ATEX',
+      doors: 'Portes Coupe-Feu',
+      datahub: 'Capteurs & Data',
+      infrastructure: 'Infrastructure',
+      firecontrol: 'Sécurité Incendie'
+    };
+    return roles[type] || type;
+  };
 
-    // Maintenance Agent
+  const buildAgentData = (brief, troubleshooting, activities) => {
+    const now = new Date();
+    const data = {};
+
+    // Main agent - overview
+    data.main = {
+      items: [],
+      actionUrl: '/dashboard'
+    };
+    if (brief?.aiInsight) {
+      data.main.items.push({
+        id: 'insight',
+        icon: '💡',
+        title: 'Conseil du jour',
+        description: brief.aiInsight
+      });
+    }
+
+    // Switchboard agent - controls
     const overdueControls = brief?.stats?.controls?.overdue || 0;
     const thisWeekControls = brief?.stats?.controls?.thisWeek || 0;
-    const maintenanceItems = [];
-
+    data.switchboard = {
+      items: [],
+      actionUrl: '/app/switchboard-controls'
+    };
     if (overdueControls > 0) {
-      maintenanceItems.push({
+      data.switchboard.items.push({
         id: 'overdue',
         icon: '🚨',
         title: `${overdueControls} contrôle${overdueControls > 1 ? 's' : ''} en retard`,
-        description: 'Ces contrôles doivent être effectués en priorité',
+        description: 'À effectuer en priorité',
         url: '/app/switchboard-controls?filter=overdue'
       });
     }
     if (thisWeekControls > 0) {
-      maintenanceItems.push({
+      data.switchboard.items.push({
         id: 'thisweek',
         icon: '📅',
         title: `${thisWeekControls} contrôle${thisWeekControls > 1 ? 's' : ''} cette semaine`,
         description: 'Planifiés pour les 7 prochains jours',
-        url: '/app/switchboard-controls?filter=thisweek'
+        url: '/app/switchboard-controls'
       });
     }
 
-    // Troubleshooting Agent
-    const recentTroubleshooting = troubleshooting.slice(0, 5).map(t => ({
-      id: t.id,
-      icon: t.severity === 'critical' ? '🔴' : t.severity === 'major' ? '🟠' : '🟡',
-      title: t.title,
-      description: `${t.equipment_name || 'Équipement'} - ${t.technician_name}`,
-      time: getTimeAgo(t.created_at),
-      url: `/app/troubleshooting/${t.id}`
-    }));
+    // VSD, Meca, HV, GLO, Mobile - from activities
+    ['vsd', 'meca', 'hv', 'glo', 'mobile', 'datahub', 'infrastructure'].forEach(type => {
+      const typeActivities = activities
+        .filter(a => a.module === type || a.module === `${type}-equipments` || a.module === 'mobile-equipment')
+        .slice(0, 3)
+        .map(a => ({
+          id: a.id,
+          icon: a.type === 'created' ? '✅' : a.type === 'deleted' ? '❌' : '📝',
+          title: a.title,
+          description: a.description,
+          time: getTimeAgo(a.timestamp),
+          url: a.url
+        }));
+      data[type] = {
+        items: typeActivities,
+        actionUrl: `/app/${type === 'mobile' ? 'mobile-equipments' : type}`
+      };
+    });
 
-    // Equipment Agent - from activities
-    const equipmentActivities = activities
-      .filter(a => ['switchboard', 'mobile-equipment', 'datahub'].includes(a.module))
-      .slice(0, 5)
-      .map(a => ({
-        id: a.id,
-        icon: a.type === 'created' ? '✅' : a.type === 'deleted' ? '❌' : '📝',
-        title: a.title,
-        description: a.description,
-        time: a.timeAgo,
-        url: a.url
-      }));
-
-    // Security Agent
+    // ATEX agent - non-conformities
     const ncCount = brief?.stats?.nonConformities?.pending || 0;
-    const securityItems = [];
+    data.atex = {
+      items: [],
+      actionUrl: '/app/atex'
+    };
     if (ncCount > 0) {
-      securityItems.push({
+      data.atex.items.push({
         id: 'nc',
         icon: '⚠️',
         title: `${ncCount} non-conformité${ncCount > 1 ? 's' : ''} en attente`,
         description: 'Nécessitent une action corrective',
-        url: '/app/atex?filter=nc'
+        url: '/app/atex'
       });
     }
-    // Add ATEX-related activities
-    activities
-      .filter(a => a.module === 'atex' || a.type?.includes('nc'))
-      .slice(0, 3)
-      .forEach(a => {
-        securityItems.push({
+
+    // Doors agent
+    data.doors = {
+      items: activities
+        .filter(a => a.module === 'doors')
+        .slice(0, 3)
+        .map(a => ({
           id: a.id,
-          icon: '🛡️',
+          icon: '🚪',
           title: a.title,
           description: a.description,
-          time: a.timeAgo,
+          time: getTimeAgo(a.timestamp),
           url: a.url
-        });
-      });
-
-    // Procedures Agent
-    const procedureActivities = activities
-      .filter(a => a.module === 'procedures')
-      .slice(0, 5)
-      .map(a => ({
-        id: a.id,
-        icon: a.type === 'created' ? '📄' : a.type === 'signed' ? '✍️' : '📋',
-        title: a.title,
-        description: a.description,
-        time: a.timeAgo,
-        url: a.url
-      }));
-
-    return {
-      maintenance: {
-        type: 'maintenance',
-        name: 'Maintenance',
-        alertCount: overdueControls,
-        items: maintenanceItems,
-        actionUrl: '/app/switchboard-controls'
-      },
-      troubleshooting: {
-        type: 'troubleshooting',
-        name: 'Dépannages',
-        alertCount: troubleshooting.filter(t =>
-          new Date(t.created_at) > new Date(now - 24 * 60 * 60 * 1000)
-        ).length,
-        items: recentTroubleshooting,
-        actionUrl: '/app/troubleshooting'
-      },
-      equipment: {
-        type: 'equipment',
-        name: 'Équipements',
-        alertCount: equipmentActivities.filter(e => e.icon === '✅' || e.icon === '❌').length,
-        items: equipmentActivities,
-        actionUrl: '/app/switchboards'
-      },
-      security: {
-        type: 'security',
-        name: 'Sécurité',
-        alertCount: ncCount,
-        items: securityItems,
-        actionUrl: '/app/atex'
-      },
-      procedures: {
-        type: 'procedures',
-        name: 'Procédures',
-        alertCount: procedureActivities.length,
-        items: procedureActivities,
-        actionUrl: '/app/procedures'
-      }
+        })),
+      actionUrl: '/app/doors'
     };
+
+    // Fire control agent
+    data.firecontrol = {
+      items: activities
+        .filter(a => a.module === 'fire-control' || a.type?.includes('fire'))
+        .slice(0, 3)
+        .map(a => ({
+          id: a.id,
+          icon: '🧯',
+          title: a.title,
+          description: a.description,
+          time: getTimeAgo(a.timestamp),
+          url: a.url
+        })),
+      actionUrl: '/app/fire-control'
+    };
+
+    // Troubleshooting - add to relevant agents
+    troubleshooting.slice(0, 5).forEach(t => {
+      const agentType = t.equipment_type || 'switchboard';
+      if (data[agentType]) {
+        data[agentType].items.push({
+          id: t.id,
+          icon: t.severity === 'critical' ? '🔴' : t.severity === 'major' ? '🟠' : '🟡',
+          title: `Dépannage: ${t.title}`,
+          description: `${t.equipment_name || 'Équipement'} - ${t.technician_name}`,
+          time: getTimeAgo(t.created_at),
+          url: `/app/troubleshooting/${t.id}`
+        });
+      }
+    });
+
+    return data;
   };
 
   const getTimeAgo = (timestamp) => {
@@ -709,14 +597,9 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
     return (
       <div className="min-h-[500px] bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-2xl p-6 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <div className="relative">
-            <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-            >
-              <RefreshCw size={40} className="text-blue-400" />
-            </motion.div>
-          </div>
+          <motion.div animate={{ rotate: 360 }} transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}>
+            <RefreshCw size={40} className="text-blue-400" />
+          </motion.div>
           <p className="text-slate-400 text-lg">Connexion aux agents...</p>
           <div className="flex gap-2">
             {[0, 1, 2, 3, 4].map(i => (
@@ -735,9 +618,8 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
 
   return (
     <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-2xl overflow-hidden shadow-2xl">
-      {/* Header - Meeting Room Style */}
+      {/* Header */}
       <div className="relative px-4 sm:px-6 py-4 sm:py-5 border-b border-white/10">
-        {/* Background pattern */}
         <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHBhdHRlcm4gaWQ9ImdyaWQiIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHBhdGggZD0iTSAwIDEwIEwgNDAgMTAgTSAxMCAwIEwgMTAgNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgyNTUsMjU1LDI1NSwwLjAzKSIgc3Ryb2tlLXdpZHRoPSIxIi8+PC9wYXR0ZXJuPjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyaWQpIi8+PC9zdmc+')] opacity-50" />
 
         <div className="relative flex items-center justify-between gap-4">
@@ -764,34 +646,23 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            {/* Auto-play toggle */}
             <button
               onClick={() => setIsAutoPlay(!isAutoPlay)}
               className={`p-2 rounded-lg transition-all ${
-                isAutoPlay
-                  ? 'bg-blue-500/20 text-blue-400 ring-2 ring-blue-500/30'
-                  : 'bg-white/5 text-slate-400 hover:bg-white/10'
+                isAutoPlay ? 'bg-blue-500/20 text-blue-400 ring-2 ring-blue-500/30' : 'bg-white/5 text-slate-400 hover:bg-white/10'
               }`}
-              title={isAutoPlay ? 'Arrêter le défilement auto' : 'Défilement automatique'}
+              title={isAutoPlay ? 'Arrêter' : 'Lecture auto'}
             >
               {isAutoPlay ? <Pause size={18} /> : <Play size={18} />}
             </button>
-
-            {/* Refresh */}
             <button
               onClick={loadBriefingData}
               className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors text-slate-400 hover:text-white"
-              title="Actualiser"
             >
               <RefreshCw size={18} />
             </button>
-
-            {/* Close */}
             {onClose && (
-              <button
-                onClick={onClose}
-                className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors text-slate-400 hover:text-white"
-              >
+              <button onClick={onClose} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition-colors text-slate-400 hover:text-white">
                 <ChevronDown size={18} />
               </button>
             )}
@@ -799,96 +670,63 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
         </div>
       </div>
 
-      {/* Quick Stats Bar */}
+      {/* Quick Stats */}
       <div className="px-4 sm:px-6 py-4 bg-black/20 border-b border-white/5">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <QuickStat
-            icon={Activity}
-            value={briefingData?.stats?.healthScore || 0}
-            label="Score santé"
-            color={briefingData?.stats?.healthScore >= 80 ? 'green' : briefingData?.stats?.healthScore >= 60 ? 'amber' : 'red'}
-            onClick={() => navigate('/app/switchboard-controls')}
-          />
-          <QuickStat
-            icon={AlertTriangle}
-            value={briefingData?.stats?.overdueControls || 0}
-            label="En retard"
-            color="red"
-            onClick={() => navigate('/app/switchboard-controls?filter=overdue')}
-          />
-          <QuickStat
-            icon={Wrench}
-            value={briefingData?.stats?.troubleshootingToday || 0}
-            label="Dépannages (24h)"
-            color="amber"
-            onClick={() => navigate('/app/troubleshooting')}
-          />
-          <QuickStat
-            icon={CheckCircle}
-            value={briefingData?.stats?.completedToday || 0}
-            label="Complétés"
-            color="green"
-            onClick={() => navigate('/app/switchboard-controls')}
-          />
+          <QuickStat icon={Activity} value={stats.healthScore || 0} label="Score santé" color={stats.healthScore >= 80 ? 'green' : stats.healthScore >= 60 ? 'amber' : 'red'} onClick={() => navigate('/app/switchboard-controls')} />
+          <QuickStat icon={AlertTriangle} value={stats.overdueControls || 0} label="En retard" color="red" onClick={() => navigate('/app/switchboard-controls?filter=overdue')} />
+          <QuickStat icon={Wrench} value={stats.troubleshootingToday || 0} label="Dépannages (24h)" color="amber" onClick={() => navigate('/app/troubleshooting')} />
+          <QuickStat icon={CheckCircle} value={stats.completedToday || 0} label="Complétés" color="green" onClick={() => navigate('/app/switchboard-controls')} />
         </div>
       </div>
 
-      {/* Main Content - Video Conference Layout */}
+      {/* Agents Grid */}
       <div className="p-4 sm:p-6">
-        {/* Agents Row - "Participants" with video avatars */}
-        <div className="flex justify-center gap-3 sm:gap-6 mb-6 overflow-x-auto pb-2">
-          {briefingData?.agents && Object.entries(briefingData.agents).map(([key, agent]) => (
-            <AnimatedAvatar
-              key={key}
+        <div className="flex flex-wrap justify-center gap-3 sm:gap-4 mb-6">
+          {agents.map(agent => (
+            <VideoAgentAvatar
+              key={agent.type}
               agent={agent}
-              isActive={activeAgent === key}
-              isSpeaking={activeAgent === key}
-              onClick={() => setActiveAgent(activeAgent === key ? null : key)}
+              isActive={activeAgent === agent.type}
+              isSpeaking={activeAgent === agent.type}
+              onClick={() => setActiveAgent(activeAgent === agent.type ? null : agent.type)}
+              alertCount={agentData[agent.type]?.items?.length || 0}
             />
           ))}
         </div>
 
-        {/* Speech Bubble - What the active agent is saying */}
+        {/* Speech Bubble */}
         <AnimatePresence mode="wait">
-          {activeAgent && briefingData?.agents?.[activeAgent] && (
+          {activeAgent && agents.find(a => a.type === activeAgent) && (
             <SpeechBubble
               key={activeAgent}
-              agent={briefingData.agents[activeAgent]}
-              items={briefingData.agents[activeAgent].items}
+              agent={agents.find(a => a.type === activeAgent)}
+              items={agentData[activeAgent]?.items || []}
               onItemClick={handleItemClick}
               onClose={() => setActiveAgent(null)}
             />
           )}
         </AnimatePresence>
 
-        {/* No agent selected - Show overview */}
+        {/* No agent selected */}
         {!activeAgent && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="bg-white/5 backdrop-blur rounded-2xl p-6 text-center"
-          >
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-white/5 backdrop-blur rounded-2xl p-6 text-center">
             <div className="w-16 h-16 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
               <MessageCircle size={28} className="text-blue-400" />
             </div>
             <h3 className="text-white font-semibold mb-2">Bienvenue au briefing !</h3>
-            <p className="text-slate-400 text-sm mb-4">
-              Cliquez sur un agent pour voir ses infos, ou activez le défilement automatique.
-            </p>
+            <p className="text-slate-400 text-sm mb-4">Cliquez sur un agent pour voir ses infos.</p>
             <div className="flex flex-wrap justify-center gap-2">
-              {briefingData?.agents && Object.entries(briefingData.agents)
-                .filter(([, a]) => a.alertCount > 0)
-                .map(([key, agent]) => (
-                  <button
-                    key={key}
-                    onClick={() => setActiveAgent(key)}
-                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-white transition-colors flex items-center gap-2"
-                  >
-                    <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-                    {agent.name}: {agent.alertCount} alerte{agent.alertCount > 1 ? 's' : ''}
-                  </button>
-                ))
-              }
+              {agents.filter(a => (agentData[a.type]?.items?.length || 0) > 0).map(agent => (
+                <button
+                  key={agent.type}
+                  onClick={() => setActiveAgent(agent.type)}
+                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-white transition-colors flex items-center gap-2"
+                >
+                  <span>{AGENT_EMOJIS[agent.type]}</span>
+                  {agent.customName}: {agentData[agent.type]?.items?.length || 0} info{(agentData[agent.type]?.items?.length || 0) > 1 ? 's' : ''}
+                </button>
+              ))}
             </div>
           </motion.div>
         )}
@@ -901,48 +739,17 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
             <Clock size={16} className="text-slate-400" />
             Activité récente
           </h3>
-          <button
-            onClick={() => navigate('/app/activity')}
-            className="text-xs text-slate-400 hover:text-white transition-colors flex items-center gap-1"
-          >
-            Voir tout
-            <ExternalLink size={12} />
-          </button>
         </div>
-
         <div className="space-y-2 max-h-48 overflow-y-auto">
           {activities.length === 0 ? (
-            <p className="text-slate-500 text-sm text-center py-4">
-              Aucune activité récente
-            </p>
+            <p className="text-slate-500 text-sm text-center py-4">Aucune activité récente</p>
           ) : (
             activities.map((activity, idx) => (
-              <ActivityItem
-                key={activity.id || idx}
-                activity={activity}
-                onClick={() => handleItemClick(activity)}
-              />
+              <ActivityItem key={activity.id || idx} activity={activity} onClick={() => handleItemClick(activity)} />
             ))
           )}
         </div>
       </div>
-
-      {/* AI Insight Footer */}
-      {briefingData?.brief?.aiInsight && (
-        <div className="px-4 sm:px-6 pb-4 sm:pb-6">
-          <div className="bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border border-cyan-500/20 rounded-xl p-4">
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 bg-gradient-to-br from-cyan-500 to-blue-500 rounded-lg flex items-center justify-center flex-shrink-0">
-                <Sparkles size={16} className="text-white" />
-              </div>
-              <div>
-                <h4 className="text-cyan-400 text-sm font-semibold mb-1">Conseil de l'IA</h4>
-                <p className="text-slate-300 text-sm leading-relaxed">{briefingData.brief.aiInsight}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
