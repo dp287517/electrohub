@@ -7117,7 +7117,7 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site header' });
 
-    // Pending controls (global + by equipment type)
+    // Pending controls from control_schedules (global + by equipment type)
     const pending = await quickQuery(`
       SELECT COUNT(*) as count FROM control_schedules
       WHERE site = $1 AND next_due_date >= CURRENT_DATE AND status != 'done'
@@ -7129,7 +7129,7 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       GROUP BY equipment_type
     `, [site]);
 
-    // Overdue controls (global + by equipment type)
+    // Overdue controls from control_schedules (global + by equipment type)
     const overdue = await quickQuery(`
       SELECT COUNT(*) as count FROM control_schedules
       WHERE site = $1 AND next_due_date < CURRENT_DATE AND status != 'done'
@@ -7141,7 +7141,33 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       GROUP BY equipment_type
     `, [site]);
 
-    // Recent completions (last 30 days)
+    // === MOBILE EQUIPMENT CONTROLS (me_checks) ===
+    const mobileOverdue = await quickQuery(`
+      SELECT COUNT(*) as count FROM me_checks c
+      JOIN me_equipments e ON c.equipment_id = e.id
+      WHERE e.site = $1 AND c.due_date < CURRENT_DATE AND c.closed_at IS NULL
+    `, [site]).catch(() => ({ rows: [{ count: 0 }] }));
+
+    const mobilePending = await quickQuery(`
+      SELECT COUNT(*) as count FROM me_checks c
+      JOIN me_equipments e ON c.equipment_id = e.id
+      WHERE e.site = $1 AND c.due_date >= CURRENT_DATE AND c.closed_at IS NULL
+    `, [site]).catch(() => ({ rows: [{ count: 0 }] }));
+
+    // === FIRE DOOR CONTROLS (fd_checks) ===
+    const doorsOverdue = await quickQuery(`
+      SELECT COUNT(*) as count FROM fd_checks c
+      JOIN fd_doors d ON c.door_id = d.id
+      WHERE d.site = $1 AND c.due_date < CURRENT_DATE AND c.closed_at IS NULL
+    `, [site]).catch(() => ({ rows: [{ count: 0 }] }));
+
+    const doorsPending = await quickQuery(`
+      SELECT COUNT(*) as count FROM fd_checks c
+      JOIN fd_doors d ON c.door_id = d.id
+      WHERE d.site = $1 AND c.due_date >= CURRENT_DATE AND c.closed_at IS NULL
+    `, [site]).catch(() => ({ rows: [{ count: 0 }] }));
+
+    // Recent completions (last 30 days) - from control_records
     const recent = await quickQuery(`
       SELECT COUNT(*) as count FROM control_records
       WHERE site = $1 AND performed_at > NOW() - INTERVAL '30 days'
@@ -7211,10 +7237,26 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       pendingByEquipment[row.equipment_type || 'switchboard'] = Number(row.count);
     }
 
+    // Add mobile equipment controls
+    const mobileOverdueCount = Number(mobileOverdue.rows[0]?.count || 0);
+    const mobilePendingCount = Number(mobilePending.rows[0]?.count || 0);
+    if (mobileOverdueCount > 0) overdueByEquipment['mobile_equipment'] = mobileOverdueCount;
+    if (mobilePendingCount > 0) pendingByEquipment['mobile_equipment'] = mobilePendingCount;
+
+    // Add fire door controls
+    const doorsOverdueCount = Number(doorsOverdue.rows[0]?.count || 0);
+    const doorsPendingCount = Number(doorsPending.rows[0]?.count || 0);
+    if (doorsOverdueCount > 0) overdueByEquipment['doors'] = doorsOverdueCount;
+    if (doorsPendingCount > 0) pendingByEquipment['doors'] = doorsPendingCount;
+
+    // Calculate totals including all sources
+    const totalOverdue = Number(overdue.rows[0]?.count || 0) + mobileOverdueCount + doorsOverdueCount;
+    const totalPending = Number(pending.rows[0]?.count || 0) + mobilePendingCount + doorsPendingCount;
+
     res.json({
       stats: {
-        pending: Number(pending.rows[0]?.count || 0),
-        overdue: Number(overdue.rows[0]?.count || 0),
+        pending: totalPending,
+        overdue: totalOverdue,
         completed_30d: Number(recent.rows[0]?.count || 0),
         templates: Number(templates.rows[0]?.count || 0),
         // Stats by equipment type for dashboard badges
