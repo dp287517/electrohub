@@ -400,8 +400,8 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
       setAgentData(data);
 
       // Calculate stats from the real data
-      const overdueByType = controlsDashboard?.stats?.overdueByEquipment || {};
-      const totalOverdue = Object.values(overdueByType).reduce((sum, count) => sum + (count || 0), 0);
+      const totalOverdue = controlsDashboard?.stats?.overdue || 0;
+      const totalPending = controlsDashboard?.stats?.pending || 0;
       const completedRecent = controlsDashboard?.stats?.completed_30d || 0;
       const todaysTroubleshooting = (troubleshootingRes?.records || []).filter(r =>
         new Date(r.created_at).toDateString() === new Date().toDateString()
@@ -416,6 +416,7 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
       setStats({
         healthScore: morningBrief?.healthScore || healthScore,
         overdueControls: totalOverdue,
+        pendingControls: totalPending,
         completedToday: completedRecent,
         troubleshootingToday: todaysTroubleshooting
       });
@@ -712,9 +713,10 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
 
       {/* Quick Stats */}
       <div className="px-3 py-2 bg-black/20 border-b border-white/5 flex-shrink-0">
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-5 gap-2">
           <QuickStat icon={Activity} value={stats.healthScore || 0} label="Santé" color={stats.healthScore >= 80 ? 'green' : 'amber'} onClick={() => navigate('/app/switchboard-controls')} />
           <QuickStat icon={AlertTriangle} value={stats.overdueControls || 0} label="Retard" color="red" onClick={() => navigate('/app/switchboard-controls?filter=overdue')} />
+          <QuickStat icon={Clock} value={stats.pendingControls || 0} label="À faire" color="blue" onClick={() => navigate('/app/switchboard-controls')} />
           <QuickStat icon={Wrench} value={stats.troubleshootingToday || 0} label="Dépan." color="amber" onClick={() => navigate('/app/troubleshooting')} />
           <QuickStat icon={CheckCircle} value={stats.completedToday || 0} label="Fait" color="green" onClick={() => navigate('/app/switchboard-controls')} />
         </div>
