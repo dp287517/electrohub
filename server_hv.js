@@ -429,6 +429,18 @@ app.delete('/api/hv/equipments/:id', async (req, res) => {
     // Perform deletion
     const r = await pool.query(`DELETE FROM hv_equipments WHERE id=$1 AND site=$2 RETURNING *`, [Number(req.params.id), site]);
 
+    // 🧹 Cleanup orphaned positions and equipment links
+    const posResult = await pool.query(`DELETE FROM hv_positions WHERE equipment_id = $1 AND site = $2`, [Number(req.params.id), site]);
+    const linksResult = await pool.query(`
+      DELETE FROM equipment_links
+      WHERE site = $1
+      AND (
+        (source_type = 'hv' AND source_id = $2)
+        OR (target_type = 'hv' AND target_id = $2)
+      )
+    `, [site, String(req.params.id)]);
+    console.log(`[HV DELETE] Cleaned up ${posResult.rowCount} positions and ${linksResult.rowCount} equipment links for HV equipment ${req.params.id}`);
+
     // 📝 AUDIT: Log suppression équipement HV
     if (r.rows[0]) {
       try {
