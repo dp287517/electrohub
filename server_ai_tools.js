@@ -1306,7 +1306,16 @@ function createToolHandlers(pool, site) {
           datahub: { table: 'dh_items', nameCol: 'name', buildingCol: 'building', codeCol: 'code', siteColumn: null, label: 'Capteur/Monitoring', agent: 'Nexus', hasCategory: true }
         };
 
-        const typesToSearch = target_equipment_type ? [target_equipment_type] : Object.keys(tableMap);
+        // PRIORITÉ: Si type spécifié, chercher UNIQUEMENT dans ce type d'abord
+        // Sinon chercher dans l'ordre mais NE PAS mélanger les résultats
+        let typesToSearch;
+        if (target_equipment_type) {
+          typesToSearch = [target_equipment_type];
+        } else {
+          // Ordre de priorité: meca, vsd, switchboard... datahub en dernier
+          typesToSearch = ['meca', 'vsd', 'switchboard', 'atex', 'hv', 'mobile', 'glo', 'doors', 'datahub'];
+        }
+
         const candidates = [];
         const similarEquipments = [];
 
@@ -1366,8 +1375,13 @@ function createToolHandlers(pool, site) {
                 }
               }
 
+              // IMPORTANT: Si on a trouvé des candidats exacts dans datahub, arrêter la recherche
+              if (candidates.filter(c => c.equipment_type === eqType).length > 0) {
+                break; // Arrêter dès qu'on trouve dans ce type
+              }
+
               // Recherche floue avec TOUS les mots individuels (y compris chiffres)
-              if (candidates.filter(c => c.equipment_type === eqType).length === 0 && searchTerms.length > 0) {
+              if (searchTerms.length > 0) {
                 for (const term of searchTerms) {
                   const fuzzyQuery = `
                     SELECT dh.id, dh.name, dh.building, dhc.name as category_name,
@@ -1442,10 +1456,15 @@ function createToolHandlers(pool, site) {
             }
 
             const searchResult = await pool.query(searchQuery, searchParams);
-            candidates.push(...searchResult.rows);
+
+            // IMPORTANT: Si on trouve des résultats exacts, on arrête la recherche
+            if (searchResult.rows.length > 0) {
+              candidates.push(...searchResult.rows);
+              break; // Arrêter dès qu'on trouve dans ce type
+            }
 
             // Si pas de résultat exact, recherche floue avec les mots individuels
-            if (searchResult.rows.length === 0 && searchTerms.length > 0) {
+            if (searchTerms.length > 0) {
               for (const term of searchTerms) {
                 let fuzzyQuery;
                 let fuzzyParams;
