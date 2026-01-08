@@ -9481,6 +9481,62 @@ app.get('/api/equipment/search', async (req, res) => {
 });
 
 // ============================================================
+// AUTO-CLEANUP ORPHANED DATA
+// ============================================================
+
+async function cleanupOrphanedData() {
+  console.log('[CLEANUP] Starting automatic cleanup of orphaned data...');
+
+  // Get all sites
+  const sitesResult = await quickQuery(`SELECT DISTINCT site FROM switchboards`);
+  const sites = sitesResult.rows.map(r => r.site).filter(Boolean);
+
+  let totalPositions = 0;
+  let totalLinks = 0;
+
+  for (const site of sites) {
+    // 1. Cleanup orphaned switchboard positions (switchboards that no longer exist)
+    const posResult = await quickQuery(`
+      DELETE FROM switchboard_positions sp
+      WHERE site = $1
+      AND NOT EXISTS (SELECT 1 FROM switchboards s WHERE s.id = sp.switchboard_id AND s.site = sp.site)
+      RETURNING id
+    `, [site]);
+    totalPositions += posResult.rowCount;
+
+    // 2. Cleanup orphaned equipment links (equipment that no longer exists)
+    const linksResult = await quickQuery(`
+      DELETE FROM equipment_links el
+      WHERE site = $1
+      AND (
+        -- Source equipment doesn't exist
+        (source_type = 'switchboard' AND NOT EXISTS (SELECT 1 FROM switchboards WHERE id::text = el.source_id AND site = el.site))
+        OR (source_type = 'hv' AND NOT EXISTS (SELECT 1 FROM hv_equipments WHERE id::text = el.source_id AND site = el.site))
+        OR (source_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.source_id))
+        OR (source_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.source_id AND site = el.site))
+        OR (source_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.source_id))
+        OR (source_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM mobile_equipments WHERE id = el.source_id))
+        -- Target equipment doesn't exist
+        OR (target_type = 'switchboard' AND NOT EXISTS (SELECT 1 FROM switchboards WHERE id::text = el.target_id AND site = el.site))
+        OR (target_type = 'hv' AND NOT EXISTS (SELECT 1 FROM hv_equipments WHERE id::text = el.target_id AND site = el.site))
+        OR (target_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.target_id))
+        OR (target_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.target_id AND site = el.site))
+        OR (target_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.target_id))
+        OR (target_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM mobile_equipments WHERE id = el.target_id))
+      )
+      RETURNING id
+    `, [site]);
+    totalLinks += linksResult.rowCount;
+  }
+
+  if (totalPositions > 0 || totalLinks > 0) {
+    console.log(`[CLEANUP] ✅ Removed ${totalPositions} orphaned positions and ${totalLinks} orphaned equipment links`);
+  } else {
+    console.log('[CLEANUP] ✅ No orphaned data found');
+  }
+}
+
+// ============================================================
 // START SERVER
 // ============================================================
 
@@ -9504,6 +9560,13 @@ app.listen(port, () => {
       await resumePendingJobs();
     } catch (e) {
       console.warn('[SWITCHBOARD] Failed to resume pending jobs:', e.message);
+    }
+
+    // 🧹 Auto-cleanup orphaned data on startup (positions and links for deleted equipment)
+    try {
+      await cleanupOrphanedData();
+    } catch (e) {
+      console.warn('[SWITCHBOARD] Orphan cleanup failed (non-blocking):', e.message);
     }
   }).catch(e => {
     console.warn('[SWITCHBOARD] Database warmup failed:', e.message);
