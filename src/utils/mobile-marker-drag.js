@@ -69,6 +69,9 @@ export function setupMobileDrag(marker, options = {}) {
   // Sur mobile : désactiver le drag par défaut
   marker.dragging?.disable?.();
 
+  // Flag pour indiquer que le drag est actif (utilisé par le code de menu contextuel)
+  marker._mobileDragActive = false;
+
   let longPressTimer = null;
   let isDragActivated = false;
   let startTouch = null;
@@ -76,6 +79,7 @@ export function setupMobileDrag(marker, options = {}) {
   const activateDrag = () => {
     if (isDragActivated) return;
     isDragActivated = true;
+    marker._mobileDragActive = true;
 
     // Activer le drag
     marker.dragging?.enable?.();
@@ -96,6 +100,7 @@ export function setupMobileDrag(marker, options = {}) {
   const deactivateDrag = () => {
     if (!isDragActivated) return;
     isDragActivated = false;
+    marker._mobileDragActive = false;
 
     // Désactiver le drag
     marker.dragging?.disable?.();
@@ -178,6 +183,7 @@ export function setupMobileDrag(marker, options = {}) {
   // Retourner la fonction de cleanup
   return () => {
     cancelLongPress();
+    marker._mobileDragActive = false;
     const el = marker.getElement?.();
     if (el) {
       el.removeEventListener("touchstart", handleTouchStart);
