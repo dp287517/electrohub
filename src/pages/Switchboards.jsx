@@ -16,6 +16,7 @@ import AuditHistory from '../components/AuditHistory.jsx';
 import { LastModifiedBadge, CreatedByBadge } from '../components/LastModifiedBadge.jsx';
 import AutoAnalysisPanel from '../components/AutoAnalysisPanel.jsx';
 import PanelScanWizard from '../components/PanelScanWizard.jsx';
+import ImageLightbox, { useLightbox } from '../components/ImageLightbox';
 
 // ==================== PERMISSION HELPERS ====================
 
@@ -1138,6 +1139,9 @@ export default function Switchboards() {
 
   // AI Chat state
   const [showAIChat, setShowAIChat] = useState(false);
+
+  // Lightbox for image enlargement
+  const { lightbox, openLightbox, closeLightbox } = useLightbox();
 
   // Form state
   const [showBoardForm, setShowBoardForm] = useState(false);
