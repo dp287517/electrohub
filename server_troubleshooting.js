@@ -315,7 +315,8 @@ router.get('/list', async (req, res) => {
 
     let sql = `
       SELECT tr.*,
-             (SELECT COUNT(*) FROM troubleshooting_photos WHERE troubleshooting_id = tr.id) as photo_count
+             (SELECT COUNT(*) FROM troubleshooting_photos WHERE troubleshooting_id = tr.id) as photo_count,
+             ROW_NUMBER() OVER (ORDER BY tr.created_at DESC) as row_number
       FROM troubleshooting_records tr
       WHERE tr.site = $1
     `;
