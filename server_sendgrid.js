@@ -20,8 +20,8 @@ const router = express.Router();
 // SENDGRID CONFIGURATION
 // ============================================================
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || '';
-const SENDGRID_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@electrohub.io';
-const SENDGRID_FROM_NAME = process.env.SENDGRID_FROM_NAME || 'ElectroHub';
+const SENDGRID_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'admin@haleon-tool.io';
+const SENDGRID_FROM_NAME = process.env.SENDGRID_FROM_NAME || 'Haleon-tool';
 
 if (SENDGRID_API_KEY) {
   sgMail.setApiKey(SENDGRID_API_KEY);
@@ -557,13 +557,13 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
 
     <!-- Footer -->
     <div class="footer">
-      <p>Ce rapport a été généré automatiquement par ElectroHub</p>
+      <p>Ce rapport a été généré automatiquement par Haleon-tool</p>
       <p style="margin-top: 10px;">
         <a href="#">Se désinscrire</a> |
         <a href="#">Préférences email</a> |
-        <a href="#">Accéder à ElectroHub</a>
+        <a href="https://haleon-tool.io">Accéder à Haleon-tool</a>
       </p>
-      <p style="margin-top: 15px; font-size: 11px;">© ${new Date().getFullYear()} ElectroHub - Tous droits réservés</p>
+      <p style="margin-top: 15px; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Tous droits réservés</p>
     </div>
   </div>
 </body>
