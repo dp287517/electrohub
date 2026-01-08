@@ -785,12 +785,16 @@ export default function TroubleshootingDashboard() {
                   records.map((record, idx) => (
                     <div
                       key={record.id}
-                      className="bg-white rounded-xl border p-4 hover:shadow-md transition-shadow animate-slideUp"
+                      className="bg-white rounded-xl border p-4 hover:shadow-md transition-shadow animate-slideUp cursor-pointer"
                       style={{ animationDelay: `${idx * 30}ms` }}
+                      onClick={() => navigate(`/app/troubleshooting/${record.id}`)}
                     >
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <span className="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
+                              #{record.row_number || idx + 1}
+                            </span>
                             <EquipmentTypeBadge type={record.equipment_type} />
                             <SeverityBadge severity={record.severity} />
                             {record.photo_count > 0 && (
@@ -843,13 +847,13 @@ export default function TroubleshootingDashboard() {
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t">
+                      <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t" onClick={(e) => e.stopPropagation()}>
                         <button
-                          onClick={() => setSelectedRecord(record)}
-                          className="flex items-center gap-1 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                          onClick={() => navigate(`/app/troubleshooting/${record.id}`)}
+                          className="flex items-center gap-1 px-3 py-1.5 text-sm bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors"
                         >
                           <Eye size={14} />
-                          Voir
+                          Ouvrir
                         </button>
                         <a
                           href={`${API_BASE}/api/troubleshooting/${record.id}/pdf`}
