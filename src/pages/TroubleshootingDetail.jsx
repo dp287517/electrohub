@@ -1,10 +1,10 @@
-// TroubleshootingDetail.jsx - Page de détail d'un dépannage (accessible via email)
-import { useState, useEffect } from 'react';
+// TroubleshootingDetail.jsx - Page de détail d'un dépannage avec mode édition
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Wrench, Calendar, Building2, Users, MapPin, AlertTriangle,
   CheckCircle, Clock, ArrowLeft, Zap, Image, FileText,
-  Sparkles, Edit, Trash2, Loader2, X
+  Sparkles, Edit, Trash2, Loader2, X, Save, Plus, Camera
 } from 'lucide-react';
 import { get, API_BASE } from '../lib/api';
 import { getUserPermissions } from '../lib/permissions';
@@ -35,44 +35,51 @@ function canModifyTroubleshooting(record) {
 }
 
 // ============================================================
-// SEVERITY BADGE
+// SEVERITY & STATUS CONFIGS
+// ============================================================
+const SEVERITY_OPTIONS = [
+  { value: 'critical', label: 'Critique', bg: 'bg-red-100', text: 'text-red-700' },
+  { value: 'major', label: 'Majeur', bg: 'bg-orange-100', text: 'text-orange-700' },
+  { value: 'minor', label: 'Mineur', bg: 'bg-yellow-100', text: 'text-yellow-700' },
+  { value: 'cosmetic', label: 'Cosmétique', bg: 'bg-gray-100', text: 'text-gray-700' }
+];
+
+const STATUS_OPTIONS = [
+  { value: 'in_progress', label: 'En cours', icon: Clock, bg: 'bg-orange-100', text: 'text-orange-700' },
+  { value: 'completed', label: 'Résolu', icon: CheckCircle, bg: 'bg-green-100', text: 'text-green-700' },
+  { value: 'pending_review', label: 'En attente', icon: Clock, bg: 'bg-gray-100', text: 'text-gray-700' }
+];
+
+const CATEGORY_OPTIONS = [
+  { value: 'electrical', label: 'Électrique' },
+  { value: 'mechanical', label: 'Mécanique' },
+  { value: 'software', label: 'Logiciel' },
+  { value: 'other', label: 'Autre' }
+];
+
+// ============================================================
+// BADGES
 // ============================================================
 function SeverityBadge({ severity }) {
-  const config = {
-    critical: { label: 'Critique', bg: 'bg-red-100', text: 'text-red-700' },
-    major: { label: 'Majeur', bg: 'bg-orange-100', text: 'text-orange-700' },
-    minor: { label: 'Mineur', bg: 'bg-yellow-100', text: 'text-yellow-700' },
-    cosmetic: { label: 'Cosmétique', bg: 'bg-gray-100', text: 'text-gray-700' }
-  };
-  const { label, bg, text } = config[severity] || config.cosmetic;
+  const config = SEVERITY_OPTIONS.find(s => s.value === severity) || SEVERITY_OPTIONS[3];
   return (
-    <span className={`px-3 py-1 rounded-full text-sm font-medium ${bg} ${text}`}>
-      {label}
+    <span className={`px-3 py-1 rounded-full text-sm font-medium ${config.bg} ${config.text}`}>
+      {config.label}
     </span>
   );
 }
 
-// ============================================================
-// STATUS BADGE
-// ============================================================
 function StatusBadge({ status }) {
-  const config = {
-    completed: { label: 'Résolu', icon: CheckCircle, bg: 'bg-green-100', text: 'text-green-700' },
-    in_progress: { label: 'En cours', icon: Clock, bg: 'bg-orange-100', text: 'text-orange-700' },
-    pending_review: { label: 'En attente', icon: Clock, bg: 'bg-gray-100', text: 'text-gray-700' }
-  };
-  const { label, icon: Icon, bg, text } = config[status] || config.pending_review;
+  const config = STATUS_OPTIONS.find(s => s.value === status) || STATUS_OPTIONS[2];
+  const Icon = config.icon;
   return (
-    <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium ${bg} ${text}`}>
+    <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium ${config.bg} ${config.text}`}>
       <Icon size={14} />
-      {label}
+      {config.label}
     </span>
   );
 }
 
-// ============================================================
-// EQUIPMENT TYPE BADGE
-// ============================================================
 function EquipmentTypeBadge({ type }) {
   const config = {
     switchboard: { label: 'Tableau électrique', icon: Zap, color: 'text-amber-600 bg-amber-50' },
@@ -95,12 +102,11 @@ function EquipmentTypeBadge({ type }) {
 }
 
 // ============================================================
-// PHOTO GALLERY
+// PHOTO GALLERY WITH EDIT
 // ============================================================
-function PhotoGallery({ photos }) {
+function PhotoGallery({ photos, editMode, onAddPhoto, onDeletePhoto }) {
   const [selectedPhoto, setSelectedPhoto] = useState(null);
-
-  if (!photos || photos.length === 0) return null;
+  const fileInputRef = useRef(null);
 
   const photoTypeLabels = {
     before: 'Avant',
@@ -108,28 +114,87 @@ function PhotoGallery({ photos }) {
     after: 'Après'
   };
 
+  const handleFileSelect = async (e) => {
+    const files = Array.from(e.target.files);
+    for (const file of files) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        onAddPhoto({
+          photo_data: event.target.result,
+          photo_type: 'after',
+          caption: ''
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  };
+
   return (
     <div className="space-y-3">
-      <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-        <Image size={16} className="text-orange-500" />
-        Photos ({photos.length})
-      </h3>
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+          <Image size={16} className="text-orange-500" />
+          Photos ({photos.length})
+        </h3>
+        {editMode && (
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1 px-3 py-1.5 bg-orange-500 text-white text-sm rounded-lg hover:bg-orange-600 transition-colors"
+          >
+            <Plus size={16} />
+            Ajouter
+          </button>
+        )}
+      </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={handleFileSelect}
+      />
+
+      {photos.length === 0 && !editMode && (
+        <p className="text-gray-500 text-sm italic">Aucune photo</p>
+      )}
+
+      {photos.length === 0 && editMode && (
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          className="w-full h-32 border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center gap-2 text-gray-500 hover:border-orange-400 hover:text-orange-500 transition-colors cursor-pointer"
+        >
+          <Camera size={32} />
+          <span className="text-sm">Cliquez pour ajouter des photos</span>
+        </button>
+      )}
+
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {photos.map((photo, idx) => (
           <div
             key={photo.id || idx}
-            className="relative group cursor-pointer"
-            onClick={() => setSelectedPhoto(photo)}
+            className="relative group"
           >
             <img
               src={photo.photo_data}
               alt={photo.caption || `Photo ${idx + 1}`}
-              className="w-full h-32 object-cover rounded-lg border border-gray-200 group-hover:border-orange-400 transition-colors"
+              className="w-full h-32 object-cover rounded-lg border border-gray-200 cursor-pointer group-hover:border-orange-400 transition-colors"
+              onClick={() => !editMode && setSelectedPhoto(photo)}
             />
             {photo.photo_type && (
               <span className="absolute top-2 left-2 px-2 py-0.5 bg-black/60 text-white text-xs rounded">
                 {photoTypeLabels[photo.photo_type] || photo.photo_type}
               </span>
+            )}
+            {editMode && (
+              <button
+                onClick={() => onDeletePhoto(idx)}
+                className="absolute top-2 right-2 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <X size={14} />
+              </button>
             )}
           </div>
         ))}
@@ -152,11 +217,6 @@ function PhotoGallery({ photos }) {
             alt={selectedPhoto.caption || 'Photo'}
             className="max-w-full max-h-[90vh] object-contain rounded-lg"
           />
-          {selectedPhoto.caption && (
-            <p className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-black/60 text-white rounded-lg">
-              {selectedPhoto.caption}
-            </p>
-          )}
         </div>
       )}
     </div>
@@ -173,7 +233,11 @@ export default function TroubleshootingDetail() {
   const [photos, setPhotos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editData, setEditData] = useState({});
+  const [newPhotos, setNewPhotos] = useState([]);
 
   useEffect(() => {
     loadRecord();
@@ -184,9 +248,10 @@ export default function TroubleshootingDetail() {
     setError(null);
     try {
       const response = await get(`/api/troubleshooting/${id}`);
-      if (response) {
-        setRecord(response);
+      if (response?.record) {
+        setRecord(response.record);
         setPhotos(response.photos || []);
+        setEditData(response.record);
       } else {
         setError('Dépannage non trouvé');
       }
@@ -195,6 +260,40 @@ export default function TroubleshootingDetail() {
       setError('Erreur lors du chargement');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      // Update record
+      const response = await fetch(`${API_BASE}/api/troubleshooting/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(editData)
+      });
+
+      if (!response.ok) throw new Error('Erreur de sauvegarde');
+
+      // Add new photos
+      for (const photo of newPhotos) {
+        await fetch(`${API_BASE}/api/troubleshooting/${id}/photos`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(photo)
+        });
+      }
+
+      setNewPhotos([]);
+      await loadRecord();
+      setEditMode(false);
+    } catch (e) {
+      console.error('Save error:', e);
+      alert('Erreur lors de la sauvegarde: ' + e.message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -221,6 +320,35 @@ export default function TroubleshootingDetail() {
     } finally {
       setDeleting(false);
     }
+  };
+
+  const handleAddPhoto = (photo) => {
+    setNewPhotos([...newPhotos, photo]);
+  };
+
+  const handleDeletePhoto = async (idx) => {
+    const allPhotos = [...photos, ...newPhotos];
+    const photo = allPhotos[idx];
+
+    if (idx < photos.length) {
+      // Delete existing photo
+      try {
+        await fetch(`${API_BASE}/api/troubleshooting/${id}/photos/${photo.id}`, {
+          method: 'DELETE',
+          credentials: 'include'
+        });
+        setPhotos(photos.filter((_, i) => i !== idx));
+      } catch (e) {
+        console.error('Delete photo error:', e);
+      }
+    } else {
+      // Remove new photo
+      setNewPhotos(newPhotos.filter((_, i) => i !== (idx - photos.length)));
+    }
+  };
+
+  const updateField = (field, value) => {
+    setEditData({ ...editData, [field]: value });
   };
 
   // Loading state
@@ -256,11 +384,13 @@ export default function TroubleshootingDetail() {
   }
 
   const canModify = canModifyTroubleshooting(record);
+  const displayData = editMode ? editData : record;
+  const allPhotos = [...photos, ...newPhotos];
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white">
+      <div className={`${editMode ? 'bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500' : 'bg-gradient-to-r from-orange-500 via-red-500 to-pink-500'} text-white`}>
         <div className="max-w-6xl mx-auto px-4 py-6">
           <Link
             to="/app/troubleshooting"
@@ -276,7 +406,17 @@ export default function TroubleshootingDetail() {
                 <Wrench size={28} />
               </div>
               <div>
-                <h1 className="text-2xl sm:text-3xl font-bold">{record.title}</h1>
+                {editMode ? (
+                  <input
+                    type="text"
+                    value={editData.title || ''}
+                    onChange={(e) => updateField('title', e.target.value)}
+                    className="text-2xl sm:text-3xl font-bold bg-white/20 rounded-lg px-3 py-1 w-full text-white placeholder-white/60"
+                    placeholder="Titre du dépannage"
+                  />
+                ) : (
+                  <h1 className="text-2xl sm:text-3xl font-bold">{record.title}</h1>
+                )}
                 <div className="flex flex-wrap items-center gap-4 mt-2 text-white/80">
                   <span className="flex items-center gap-1">
                     <Calendar size={16} />
@@ -297,14 +437,42 @@ export default function TroubleshootingDetail() {
 
             {canModify && (
               <div className="flex gap-2">
-                <button
-                  onClick={handleDelete}
-                  disabled={deleting}
-                  className="p-2 bg-white/10 hover:bg-red-500 rounded-lg transition-colors disabled:opacity-50"
-                  title="Supprimer"
-                >
-                  {deleting ? <Loader2 size={20} className="animate-spin" /> : <Trash2 size={20} />}
-                </button>
+                {editMode ? (
+                  <>
+                    <button
+                      onClick={() => { setEditMode(false); setEditData(record); setNewPhotos([]); }}
+                      className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      onClick={handleSave}
+                      disabled={saving}
+                      className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-600 rounded-lg hover:bg-white/90 transition-colors disabled:opacity-50"
+                    >
+                      {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                      Enregistrer
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => setEditMode(true)}
+                      className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                      title="Modifier"
+                    >
+                      <Edit size={20} />
+                    </button>
+                    <button
+                      onClick={handleDelete}
+                      disabled={deleting}
+                      className="p-2 bg-white/10 hover:bg-red-500 rounded-lg transition-colors disabled:opacity-50"
+                      title="Supprimer"
+                    >
+                      {deleting ? <Loader2 size={20} className="animate-spin" /> : <Trash2 size={20} />}
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -322,48 +490,76 @@ export default function TroubleshootingDetail() {
                 <FileText size={18} className="text-orange-500" />
                 Description du problème
               </h2>
-              <p className="text-gray-700 whitespace-pre-wrap">{record.description}</p>
-
-              {record.root_cause && (
-                <div className="mt-6 pt-6 border-t">
-                  <h3 className="font-medium text-gray-900 mb-2">Cause identifiée</h3>
-                  <p className="text-gray-700">{record.root_cause}</p>
-                </div>
+              {editMode ? (
+                <textarea
+                  value={editData.description || ''}
+                  onChange={(e) => updateField('description', e.target.value)}
+                  className="w-full h-32 p-3 border rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                  placeholder="Décrivez le problème..."
+                />
+              ) : (
+                <p className="text-gray-700 whitespace-pre-wrap">{record.description || <span className="italic text-gray-400">Aucune description</span>}</p>
               )}
 
-              {record.solution && (
-                <div className="mt-6 pt-6 border-t">
-                  <h3 className="font-medium text-gray-900 mb-2 flex items-center gap-2">
-                    <CheckCircle size={16} className="text-green-500" />
-                    Solution appliquée
-                  </h3>
-                  <p className="text-gray-700">{record.solution}</p>
-                </div>
-              )}
+              <div className="mt-6 pt-6 border-t">
+                <h3 className="font-medium text-gray-900 mb-2">Cause identifiée</h3>
+                {editMode ? (
+                  <textarea
+                    value={editData.root_cause || ''}
+                    onChange={(e) => updateField('root_cause', e.target.value)}
+                    className="w-full h-24 p-3 border rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                    placeholder="Cause du problème..."
+                  />
+                ) : (
+                  <p className="text-gray-700">{record.root_cause || <span className="italic text-gray-400">Non renseignée</span>}</p>
+                )}
+              </div>
 
-              {record.parts_replaced && (
-                <div className="mt-6 pt-6 border-t">
-                  <h3 className="font-medium text-gray-900 mb-2">Pièces remplacées</h3>
-                  <p className="text-gray-700">{record.parts_replaced}</p>
-                </div>
-              )}
+              <div className="mt-6 pt-6 border-t">
+                <h3 className="font-medium text-gray-900 mb-2 flex items-center gap-2">
+                  <CheckCircle size={16} className="text-green-500" />
+                  Solution appliquée
+                </h3>
+                {editMode ? (
+                  <textarea
+                    value={editData.solution || ''}
+                    onChange={(e) => updateField('solution', e.target.value)}
+                    className="w-full h-24 p-3 border rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                    placeholder="Solution mise en place..."
+                  />
+                ) : (
+                  <p className="text-gray-700">{record.solution || <span className="italic text-gray-400">Non renseignée</span>}</p>
+                )}
+              </div>
+
+              <div className="mt-6 pt-6 border-t">
+                <h3 className="font-medium text-gray-900 mb-2">Pièces remplacées</h3>
+                {editMode ? (
+                  <textarea
+                    value={editData.parts_replaced || ''}
+                    onChange={(e) => updateField('parts_replaced', e.target.value)}
+                    className="w-full h-20 p-3 border rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                    placeholder="Liste des pièces remplacées..."
+                  />
+                ) : (
+                  <p className="text-gray-700">{record.parts_replaced || <span className="italic text-gray-400">Aucune</span>}</p>
+                )}
+              </div>
             </div>
 
             {/* AI Analysis */}
-            {(record.ai_diagnosis || record.ai_recommendations) && (
+            {(record.ai_diagnosis || record.ai_recommendations) && !editMode && (
               <div className="bg-gradient-to-br from-purple-50 to-blue-50 rounded-xl shadow-sm border border-purple-100 p-6">
                 <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <Sparkles size={18} className="text-purple-500" />
                   Analyse IA
                 </h2>
-
                 {record.ai_diagnosis && (
                   <div className="mb-4">
                     <h3 className="font-medium text-gray-900 mb-2">Diagnostic</h3>
                     <p className="text-gray-700">{record.ai_diagnosis}</p>
                   </div>
                 )}
-
                 {record.ai_recommendations && (
                   <div>
                     <h3 className="font-medium text-gray-900 mb-2">Recommandations</h3>
@@ -374,14 +570,17 @@ export default function TroubleshootingDetail() {
             )}
 
             {/* Photos */}
-            {photos.length > 0 && (
-              <div className="bg-white rounded-xl shadow-sm border p-6">
-                <PhotoGallery photos={photos} />
-              </div>
-            )}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <PhotoGallery
+                photos={allPhotos}
+                editMode={editMode}
+                onAddPhoto={handleAddPhoto}
+                onDeletePhoto={handleDeletePhoto}
+              />
+            </div>
 
             {/* Mini Plan */}
-            {record.equipment_type && record.equipment_id && (
+            {record.equipment_type && record.equipment_id && !editMode && (
               <div className="bg-white rounded-xl shadow-sm border p-6">
                 <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <MapPin size={18} className="text-orange-500" />
@@ -395,28 +594,64 @@ export default function TroubleshootingDetail() {
             )}
           </div>
 
-          {/* Sidebar - 1 column */}
+          {/* Sidebar */}
           <div className="space-y-6">
             {/* Status & Severity */}
             <div className="bg-white rounded-xl shadow-sm border p-6">
               <h3 className="font-semibold text-gray-900 mb-4">Statut</h3>
-              <div className="flex flex-wrap gap-2">
-                <StatusBadge status={record.status} />
-                <SeverityBadge severity={record.severity} />
-              </div>
-
-              {record.category && (
-                <div className="mt-4 pt-4 border-t">
-                  <span className="text-sm text-gray-500">Catégorie</span>
-                  <p className="font-medium text-gray-900 capitalize">{record.category}</p>
+              {editMode ? (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-sm text-gray-500 block mb-1">Statut</label>
+                    <select
+                      value={editData.status || 'in_progress'}
+                      onChange={(e) => updateField('status', e.target.value)}
+                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+                    >
+                      {STATUS_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-500 block mb-1">Sévérité</label>
+                    <select
+                      value={editData.severity || 'minor'}
+                      onChange={(e) => updateField('severity', e.target.value)}
+                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+                    >
+                      {SEVERITY_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-500 block mb-1">Catégorie</label>
+                    <select
+                      value={editData.category || ''}
+                      onChange={(e) => updateField('category', e.target.value)}
+                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+                    >
+                      <option value="">-- Sélectionner --</option>
+                      {CATEGORY_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-              )}
-
-              {record.fault_type && (
-                <div className="mt-3">
-                  <span className="text-sm text-gray-500">Type de panne</span>
-                  <p className="font-medium text-gray-900 capitalize">{record.fault_type}</p>
-                </div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    <StatusBadge status={record.status} />
+                    <SeverityBadge severity={record.severity} />
+                  </div>
+                  {record.category && (
+                    <div className="mt-4 pt-4 border-t">
+                      <span className="text-sm text-gray-500">Catégorie</span>
+                      <p className="font-medium text-gray-900 capitalize">{record.category}</p>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
@@ -426,17 +661,14 @@ export default function TroubleshootingDetail() {
                 <Zap size={16} className="text-orange-500" />
                 Équipement
               </h3>
-
               <div className="space-y-3">
                 <EquipmentTypeBadge type={record.equipment_type} />
-
                 {record.equipment_name && (
                   <div>
                     <span className="text-sm text-gray-500">Nom</span>
                     <p className="font-medium text-gray-900">{record.equipment_name}</p>
                   </div>
                 )}
-
                 {record.equipment_code && (
                   <div>
                     <span className="text-sm text-gray-500">Code</span>
@@ -453,7 +685,6 @@ export default function TroubleshootingDetail() {
                   <Building2 size={16} className="text-orange-500" />
                   Localisation
                 </h3>
-
                 <div className="space-y-3">
                   {record.building_code && (
                     <div>
@@ -461,25 +692,16 @@ export default function TroubleshootingDetail() {
                       <p className="font-medium text-gray-900">{record.building_code}</p>
                     </div>
                   )}
-
                   {record.floor && (
                     <div>
                       <span className="text-sm text-gray-500">Étage</span>
                       <p className="font-medium text-gray-900">{record.floor}</p>
                     </div>
                   )}
-
                   {record.zone && (
                     <div>
                       <span className="text-sm text-gray-500">Zone</span>
                       <p className="font-medium text-gray-900">{record.zone}</p>
-                    </div>
-                  )}
-
-                  {record.room && (
-                    <div>
-                      <span className="text-sm text-gray-500">Local</span>
-                      <p className="font-medium text-gray-900">{record.room}</p>
                     </div>
                   )}
                 </div>
@@ -492,40 +714,61 @@ export default function TroubleshootingDetail() {
                 <Clock size={16} className="text-orange-500" />
                 Temps
               </h3>
-
-              <div className="space-y-3">
-                {record.started_at && (
+              {editMode ? (
+                <div className="space-y-3">
                   <div>
-                    <span className="text-sm text-gray-500">Début</span>
-                    <p className="font-medium text-gray-900">
-                      {new Date(record.started_at).toLocaleString('fr-FR')}
-                    </p>
+                    <label className="text-sm text-gray-500 block mb-1">Durée intervention (min)</label>
+                    <input
+                      type="number"
+                      value={editData.duration_minutes || ''}
+                      onChange={(e) => updateField('duration_minutes', parseInt(e.target.value) || null)}
+                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+                      placeholder="Ex: 45"
+                    />
                   </div>
-                )}
-
-                {record.completed_at && (
                   <div>
-                    <span className="text-sm text-gray-500">Fin</span>
-                    <p className="font-medium text-gray-900">
-                      {new Date(record.completed_at).toLocaleString('fr-FR')}
-                    </p>
+                    <label className="text-sm text-gray-500 block mb-1">Temps d'arrêt (min)</label>
+                    <input
+                      type="number"
+                      value={editData.downtime_minutes || ''}
+                      onChange={(e) => updateField('downtime_minutes', parseInt(e.target.value) || null)}
+                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+                      placeholder="Ex: 120"
+                    />
                   </div>
-                )}
-
-                {record.duration_minutes && (
-                  <div>
-                    <span className="text-sm text-gray-500">Durée intervention</span>
-                    <p className="font-medium text-gray-900">{record.duration_minutes} minutes</p>
-                  </div>
-                )}
-
-                {record.downtime_minutes && (
-                  <div className="pt-3 border-t">
-                    <span className="text-sm text-red-500">Temps d'arrêt</span>
-                    <p className="font-bold text-red-600 text-lg">{record.downtime_minutes} minutes</p>
-                  </div>
-                )}
-              </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {record.started_at && (
+                    <div>
+                      <span className="text-sm text-gray-500">Début</span>
+                      <p className="font-medium text-gray-900">
+                        {new Date(record.started_at).toLocaleString('fr-FR')}
+                      </p>
+                    </div>
+                  )}
+                  {record.completed_at && (
+                    <div>
+                      <span className="text-sm text-gray-500">Fin</span>
+                      <p className="font-medium text-gray-900">
+                        {new Date(record.completed_at).toLocaleString('fr-FR')}
+                      </p>
+                    </div>
+                  )}
+                  {record.duration_minutes && (
+                    <div>
+                      <span className="text-sm text-gray-500">Durée intervention</span>
+                      <p className="font-medium text-gray-900">{record.duration_minutes} minutes</p>
+                    </div>
+                  )}
+                  {record.downtime_minutes && (
+                    <div className="pt-3 border-t">
+                      <span className="text-sm text-red-500">Temps d'arrêt</span>
+                      <p className="font-bold text-red-600 text-lg">{record.downtime_minutes} minutes</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Technician */}
@@ -534,7 +777,6 @@ export default function TroubleshootingDetail() {
                 <Users size={16} className="text-orange-500" />
                 Technicien
               </h3>
-
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-orange-400 to-red-500 flex items-center justify-center text-white font-bold">
                   {record.technician_name?.charAt(0)?.toUpperCase() || '?'}
