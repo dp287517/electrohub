@@ -700,8 +700,11 @@ ${eq.type === 'doors' || eq.type === 'door' || (eq.name && eq.name.toLowerCase()
   ? `- **get_controls** avec equipment_type="doors", equipment_name="${eq.name}" et filter="last" pour le dernier contrôle de cette porte
 - **get_controls** avec equipment_type="doors", equipment_name="${eq.name}" et filter="history" pour l'historique des contrôles`
   : `- **get_controls** avec equipment_type="${eq.type}", equipment_id="${eq.id}" pour les contrôles de cet équipement
-- **get_controls** avec equipment_type="${eq.type}", filter="overdue" pour les contrôles en retard
-- **get_controls** avec equipment_type="${eq.type}", filter="history", equipment_id="${eq.id}" pour l'historique des contrôles`}
+- **get_controls** avec equipment_type="${eq.type}", equipment_id="${eq.id}", filter="overdue" pour les contrôles en retard DE CET ÉQUIPEMENT
+- **get_controls** avec equipment_type="${eq.type}", equipment_id="${eq.id}", filter="history" pour l'historique des contrôles
+
+⚠️ **CRITIQUE**: Quand l'utilisateur demande les contrôles de cet équipement, utilise TOUJOURS equipment_id="${eq.id}".
+NE FILTRE PAS par building car les données peuvent ne pas correspondre exactement.`}
 - **get_non_conformities** pour les NC associées
 - **propose_troubleshooting_transfer** avec target_equipment_type="${eq.type}" pour transférer un dépannage vers un équipement du même type
 
