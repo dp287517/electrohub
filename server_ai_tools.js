@@ -3278,8 +3278,9 @@ function createToolHandlers(pool, site) {
             }
 
             if (building) {
-              mobileQuery += ` AND UPPER(e.building) = $${paramIdx}`;
-              mobileParams.push(building.toUpperCase());
+              // Utiliser LIKE pour plus de flexibilité (11 matche "11", "B11", "Bât. 11", etc.)
+              mobileQuery += ` AND UPPER(e.building) LIKE $${paramIdx}`;
+              mobileParams.push(`%${building.toUpperCase()}%`);
               paramIdx++;
             }
 
@@ -3348,8 +3349,9 @@ function createToolHandlers(pool, site) {
             }
 
             if (building) {
-              mobileQuery += ` AND UPPER(e.building) = $${paramIdx}`;
-              mobileParams.push(building.toUpperCase());
+              // Utiliser LIKE pour plus de flexibilité (11 matche "11", "B11", "Bât. 11", etc.)
+              mobileQuery += ` AND UPPER(e.building) LIKE $${paramIdx}`;
+              mobileParams.push(`%${building.toUpperCase()}%`);
               paramIdx++;
             }
 
