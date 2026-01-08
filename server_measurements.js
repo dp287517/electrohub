@@ -230,7 +230,8 @@ router.delete("/scale/:planId", requireTenant(), async (req, res) => {
  */
 router.get("/plans-without-scale", requireTenant(), async (req, res) => {
   try {
-    const { company_id, site_id } = req.tenant;
+    // Tenant uses camelCase (companyId, siteId), convert to snake_case for DB
+    const { companyId: company_id, siteId: site_id } = req.tenant || {};
 
     const { rows } = await pool.query(`
       SELECT p.id, p.logical_name, p.filename, p.page_count, p.version,
@@ -297,7 +298,8 @@ router.get("/:planId", async (req, res) => {
 router.post("/", requireTenant(), async (req, res) => {
   try {
     const { planId, pageIndex = 0, type, points, label, color } = req.body;
-    const { company_id, site_id } = req.tenant;
+    // Tenant uses camelCase (companyId, siteId), convert to snake_case for DB
+    const { companyId: company_id, siteId: site_id } = req.tenant || {};
     const userId = req.user?.id;
 
     if (!userId) {
