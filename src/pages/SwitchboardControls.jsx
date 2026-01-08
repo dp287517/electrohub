@@ -86,6 +86,7 @@ const getEquipmentDisplay = (item) => {
       type: 'meca',
       icon: <Icon size={16} className={color} />,
       link: `/app/meca?meca=${item.meca_equipment_id}`,
+      mapLink: `/app/meca/map?meca=${item.meca_equipment_id}`,
       category: item.meca_category || item.category || ''
     };
   }
@@ -96,6 +97,7 @@ const getEquipmentDisplay = (item) => {
       type: 'vsd',
       icon: <Icon size={16} className={color} />,
       link: `/app/vsd?vsd=${item.vsd_equipment_id}`,
+      mapLink: `/app/vsd/map?vsd=${item.vsd_equipment_id}`,
       category: ''
     };
   }
@@ -106,6 +108,7 @@ const getEquipmentDisplay = (item) => {
       type: 'hv',
       icon: <Icon size={16} className={color} />,
       link: `/app/hv?equipment=${item.hv_equipment_id}`,
+      mapLink: `/app/hv/map?hv=${item.hv_equipment_id}`,
       category: item.hv_regime_neutral || ''
     };
   }
@@ -116,6 +119,7 @@ const getEquipmentDisplay = (item) => {
       type: 'mobile',
       icon: <Icon size={16} className={color} />,
       link: `/app/mobile-equipments?equipment=${item.mobile_equipment_id}`,
+      mapLink: `/app/mobile-equipments/map?mobile=${item.mobile_equipment_id}`,
       category: item.mobile_category || item.category || ''
     };
   }
@@ -126,6 +130,7 @@ const getEquipmentDisplay = (item) => {
       type: 'glo',
       icon: <Icon size={16} className={color} />,
       link: `/app/glo?glo=${item.glo_equipment_id}`,
+      mapLink: `/app/glo/map?glo=${item.glo_equipment_id}`,
       category: item.glo_category || item.category || ''
     };
   }
@@ -136,6 +141,7 @@ const getEquipmentDisplay = (item) => {
       type: 'datahub',
       icon: <Icon size={16} className={color} />,
       link: `/app/datahub?item=${item.datahub_equipment_id}`,
+      mapLink: `/app/datahub/map?datahub=${item.datahub_equipment_id}`,
       category: item.datahub_category_name || ''
     };
   }
@@ -151,6 +157,7 @@ const getEquipmentDisplay = (item) => {
       type: 'device',
       icon: <Icon size={16} className={color} />,
       link: switchboardId ? `/app/switchboards?board=${switchboardId}` : null,
+      mapLink: switchboardId ? `/app/switchboard-map?highlight=${switchboardId}` : null,
       category: ''
     };
   }
@@ -161,6 +168,7 @@ const getEquipmentDisplay = (item) => {
       type: 'switchboard',
       icon: <Icon size={16} className={color} />,
       link: `/app/switchboards?board=${item.switchboard_id}`,
+      mapLink: `/app/switchboard-map?highlight=${item.switchboard_id}`,
       category: ''
     };
   }
@@ -170,6 +178,7 @@ const getEquipmentDisplay = (item) => {
     type: 'unknown',
     icon: <Icon size={16} className={color} />,
     link: null,
+    mapLink: null,
     category: ''
   };
 };
@@ -1212,12 +1221,23 @@ function DashboardTab({ dashboard, navigate, onStartControl }) {
                       </p>
                     </div>
                   </div>
-                  <button
-                    onClick={() => onStartControl(s)}
-                    className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 flex-shrink-0"
-                  >
-                    Faire
-                  </button>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {equipDisplay.mapLink && (
+                      <button
+                        onClick={() => navigate(equipDisplay.mapLink)}
+                        className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"
+                        title="Voir sur le plan"
+                      >
+                        🗺️
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onStartControl(s)}
+                      className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700"
+                    >
+                      Faire
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -1246,12 +1266,23 @@ function DashboardTab({ dashboard, navigate, onStartControl }) {
                       </p>
                     </div>
                   </div>
-                  <button
-                    onClick={() => onStartControl(s)}
-                    className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex-shrink-0"
-                  >
-                    Faire
-                  </button>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {equipDisplay.mapLink && (
+                      <button
+                        onClick={() => navigate(equipDisplay.mapLink)}
+                        className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"
+                        title="Voir sur le plan"
+                      >
+                        🗺️
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onStartControl(s)}
+                      className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+                    >
+                      Faire
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -1328,23 +1359,23 @@ function SchedulesTab({ schedules, onStartControl, onDelete, navigate }) {
                   >
                     {equipDisplay.icon}
                   </button>
+                  {equipDisplay.mapLink && (
+                    <button
+                      onClick={() => navigate(equipDisplay.mapLink)}
+                      className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"
+                      title="Voir sur le plan"
+                    >
+                      🗺️
+                    </button>
+                  )}
                   {s.switchboard_id && (
-                    <>
-                      <button
-                        onClick={() => navigate(`/app/switchboard-map?highlight=${s.switchboard_id}`)}
-                        className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200"
-                        title="Voir sur la carte"
-                      >
-                        🗺️
-                      </button>
-                      <button
-                        onClick={() => navigate(`/app/switchboards/${s.switchboard_id}/diagram`)}
-                        className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200"
-                        title="Voir le schéma"
-                      >
-                        📊
-                      </button>
-                    </>
+                    <button
+                      onClick={() => navigate(`/app/switchboards/${s.switchboard_id}/diagram`)}
+                      className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200"
+                      title="Voir le schéma"
+                    >
+                      📊
+                    </button>
                   )}
                 </div>
               )}
@@ -1427,11 +1458,11 @@ function OverdueTab({ overdueList, onStartControl, navigate }) {
               {equipDisplay.link && (
                 <div className="flex gap-1">
                   <button onClick={() => navigate(equipDisplay.link)} className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200" title="Voir l'équipement">{equipDisplay.icon}</button>
+                  {equipDisplay.mapLink && (
+                    <button onClick={() => navigate(equipDisplay.mapLink)} className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200" title="Voir sur le plan">🗺️</button>
+                  )}
                   {s.switchboard_id && (
-                    <>
-                      <button onClick={() => navigate(`/app/switchboard-map?highlight=${s.switchboard_id}`)} className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200" title="Carte">🗺️</button>
-                      <button onClick={() => navigate(`/app/switchboards/${s.switchboard_id}/diagram`)} className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200" title="Schéma">📊</button>
-                    </>
+                    <button onClick={() => navigate(`/app/switchboards/${s.switchboard_id}/diagram`)} className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200" title="Schéma">📊</button>
                   )}
                 </div>
               )}
@@ -1552,11 +1583,11 @@ function HistoryTab({ records, navigate }) {
               {equipDisplay.link && (
                 <div className="flex gap-1">
                   <button onClick={() => navigate(equipDisplay.link)} className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200" title="Voir l'équipement">{equipDisplay.icon}</button>
+                  {equipDisplay.mapLink && (
+                    <button onClick={() => navigate(equipDisplay.mapLink)} className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200" title="Voir sur le plan">🗺️</button>
+                  )}
                   {r.switchboard_id && (
-                    <>
-                      <button onClick={() => navigate(`/app/switchboard-map?highlight=${r.switchboard_id}`)} className="p-2 bg-emerald-100 text-emerald-700 rounded-lg hover:bg-emerald-200" title="Carte">🗺️</button>
-                      <button onClick={() => navigate(`/app/switchboards/${r.switchboard_id}/diagram`)} className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200" title="Schéma">📊</button>
-                    </>
+                    <button onClick={() => navigate(`/app/switchboards/${r.switchboard_id}/diagram`)} className="p-2 bg-violet-100 text-violet-700 rounded-lg hover:bg-violet-200" title="Schéma">📊</button>
                   )}
                 </div>
               )}
