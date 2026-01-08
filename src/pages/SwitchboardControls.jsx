@@ -2265,7 +2265,7 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
 
   // Calculate smart distribution dates grouped by building
   const calculateSmartDistribution = () => {
-    if (targetType !== 'switchboard' || !useSmartDistribution) return null;
+    if ((targetType !== 'switchboard' && !isMecaCategory) || !useSmartDistribution) return null;
 
     const equipmentList = getCurrentEquipmentList();
     const selectedEquipment = equipmentList.filter(eq => selectedIds.has(eq.id));
@@ -2405,7 +2405,7 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
       let successCount = 0;
 
       // Get smart distribution mapping if enabled
-      const distribution = useSmartDistribution && targetType === 'switchboard'
+      const distribution = useSmartDistribution && (targetType === 'switchboard' || isMecaCategory)
         ? calculateSmartDistribution()
         : null;
 
@@ -2424,13 +2424,17 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
           // Set the appropriate equipment ID
           if (targetType === 'switchboard') payload.switchboard_id = Number(ids[i]);
           else if (targetType === 'vsd') payload.vsd_equipment_id = Number(ids[i]);
-          else if (targetType === 'meca') payload.meca_equipment_id = Number(ids[i]);
-          else if (targetType === 'mobile_equipment') payload.mobile_equipment_id = String(ids[i]); // UUID, not Number
+          else if (targetType === 'meca') payload.meca_equipment_id = String(ids[i]); // UUID
+          else if (targetType === 'mobile_equipment') payload.mobile_equipment_id = String(ids[i]); // UUID
           else if (targetType === 'hv') payload.hv_equipment_id = Number(ids[i]);
           else if (targetType === 'glo') payload.glo_equipment_id = String(ids[i]); // UUID
           else if (targetType.startsWith('datahub_')) {
             payload.datahub_equipment_id = String(ids[i]); // UUID
             payload.equipment_type = 'datahub'; // Store as datahub type in DB
+          }
+          else if (targetType.startsWith('meca_')) {
+            payload.meca_equipment_id = String(ids[i]); // UUID
+            payload.equipment_type = 'meca'; // Store as meca type in DB
           }
 
           await onSave(payload, i === ids.length - 1); // Only reload on last item
@@ -2750,8 +2754,8 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
             </div>
           )}
 
-          {/* Smart Distribution Option - Only for switchboards with 10+ selections */}
-          {targetType === 'switchboard' && selectedIds.size >= 10 && (
+          {/* Smart Distribution Option - For switchboards and meca categories with 10+ selections */}
+          {(targetType === 'switchboard' || isMecaCategory) && selectedIds.size >= 10 && (
             <div className="border rounded-xl p-4 bg-gradient-to-r from-amber-50 to-orange-50">
               <label className="flex items-center gap-3 cursor-pointer">
                 <input

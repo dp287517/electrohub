@@ -7265,13 +7265,18 @@ app.get('/api/switchboard/controls/equipment', async (req, res) => {
     }
 
     // MECA Equipment - uses site_id (integer), need to join with sites table
+    // Include category info for filtering by category
     if (!type || type === 'meca' || type === 'all') {
       try {
         const mecaRes = await quickQuery(`
-          SELECT e.id, e.name, e.building, e.floor, e.location, e.serial_number, e.manufacturer
+          SELECT e.id, e.name, e.building, e.floor, e.location, e.serial_number, e.manufacturer,
+                 e.category_id, c.name as category_name
           FROM meca_equipments e
           INNER JOIN sites s ON s.id = e.site_id
-          WHERE s.name = $1 ORDER BY e.name
+          LEFT JOIN meca_equipment_categories c ON c.id = e.category_id
+          WHERE s.name = $1
+            AND (c.assign_to_controls = true OR e.category_id IS NULL)
+          ORDER BY e.name
         `, [site]);
         results.meca = mecaRes.rows;
       } catch (e) {
