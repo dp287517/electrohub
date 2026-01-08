@@ -9,7 +9,7 @@ import React, {
   forwardRef,
   useImperativeHandle,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, API_BASE } from "../lib/api.js";
 
 // PDF.js
@@ -905,6 +905,10 @@ export default function UnifiedEquipmentMap({
   userEmail, // User email for permission filtering
 }) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Target equipment to highlight from URL params
+  const targetEquipmentRef = useRef(null); // { type, id, plan }
 
   // Get user's allowed equipment types
   const allowedEquipmentTypes = useMemo(() => {
@@ -1002,6 +1006,19 @@ export default function UnifiedEquipmentMap({
     loadDatahubCategories();
   }, []);
 
+  // Auto-highlight equipment from URL params after PDF is ready
+  useEffect(() => {
+    if (!pdfReady || !targetEquipmentRef.current) return;
+
+    const target = targetEquipmentRef.current;
+    targetEquipmentRef.current = null; // Clear to prevent re-triggering
+
+    // Small delay to ensure all markers are rendered
+    setTimeout(() => {
+      viewerRef.current?.highlightMarker?.(target.id, target.type);
+    }, 400);
+  }, [pdfReady, allPositions]);
+
   // Load datahub categories with assign_to_controls enabled
   const loadDatahubCategories = async () => {
     try {
@@ -1020,7 +1037,42 @@ export default function UnifiedEquipmentMap({
       const planList = res?.plans || res || [];
       setPlans(planList);
 
-      // Restore from localStorage or select first
+      // Check for URL params to highlight specific equipment
+      const urlType = searchParams.get('type');
+      const urlId = searchParams.get('id');
+      const urlPlan = searchParams.get('plan');
+      const urlPage = searchParams.get('page');
+
+      if (urlType && urlId) {
+        // Store target equipment for highlighting after PDF loads
+        targetEquipmentRef.current = { type: urlType, id: urlId };
+
+        // Clear URL params to avoid re-triggering
+        setSearchParams({}, { replace: true });
+
+        if (urlPlan) {
+          // Navigate to specified plan
+          const targetPlan = planList.find(p => p.logical_name === urlPlan);
+          if (targetPlan) {
+            setSelectedPlan(targetPlan);
+            setPageIndex(urlPage ? Number(urlPage) : 0);
+            return;
+          }
+        }
+
+        // No plan specified - try to find which plan has this equipment
+        const placementInfo = await findEquipmentPlacement(urlType, urlId);
+        if (placementInfo?.plan) {
+          const targetPlan = planList.find(p => p.logical_name === placementInfo.plan);
+          if (targetPlan) {
+            setSelectedPlan(targetPlan);
+            setPageIndex(placementInfo.pageIndex || 0);
+            return;
+          }
+        }
+      }
+
+      // Default behavior: restore from localStorage or select first
       const savedPlanKey = localStorage.getItem(STORAGE_KEY_PLAN);
       const savedPageIndex = localStorage.getItem(STORAGE_KEY_PAGE);
 
@@ -1033,6 +1085,41 @@ export default function UnifiedEquipmentMap({
       console.error("Error loading plans:", err);
     } finally {
       setLoadingPlans(false);
+    }
+  };
+
+  // Find which plan an equipment is placed on
+  const findEquipmentPlacement = async (type, id) => {
+    try {
+      // Map equipment type to the correct API
+      const apiMap = {
+        switchboard: api.switchboardMaps,
+        vsd: api.vsdMaps,
+        meca: api.mecaMaps,
+        mobile: api.mobileEquipment?.maps,
+        hv: api.hvMaps,
+        glo: api.gloMaps,
+        datahub: api.datahub?.maps,
+      };
+
+      const mapApi = apiMap[type];
+      if (!mapApi?.placedIds) return null;
+
+      const res = await mapApi.placedIds();
+      const details = res?.placed_details || res || {};
+
+      // Find placement for this equipment ID
+      const placement = details[id] || details[String(id)] || details[Number(id)];
+      if (placement?.plans?.length > 0) {
+        return { plan: placement.plans[0], pageIndex: placement.page_index || 0 };
+      }
+      if (placement?.logical_name) {
+        return { plan: placement.logical_name, pageIndex: placement.page_index || 0 };
+      }
+      return null;
+    } catch (err) {
+      console.error("Error finding equipment placement:", err);
+      return null;
     }
   };
 
