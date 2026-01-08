@@ -50,6 +50,9 @@ import {
   Loader2,
 } from "lucide-react";
 
+// Measurement tools for floor plans
+import MeasurementTools from "../components/MeasurementTools";
+
 /* ----------------------------- PDF.js Config ----------------------------- */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
@@ -957,6 +960,10 @@ const GloLeafletViewer = forwardRef(({
     adjust,
     drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
     highlightMarker,
+    // Expose map info for MeasurementTools
+    getMapRef: () => mapRef.current,
+    getImageBounds: () => imgSize.w > 0 ? [[0, 0], [imgSize.h, imgSize.w]] : null,
+    getImageSize: () => imgSize,
   }));
 
   const onPickEquipment = useCallback((it) => {
@@ -1805,6 +1812,18 @@ export default function GloMap() {
               currentPlan={stableSelectedPlan?.logical_name}
               currentPageIndex={pageIndex}
               mapContainerRef={mapContainerRef}
+            />
+          )}
+
+          {/* Measurement Tools */}
+          {pdfReady && stableSelectedPlan && (
+            <MeasurementTools
+              planId={stableSelectedPlan.id}
+              pageIndex={pageIndex}
+              mapRef={{ current: viewerRef.current?.getMapRef?.() }}
+              imageBounds={viewerRef.current?.getImageBounds?.()}
+              imageWidth={viewerRef.current?.getImageSize?.()?.w}
+              imageHeight={viewerRef.current?.getImageSize?.()?.h}
             />
           )}
           </div>
