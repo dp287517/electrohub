@@ -251,7 +251,7 @@ function PhotoStep({ photos, setPhotos, onNext }) {
 }
 
 // Step 2: Description
-function DescriptionStep({ formData, setFormData, onNext, onBack, isAnalyzing, aiSuggestion }) {
+function DescriptionStep({ formData, setFormData, onNext, onBack, isAnalyzing, aiSuggestion, onImproveText, isImproving }) {
   return (
     <div className="space-y-6 animate-slideIn">
       <div className="text-center">
@@ -332,6 +332,28 @@ function DescriptionStep({ formData, setFormData, onNext, onBack, isAnalyzing, a
             className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent"
           />
         </div>
+
+        {/* AI Text Improvement Button */}
+        {(formData.title || formData.description || formData.root_cause || formData.solution) && (
+          <button
+            type="button"
+            onClick={onImproveText}
+            disabled={isImproving}
+            className="w-full p-4 bg-gradient-to-r from-indigo-50 to-blue-50 hover:from-indigo-100 hover:to-blue-100 rounded-xl border border-indigo-200 transition-all flex items-center justify-center gap-3 disabled:opacity-60"
+          >
+            {isImproving ? (
+              <>
+                <Loader2 className="w-5 h-5 text-indigo-500 animate-spin" />
+                <span className="text-indigo-700 font-medium">Correction en cours...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-5 h-5 text-indigo-500" />
+                <span className="text-indigo-700 font-medium">Corriger l'orthographe avec l'IA</span>
+              </>
+            )}
+          </button>
+        )}
 
         {/* Analyse photo */}
         {isAnalyzing ? (
@@ -703,6 +725,7 @@ export default function TroubleshootingWizard({
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isImproving, setIsImproving] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState('');
   const [success, setSuccess] = useState(false);
   const [recordId, setRecordId] = useState(null);
@@ -791,6 +814,33 @@ export default function TroubleshootingWizard({
       console.error('AI analysis error:', e);
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  // AI text improvement for spelling and grammar
+  const improveText = async () => {
+    setIsImproving(true);
+    try {
+      const response = await post('/api/ai-assistant/improve-troubleshooting-text', {
+        title: formData.title,
+        description: formData.description,
+        root_cause: formData.root_cause,
+        solution: formData.solution
+      });
+
+      if (response?.success && response?.improved) {
+        setFormData(prev => ({
+          ...prev,
+          title: response.improved.title || prev.title,
+          description: response.improved.description || prev.description,
+          root_cause: response.improved.root_cause || prev.root_cause,
+          solution: response.improved.solution || prev.solution
+        }));
+      }
+    } catch (e) {
+      console.error('Text improvement error:', e);
+    } finally {
+      setIsImproving(false);
     }
   };
 
@@ -931,6 +981,8 @@ export default function TroubleshootingWizard({
                   onBack={() => setStep(1)}
                   isAnalyzing={isAnalyzing}
                   aiSuggestion={aiSuggestion}
+                  onImproveText={improveText}
+                  isImproving={isImproving}
                 />
               )}
               {step === 3 && (

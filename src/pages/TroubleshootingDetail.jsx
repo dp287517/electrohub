@@ -238,6 +238,7 @@ export default function TroubleshootingDetail() {
   const [editMode, setEditMode] = useState(false);
   const [editData, setEditData] = useState({});
   const [newPhotos, setNewPhotos] = useState([]);
+  const [isImproving, setIsImproving] = useState(false);
 
   useEffect(() => {
     loadRecord();
@@ -349,6 +350,39 @@ export default function TroubleshootingDetail() {
 
   const updateField = (field, value) => {
     setEditData({ ...editData, [field]: value });
+  };
+
+  // AI text improvement for spelling and grammar
+  const improveText = async () => {
+    setIsImproving(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/ai-assistant/improve-troubleshooting-text`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          title: editData.title,
+          description: editData.description,
+          root_cause: editData.root_cause,
+          solution: editData.solution
+        })
+      });
+
+      const data = await response.json();
+      if (data?.success && data?.improved) {
+        setEditData(prev => ({
+          ...prev,
+          title: data.improved.title || prev.title,
+          description: data.improved.description || prev.description,
+          root_cause: data.improved.root_cause || prev.root_cause,
+          solution: data.improved.solution || prev.solution
+        }));
+      }
+    } catch (e) {
+      console.error('Text improvement error:', e);
+    } finally {
+      setIsImproving(false);
+    }
   };
 
   // Loading state
@@ -545,6 +579,30 @@ export default function TroubleshootingDetail() {
                   <p className="text-gray-700">{record.parts_replaced || <span className="italic text-gray-400">Aucune</span>}</p>
                 )}
               </div>
+
+              {/* AI Text Improvement Button - Edit Mode Only */}
+              {editMode && (editData.title || editData.description || editData.root_cause || editData.solution) && (
+                <div className="mt-6 pt-6 border-t">
+                  <button
+                    type="button"
+                    onClick={improveText}
+                    disabled={isImproving}
+                    className="w-full p-4 bg-gradient-to-r from-indigo-50 to-blue-50 hover:from-indigo-100 hover:to-blue-100 rounded-xl border border-indigo-200 transition-all flex items-center justify-center gap-3 disabled:opacity-60"
+                  >
+                    {isImproving ? (
+                      <>
+                        <Loader2 className="w-5 h-5 text-indigo-500 animate-spin" />
+                        <span className="text-indigo-700 font-medium">Correction en cours...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-5 h-5 text-indigo-500" />
+                        <span className="text-indigo-700 font-medium">Corriger l'orthographe avec l'IA</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* AI Analysis */}
