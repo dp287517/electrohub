@@ -293,29 +293,35 @@ export default function MeasurementTools({
   }, [imageBounds]);
 
   // Calculations
+  // The scale stores meters_per_pixel based on the image dimensions when calibrated.
+  // We must use the SAME dimensions for consistent calculations.
   const calculateDistance = useCallback((points) => {
     if (!scale || points.length < 2) return null;
+    // Use calibration dimensions, NOT current view dimensions
+    const calibW = scale.image_width || 1000;
+    const calibH = scale.image_height || 1000;
     let total = 0;
     for (let i = 0; i < points.length - 1; i++) {
-      const dx = (points[i + 1].x - points[i].x) * (imageWidth || 1000);
-      const dy = (points[i + 1].y - points[i].y) * (imageHeight || 1000);
+      const dx = (points[i + 1].x - points[i].x) * calibW;
+      const dy = (points[i + 1].y - points[i].y) * calibH;
       total += Math.sqrt(dx * dx + dy * dy);
     }
     return total * scale.scale_meters_per_pixel;
-  }, [scale, imageWidth, imageHeight]);
+  }, [scale]);
 
   const calculateArea = useCallback((points) => {
     if (!scale || points.length < 3) return null;
     const s = scale.scale_meters_per_pixel;
-    const w = imageWidth || 1000;
-    const h = imageHeight || 1000;
+    // Use calibration dimensions, NOT current view dimensions
+    const calibW = scale.image_width || 1000;
+    const calibH = scale.image_height || 1000;
     let area = 0;
     for (let i = 0; i < points.length; i++) {
       const j = (i + 1) % points.length;
-      area += points[i].x * w * s * points[j].y * h * s - points[j].x * w * s * points[i].y * h * s;
+      area += points[i].x * calibW * s * points[j].y * calibH * s - points[j].x * calibW * s * points[i].y * calibH * s;
     }
     return Math.abs(area / 2);
-  }, [scale, imageWidth, imageHeight]);
+  }, [scale]);
 
   // Clear all layers
   const clearAllLayers = useCallback(() => {
