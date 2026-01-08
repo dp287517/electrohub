@@ -343,6 +343,9 @@ async function ensureSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_cat_site ON meca_equipment_categories(site_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_meca_cat_order ON meca_equipment_categories(display_order);`);
 
+  // Add assign_to_controls column for Switchboard Controls integration
+  await pool.query(`ALTER TABLE meca_equipment_categories ADD COLUMN IF NOT EXISTS assign_to_controls BOOLEAN NOT NULL DEFAULT false;`);
+
   // Sous-catégories d'équipements (ex: Moteur, Capteur, Carte électronique...)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS meca_equipment_subcategories (
@@ -1550,17 +1553,17 @@ app.post("/api/meca/categories", async (req, res) => {
     const baseTenant = extractTenantFromRequest(req);
     const tenant = await enrichTenantWithSiteId(baseTenant, req, pool);
 
-    const { name = "", description = "", icon = "", color = "#f97316", display_order = 0 } = req.body || {};
+    const { name = "", description = "", icon = "", color = "#f97316", display_order = 0, assign_to_controls = false } = req.body || {};
 
     if (!name.trim()) {
       return res.status(400).json({ ok: false, error: "Name is required" });
     }
 
     const { rows } = await pool.query(`
-      INSERT INTO meca_equipment_categories(company_id, site_id, name, description, icon, color, display_order)
-      VALUES($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO meca_equipment_categories(company_id, site_id, name, description, icon, color, display_order, assign_to_controls)
+      VALUES($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *
-    `, [tenant.companyId, tenant.siteId, name.trim(), description, icon, color, display_order]);
+    `, [tenant.companyId, tenant.siteId, name.trim(), description, icon, color, display_order, assign_to_controls]);
 
     const category = rows[0];
     category.subcategories = [];
@@ -1577,7 +1580,7 @@ app.put("/api/meca/categories/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
     const u = getUser(req);
-    const { name, description, icon, color, display_order } = req.body || {};
+    const { name, description, icon, color, display_order, assign_to_controls } = req.body || {};
 
     const fields = [];
     const vals = [];
@@ -1588,6 +1591,7 @@ app.put("/api/meca/categories/:id", async (req, res) => {
     if (icon !== undefined) { fields.push(`icon=$${idx++}`); vals.push(icon); }
     if (color !== undefined) { fields.push(`color=$${idx++}`); vals.push(color); }
     if (display_order !== undefined) { fields.push(`display_order=$${idx++}`); vals.push(display_order); }
+    if (assign_to_controls !== undefined) { fields.push(`assign_to_controls=$${idx++}`); vals.push(assign_to_controls); }
 
     fields.push("updated_at=now()");
     vals.push(id);

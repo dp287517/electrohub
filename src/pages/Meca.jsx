@@ -1075,6 +1075,17 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
     }
   };
 
+  // Toggle assign_to_controls for a category
+  const handleToggleAssignToControls = async (cat) => {
+    try {
+      await api.meca.updateCategory(cat.id, { assign_to_controls: !cat.assign_to_controls });
+      showToast?.(cat.assign_to_controls ? 'Catégorie retirée de Controls' : 'Catégorie assignée à Controls', 'success');
+      loadCategories();
+    } catch (err) {
+      showToast?.('Erreur lors de la modification', 'error');
+    }
+  };
+
   return (
     <div className="h-full flex flex-col bg-white">
       {/* Header */}
@@ -1180,6 +1191,18 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
                           <span className="text-xs text-gray-400 bg-gray-200 px-2 py-0.5 rounded-full">
                             {cat.subcategories?.length || 0} sous-cat.
                           </span>
+                          {/* Assign to Controls toggle */}
+                          <button
+                            onClick={() => handleToggleAssignToControls(cat)}
+                            className={`p-1.5 rounded flex items-center gap-1 text-xs font-medium transition-colors ${
+                              cat.assign_to_controls
+                                ? 'text-amber-600 bg-amber-50 hover:bg-amber-100'
+                                : 'text-gray-400 hover:text-amber-600 hover:bg-amber-50'
+                            }`}
+                            title={cat.assign_to_controls ? 'Assigné à Controls' : 'Assigner à Controls'}
+                          >
+                            <Zap size={14} />
+                          </button>
                           <button
                             onClick={() => { setEditingCategory(cat.id); setEditName(cat.name); }}
                             className="p-1.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded"
