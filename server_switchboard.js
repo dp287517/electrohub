@@ -9344,14 +9344,14 @@ app.post('/api/equipment/links/cleanup-orphans', async (req, res) => {
         OR (source_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.source_id))
         OR (source_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.source_id AND site = el.site))
         OR (source_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.source_id))
-        OR (source_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM mobile_equipments WHERE id = el.source_id))
+        OR (source_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id = el.source_id))
         -- Target equipment doesn't exist
         OR (target_type = 'switchboard' AND NOT EXISTS (SELECT 1 FROM switchboards WHERE id::text = el.target_id AND site = el.site))
         OR (target_type = 'hv' AND NOT EXISTS (SELECT 1 FROM hv_equipments WHERE id::text = el.target_id AND site = el.site))
         OR (target_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.target_id))
         OR (target_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.target_id AND site = el.site))
         OR (target_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.target_id))
-        OR (target_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM mobile_equipments WHERE id = el.target_id))
+        OR (target_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id = el.target_id))
       )
       RETURNING *
     `, [site]);
@@ -9515,14 +9515,14 @@ async function cleanupOrphanedData() {
         OR (source_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.source_id))
         OR (source_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.source_id AND site = el.site))
         OR (source_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.source_id))
-        OR (source_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM mobile_equipments WHERE id = el.source_id))
+        OR (source_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id = el.source_id))
         -- Target equipment doesn't exist
         OR (target_type = 'switchboard' AND NOT EXISTS (SELECT 1 FROM switchboards WHERE id::text = el.target_id AND site = el.site))
         OR (target_type = 'hv' AND NOT EXISTS (SELECT 1 FROM hv_equipments WHERE id::text = el.target_id AND site = el.site))
         OR (target_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.target_id))
         OR (target_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.target_id AND site = el.site))
         OR (target_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.target_id))
-        OR (target_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM mobile_equipments WHERE id = el.target_id))
+        OR (target_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id = el.target_id))
       )
       RETURNING id
     `, [site]);

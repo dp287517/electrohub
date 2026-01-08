@@ -774,6 +774,15 @@ app.delete("/api/vsd/equipments/:id", async (req, res) => {
     }
 
     await pool.query(`DELETE FROM vsd_equipments WHERE id=$1`, [id]);
+
+    // 🧹 Cleanup orphaned equipment links (positions are auto-deleted via CASCADE)
+    const linksResult = await pool.query(`
+      DELETE FROM equipment_links
+      WHERE (source_type = 'vsd' AND source_id = $1)
+         OR (target_type = 'vsd' AND target_id = $1)
+    `, [id]);
+    console.log(`[VSD DELETE] Cleaned up ${linksResult.rowCount} equipment links for VSD equipment ${id}`);
+
     await logEvent("vsd_equipment_deleted", { id, name: equipment.name }, u);
 
     // 🔔 Push notification for deleted equipment

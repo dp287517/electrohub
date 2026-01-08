@@ -924,6 +924,15 @@ app.delete("/api/meca/equipments/:id", async (req, res) => {
     }
 
     await pool.query(`DELETE FROM meca_equipments WHERE id=$1`, [id]);
+
+    // 🧹 Cleanup orphaned equipment links (positions are auto-deleted via CASCADE)
+    const linksResult = await pool.query(`
+      DELETE FROM equipment_links
+      WHERE (source_type = 'meca' AND source_id = $1)
+         OR (target_type = 'meca' AND target_id = $1)
+    `, [id]);
+    console.log(`[MECA DELETE] Cleaned up ${linksResult.rowCount} equipment links for MECA equipment ${id}`);
+
     await logEvent(
       "meca_equipment_deleted",
       { id, name: equipment.name },
