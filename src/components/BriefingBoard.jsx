@@ -59,7 +59,7 @@ const AGENT_COLORS = {
   firecontrol: { bg: 'from-orange-500 to-red-600', ring: 'ring-orange-400', text: 'text-orange-600', bgLight: 'bg-orange-50', border: '#f97316' }
 };
 
-// Video Agent Avatar - Only plays video when active/speaking
+// Video Agent Avatar - Video always visible, plays only when speaking
 const VideoAgentAvatar = ({ agent, isActive, isSpeaking, onClick, alertCount }) => {
   const videoRef = useRef(null);
   const [videoLoaded, setVideoLoaded] = useState(false);
@@ -70,46 +70,43 @@ const VideoAgentAvatar = ({ agent, isActive, isSpeaking, onClick, alertCount }) 
   const speakingVideoUrl = `/api/admin/settings/ai-agents/${agent.type}/speaking`;
   const hasVideo = agent.hasIdleVideo || agent.hasSpeakingVideo;
 
-  // Control video playback based on active state
+  // Control video playback - play ONLY when speaking
   useEffect(() => {
-    if (videoRef.current) {
-      if (isActive) {
+    if (videoRef.current && hasVideo) {
+      if (isSpeaking) {
         videoRef.current.play().catch(() => {});
       } else {
         videoRef.current.pause();
-        // Reset to beginning when not active
-        videoRef.current.currentTime = 0;
       }
     }
-  }, [isActive]);
+  }, [isSpeaking, hasVideo]);
 
   return (
     <motion.button
       onClick={onClick}
       className={`relative flex flex-col items-center gap-2 p-2 rounded-2xl transition-all ${
-        isActive ? 'bg-white/15 scale-110 z-10' : 'hover:bg-white/5 opacity-70 grayscale-[30%]'
+        isActive ? 'bg-white/15 scale-110 z-10' : 'hover:bg-white/5'
       }`}
-      whileHover={{ scale: isActive ? 1.1 : 1.05, opacity: 1, filter: 'grayscale(0%)' }}
+      whileHover={{ scale: isActive ? 1.1 : 1.05 }}
       whileTap={{ scale: 0.95 }}
       animate={{
-        scale: isActive ? 1.1 : 1,
-        opacity: isActive ? 1 : 0.7
+        scale: isActive ? 1.1 : 1
       }}
     >
       {/* Video frame */}
       <div className={`relative w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden shadow-xl transition-all duration-300 ${
         isActive ? `ring-4 ${colors.ring} ring-opacity-70 shadow-2xl` : 'shadow-lg'
       }`}>
-        {/* Background gradient */}
+        {/* Background gradient (only visible if no video) */}
         <div className={`absolute inset-0 bg-gradient-to-br ${colors.bg}`} />
 
-        {/* Video - only loads and plays when active */}
-        {hasVideo ? (
+        {/* Video - ALWAYS visible, paused when not speaking */}
+        {hasVideo && (
           <video
             ref={videoRef}
             src={isSpeaking && agent.hasSpeakingVideo ? speakingVideoUrl : idleVideoUrl}
             className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
-              isActive && videoLoaded ? 'opacity-100' : 'opacity-0'
+              videoLoaded ? 'opacity-100' : 'opacity-0'
             }`}
             loop
             muted
@@ -117,29 +114,27 @@ const VideoAgentAvatar = ({ agent, isActive, isSpeaking, onClick, alertCount }) 
             onLoadedData={() => setVideoLoaded(true)}
             onError={() => setVideoLoaded(false)}
           />
-        ) : null}
+        )}
 
-        {/* Emoji fallback (always visible, fades when video plays) */}
-        <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-300 ${
-          hasVideo && isActive && videoLoaded ? 'opacity-0' : 'opacity-100'
-        }`}>
-          <motion.span
-            className="text-3xl sm:text-4xl"
-            animate={isSpeaking ? {
-              scale: [1, 1.2, 1, 1.15, 1],
-              rotate: [0, -5, 5, -3, 0]
-            } : isActive ? {
-              scale: [1, 1.08, 1]
-            } : {}}
-            transition={{
-              duration: isSpeaking ? 0.5 : 2,
-              repeat: Infinity,
-              ease: "easeInOut"
-            }}
-          >
-            {emoji}
-          </motion.span>
-        </div>
+        {/* Emoji fallback (only if no video loaded) */}
+        {(!hasVideo || !videoLoaded) && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <motion.span
+              className="text-3xl sm:text-4xl"
+              animate={isSpeaking ? {
+                scale: [1, 1.2, 1, 1.15, 1],
+                rotate: [0, -5, 5, -3, 0]
+              } : {}}
+              transition={{
+                duration: 0.5,
+                repeat: isSpeaking ? Infinity : 0,
+                ease: "easeInOut"
+              }}
+            >
+              {emoji}
+            </motion.span>
+          </div>
+        )}
 
         {/* Speaking indicator waves */}
         {isSpeaking && (
@@ -168,9 +163,9 @@ const VideoAgentAvatar = ({ agent, isActive, isSpeaking, onClick, alertCount }) 
           </div>
         )}
 
-        {/* Inactive overlay */}
+        {/* Inactive overlay - subtle dim when not active */}
         {!isActive && (
-          <div className="absolute inset-0 bg-black/20" />
+          <div className="absolute inset-0 bg-black/30" />
         )}
       </div>
 
@@ -195,12 +190,55 @@ const VideoAgentAvatar = ({ agent, isActive, isSpeaking, onClick, alertCount }) 
   );
 };
 
+// Video Avatar for Chat Messages
+const ChatVideoAvatar = ({ agent, isUser }) => {
+  const videoRef = useRef(null);
+  const [videoLoaded, setVideoLoaded] = useState(false);
+  const colors = AGENT_COLORS[agent?.type] || AGENT_COLORS.main;
+  const emoji = AGENT_EMOJIS[agent?.type] || '🤖';
+
+  const idleVideoUrl = agent ? `/api/admin/settings/ai-agents/${agent.type}/idle` : null;
+  const hasVideo = agent?.hasIdleVideo;
+
+  if (isUser) {
+    return (
+      <div className="flex-shrink-0 w-10 h-10 rounded-full bg-slate-600 flex items-center justify-center text-lg shadow-md">
+        👤
+      </div>
+    );
+  }
+
+  return (
+    <div className={`flex-shrink-0 w-10 h-10 rounded-full overflow-hidden shadow-md ${
+      !hasVideo || !videoLoaded ? `bg-gradient-to-br ${colors.bg}` : ''
+    }`}>
+      {hasVideo && (
+        <video
+          ref={videoRef}
+          src={idleVideoUrl}
+          className={`w-full h-full object-cover ${videoLoaded ? 'opacity-100' : 'opacity-0'}`}
+          loop
+          muted
+          playsInline
+          autoPlay={false}
+          onLoadedData={() => setVideoLoaded(true)}
+          onError={() => setVideoLoaded(false)}
+        />
+      )}
+      {(!hasVideo || !videoLoaded) && (
+        <div className="w-full h-full flex items-center justify-center text-lg">
+          {emoji}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Chat Message Component
 const ChatMessage = ({ message, agents }) => {
   const isUser = message.role === 'user';
   const agent = agents.find(a => a.type === message.agentType);
   const colors = AGENT_COLORS[message.agentType] || AGENT_COLORS.main;
-  const emoji = AGENT_EMOJIS[message.agentType] || '🤖';
 
   return (
     <motion.div
@@ -208,12 +246,8 @@ const ChatMessage = ({ message, agents }) => {
       animate={{ opacity: 1, y: 0 }}
       className={`flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}
     >
-      {/* Avatar */}
-      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm ${
-        isUser ? 'bg-slate-600' : `bg-gradient-to-br ${colors.bg}`
-      }`}>
-        {isUser ? '👤' : emoji}
-      </div>
+      {/* Video Avatar */}
+      <ChatVideoAvatar agent={agent} isUser={isUser} />
 
       {/* Message bubble */}
       <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${
@@ -502,26 +536,21 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
     }]);
 
     try {
-      // Call AI chat API
-      const response = await fetch('/api/chat/v2', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: userMessage,
-          context: 'briefing',
-          userName
-        })
+      // Call AI chat API (using aiAssistant for proper V2 integration)
+      const result = await aiAssistant.chatV2(userMessage, {
+        conversationHistory: messages.map(m => ({
+          role: m.role,
+          content: m.content
+        }))
       });
 
-      const data = await response.json();
-
       // Determine which agent responds
-      const respondingAgent = data.agent_type || data.agentType || 'main';
+      const respondingAgent = result.agentType || 'main';
       setActiveAgent(respondingAgent);
       setSpeakingAgent(respondingAgent);
 
       // Add agent response
-      const responseText = data.response || data.message || data.content || "Je n'ai pas compris, pouvez-vous reformuler ?";
+      const responseText = result.message || "Je n'ai pas compris, pouvez-vous reformuler ?";
       addAgentMessage(respondingAgent, responseText);
 
       setTimeout(() => setSpeakingAgent(null), 3000);
