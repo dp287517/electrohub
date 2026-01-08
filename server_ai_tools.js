@@ -3028,8 +3028,8 @@ function createToolHandlers(pool, site) {
     },
 
     // -----------------------------------------------------------------------
-    // CONTRÔLES (Switchboard Controls + Fire Door Checks)
-    // NOTE: Gère les contrôles de tableaux (control_schedules) ET portes (fd_checks)
+    // CONTRÔLES (Switchboard Controls + Fire Door Checks + Mobile Equipment)
+    // NOTE: Gère les contrôles de tableaux (control_schedules), portes (fd_checks), et mobile (me_checks)
     // -----------------------------------------------------------------------
     get_controls: async (params) => {
       const { filter = 'overdue', equipment_type = 'all', building, equipment_id, equipment_name, limit = 20 } = params;
@@ -3037,6 +3037,116 @@ function createToolHandlers(pool, site) {
       const now = new Date();
       const today = now.toISOString().split('T')[0];
       const maxLimit = Math.min(parseInt(limit) || 20, 50);
+
+      // ===== TOUS LES TYPES (ALL) - Combine all sources =====
+      if (equipment_type === 'all' && (filter === 'overdue' || filter === 'upcoming' || filter === 'this_week' || filter === 'this_month')) {
+        try {
+          const allControls = [];
+          let totalOverdue = 0;
+
+          // 1. Control schedules (switchboards + all equipment types)
+          const dateCondition = filter === 'overdue' ? `AND cs.next_due_date < '${today}'` : '';
+          const schedulesResult = await pool.query(`
+            SELECT
+              cs.id as control_id, cs.next_due_date, ct.name as control_type,
+              COALESCE(cs.equipment_type, 'switchboard') as equipment_type,
+              COALESCE(s.name, vsd.name, meca.name, me.name, hv.name, glo.name) as equipment_name,
+              COALESCE(s.building_code, vsd.building, meca.building, me.building, hv.building_code, glo.building) as building_code,
+              CASE WHEN cs.next_due_date < CURRENT_DATE THEN (CURRENT_DATE - cs.next_due_date)::int ELSE 0 END as days_overdue
+            FROM control_schedules cs
+            LEFT JOIN control_templates ct ON cs.template_id = ct.id
+            LEFT JOIN switchboards s ON cs.switchboard_id = s.id
+            LEFT JOIN vsd_equipments vsd ON cs.vsd_equipment_id::text = vsd.id::text
+            LEFT JOIN meca_equipments meca ON cs.meca_equipment_id::text = meca.id::text
+            LEFT JOIN me_equipments me ON cs.mobile_equipment_id::text = me.id::text
+            LEFT JOIN hv_equipments hv ON cs.hv_equipment_id::text = hv.id::text
+            LEFT JOIN glo_equipments glo ON cs.glo_equipment_id::text = glo.id::text
+            WHERE cs.site = $1 ${dateCondition}
+            ORDER BY cs.next_due_date ASC
+            LIMIT ${maxLimit}
+          `, [site]);
+
+          schedulesResult.rows.forEach(r => {
+            allControls.push({
+              ...r,
+              source: 'control_schedules'
+            });
+            if (r.days_overdue > 0) totalOverdue++;
+          });
+
+          // 2. Mobile equipment checks (me_checks)
+          const mobileCondition = filter === 'overdue' ? `AND c.due_date < '${today}'` : '';
+          const mobileResult = await pool.query(`
+            SELECT
+              c.id as control_id, c.due_date as next_due_date,
+              'mobile_equipment' as equipment_type,
+              e.name as equipment_name, e.building as building_code,
+              CASE WHEN c.due_date < CURRENT_DATE THEN (CURRENT_DATE - c.due_date)::int ELSE 0 END as days_overdue
+            FROM me_checks c
+            JOIN me_equipments e ON c.equipment_id = e.id
+            WHERE e.site = $1 AND c.closed_at IS NULL ${mobileCondition}
+            ORDER BY c.due_date ASC
+            LIMIT ${maxLimit}
+          `, [site]).catch(() => ({ rows: [] }));
+
+          mobileResult.rows.forEach(r => {
+            allControls.push({
+              ...r,
+              source: 'me_checks'
+            });
+            if (r.days_overdue > 0) totalOverdue++;
+          });
+
+          // 3. Fire door checks (fd_checks)
+          const doorsCondition = filter === 'overdue' ? `AND c.due_date < '${today}'` : '';
+          const doorsResult = await pool.query(`
+            SELECT
+              c.id as control_id, c.due_date as next_due_date,
+              'doors' as equipment_type,
+              d.name as equipment_name, d.building as building_code,
+              CASE WHEN c.due_date < CURRENT_DATE THEN (CURRENT_DATE - c.due_date)::int ELSE 0 END as days_overdue
+            FROM fd_checks c
+            JOIN fd_doors d ON c.door_id = d.id
+            WHERE d.site = $1 AND c.closed_at IS NULL ${doorsCondition}
+            ORDER BY c.due_date ASC
+            LIMIT ${maxLimit}
+          `, [site]).catch(() => ({ rows: [] }));
+
+          doorsResult.rows.forEach(r => {
+            allControls.push({
+              ...r,
+              source: 'fd_checks'
+            });
+            if (r.days_overdue > 0) totalOverdue++;
+          });
+
+          // Sort by days_overdue desc then by date
+          allControls.sort((a, b) => (b.days_overdue || 0) - (a.days_overdue || 0));
+
+          return {
+            success: true,
+            filter,
+            equipment_type: 'all',
+            count: allControls.length,
+            overdue_count: totalOverdue,
+            controls: allControls.slice(0, maxLimit).map(c => ({
+              control_id: c.control_id,
+              next_due_date: c.next_due_date,
+              control_type: c.control_type || 'Contrôle',
+              equipment_name: c.equipment_name,
+              equipment_type: c.equipment_type,
+              building: c.building_code,
+              days_overdue: c.days_overdue || 0
+            })),
+            summary: allControls.length === 0
+              ? `Aucun contrôle ${filter === 'overdue' ? 'en retard' : 'prévu'} sur l'ensemble des équipements.`
+              : `${allControls.length} contrôle(s) trouvé(s) (${totalOverdue} en retard) sur tous types d'équipements.`
+          };
+        } catch (error) {
+          console.error('[TOOL] get_controls (all) error:', error.message);
+          return { success: false, error: error.message, controls: [] };
+        }
+      }
 
       // ===== PORTES COUPE-FEU (fd_checks) =====
       if (equipment_type === 'doors') {

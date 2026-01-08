@@ -411,17 +411,26 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
       const totalOverdue = dashboardStats.overdue || 0;
       const totalPending = dashboardStats.pending || 0;
       const completedRecent = dashboardStats.completed_30d || 0;
-      const todaysTroubleshooting = (troubleshootingRes?.records || []).filter(r =>
-        new Date(r.created_at).toDateString() === new Date().toDateString()
-      ).length;
 
-      console.log('[BriefingBoard] Stats:', { totalOverdue, totalPending, completedRecent, todaysTroubleshooting });
+      // Count troubleshooting from today and yesterday
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const todayStr = today.toDateString();
+      const yesterdayStr = yesterday.toDateString();
+
+      const recentTroubleshooting = (troubleshootingRes?.records || []).filter(r => {
+        const recordDate = new Date(r.created_at).toDateString();
+        return recordDate === todayStr || recordDate === yesterdayStr;
+      }).length;
+
+      console.log('[BriefingBoard] Stats:', { totalOverdue, totalPending, completedRecent, recentTroubleshooting });
 
       setStats({
         overdueControls: totalOverdue,
         pendingControls: totalPending,
         completedToday: completedRecent,
-        troubleshootingToday: todaysTroubleshooting
+        troubleshootingRecent: recentTroubleshooting
       });
 
       // Welcome message from main agent
@@ -723,7 +732,7 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
         <div className="grid grid-cols-4 gap-2">
           <QuickStat icon={AlertTriangle} value={stats.overdueControls || 0} label="Retard" color="red" onClick={() => navigate('/app/switchboard-controls?filter=overdue')} />
           <QuickStat icon={Clock} value={stats.pendingControls || 0} label="À faire" color="blue" onClick={() => navigate('/app/switchboard-controls')} />
-          <QuickStat icon={Wrench} value={stats.troubleshootingToday || 0} label="Dépan." color="amber" onClick={() => navigate('/app/troubleshooting')} />
+          <QuickStat icon={Wrench} value={stats.troubleshootingRecent || 0} label="Dépan." color="amber" onClick={() => navigate('/app/troubleshooting')} />
           <QuickStat icon={CheckCircle} value={stats.completedToday || 0} label="Fait" color="green" onClick={() => navigate('/app/switchboard-controls')} />
         </div>
       </div>
