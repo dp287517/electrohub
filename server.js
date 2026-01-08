@@ -7621,6 +7621,111 @@ Réponds en français, de manière concise (2-3 phrases max).`
 });
 
 // ============================================================
+// TROUBLESHOOTING TEXT QUALITY IMPROVEMENT ENDPOINT
+// ============================================================
+app.post("/api/ai-assistant/improve-troubleshooting-text", express.json(), async (req, res) => {
+  try {
+    const { title, description, root_cause, solution } = req.body;
+
+    // Check if there's any text to improve
+    const hasContent = title || description || root_cause || solution;
+    if (!hasContent) {
+      return res.json({ success: true, improved: null, message: "Aucun texte à améliorer" });
+    }
+
+    console.log('[AI] ✍️ Improving troubleshooting report text quality');
+
+    const messages = [
+      {
+        role: "system",
+        content: `Tu es un assistant qui corrige et améliore la qualité des textes de rapports de dépannage technique.
+
+RÈGLES IMPORTANTES:
+- Corrige UNIQUEMENT les fautes d'orthographe et de grammaire
+- Améliore légèrement la clarté et la lisibilité si nécessaire
+- NE CHANGE PAS le sens ou le contenu technique
+- NE RAJOUTE PAS d'informations
+- NE SUPPRIME PAS d'informations
+- Garde le style concis et professionnel
+- Si le texte est vide ou absent, retourne une chaîne vide
+- Conserve les noms propres, codes, références techniques exactement comme ils sont écrits
+
+Réponds UNIQUEMENT avec un JSON valide contenant les champs corrigés.`
+      },
+      {
+        role: "user",
+        content: `Corrige les fautes d'orthographe et améliore légèrement ces textes de rapport de dépannage:
+
+Titre: ${title || ''}
+Description du problème: ${description || ''}
+Cause identifiée: ${root_cause || ''}
+Solution appliquée: ${solution || ''}
+
+Réponds avec ce format JSON exact:
+{
+  "title": "titre corrigé",
+  "description": "description corrigée",
+  "root_cause": "cause corrigée",
+  "solution": "solution corrigée"
+}`
+      }
+    ];
+
+    try {
+      const result = await chatWithFallback(messages, {
+        max_tokens: 1000,
+        temperature: 0.1  // Low temperature for consistent corrections
+      });
+
+      // Parse JSON response
+      let improved;
+      try {
+        // Extract JSON from response (handle potential markdown code blocks)
+        let jsonStr = result.content;
+        const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (jsonMatch) {
+          jsonStr = jsonMatch[1].trim();
+        }
+        improved = JSON.parse(jsonStr);
+      } catch (parseError) {
+        console.error('[AI] Failed to parse improvement response:', parseError.message);
+        // Return original texts if parsing fails
+        return res.json({
+          success: true,
+          improved: { title, description, root_cause, solution },
+          provider: 'fallback',
+          message: "Impossible de parser la réponse IA"
+        });
+      }
+
+      res.json({
+        success: true,
+        improved: {
+          title: improved.title || title || '',
+          description: improved.description || description || '',
+          root_cause: improved.root_cause || root_cause || '',
+          solution: improved.solution || solution || ''
+        },
+        provider: result.provider
+      });
+    } catch (aiError) {
+      console.error('[AI] Text improvement AI error:', aiError.message);
+      // Return original texts on AI error
+      res.json({
+        success: true,
+        improved: { title, description, root_cause, solution },
+        provider: 'fallback',
+        message: "Erreur IA, textes non modifiés"
+      });
+    }
+
+  } catch (error) {
+    console.error('[AI] Improve troubleshooting text error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============================================================
 // COMPREHENSIVE STATISTICS ENDPOINT
 // ============================================================
 app.get("/api/ai-assistant/statistics", async (req, res) => {
