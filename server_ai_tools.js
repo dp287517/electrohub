@@ -1242,7 +1242,16 @@ function createToolHandlers(pool, site) {
           datahub: { table: 'dh_items', nameCol: 'name', buildingCol: 'building', codeCol: 'code', label: 'Capteur/Monitoring', agent: 'Nexus', hasCategory: true }
         };
 
-        const typesToSearch = target_equipment_type ? [target_equipment_type] : Object.keys(tableMap);
+        // PRIORITÉ: Si type spécifié, chercher UNIQUEMENT dans ce type d'abord
+        // Sinon chercher dans l'ordre mais NE PAS mélanger les résultats
+        let typesToSearch;
+        if (target_equipment_type) {
+          typesToSearch = [target_equipment_type];
+        } else {
+          // Ordre de priorité: meca, vsd, switchboard... datahub en dernier
+          typesToSearch = ['meca', 'vsd', 'switchboard', 'atex', 'hv', 'mobile', 'glo', 'doors', 'datahub'];
+        }
+
         const candidates = [];
         const similarEquipments = [];
 
@@ -1281,17 +1290,21 @@ function createToolHandlers(pool, site) {
               datahubQuery += ` LIMIT 5`;
               const datahubResult = await pool.query(datahubQuery, datahubParams);
 
-              // Formater le nom avec la catégorie
-              for (const row of datahubResult.rows) {
-                candidates.push({
-                  ...row,
-                  name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
-                  original_name: row.name
-                });
+              // IMPORTANT: Si on trouve des résultats exacts, on arrête
+              if (datahubResult.rows.length > 0) {
+                // Formater le nom avec la catégorie
+                for (const row of datahubResult.rows) {
+                  candidates.push({
+                    ...row,
+                    name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
+                    original_name: row.name
+                  });
+                }
+                break; // Arrêter la recherche
               }
 
-              // Recherche floue avec mots individuels
-              if (datahubResult.rows.length === 0 && searchTerms.length > 0) {
+              // Recherche floue avec mots individuels (seulement si pas de résultat exact)
+              if (searchTerms.length > 0) {
                 for (const term of searchTerms) {
                   const fuzzyQuery = `
                     SELECT dh.id, dh.name, dh.building, dhc.name as category_name,
@@ -1345,10 +1358,15 @@ function createToolHandlers(pool, site) {
 
             searchQuery += ` LIMIT 5`;
             const searchResult = await pool.query(searchQuery, searchParams);
-            candidates.push(...searchResult.rows);
+
+            // IMPORTANT: Si on trouve des résultats exacts, on arrête la recherche
+            if (searchResult.rows.length > 0) {
+              candidates.push(...searchResult.rows);
+              break; // Arrêter dès qu'on trouve dans ce type
+            }
 
             // Si pas de résultat exact, recherche floue avec les mots individuels
-            if (searchResult.rows.length === 0 && searchTerms.length > 0) {
+            if (searchTerms.length > 0) {
               for (const term of searchTerms) {
                 const fuzzyQuery = `
                   SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building,
