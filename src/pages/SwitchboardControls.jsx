@@ -82,7 +82,7 @@ const getEquipmentDisplay = (item) => {
   if (item.meca_equipment_id) {
     const { Icon, color } = EQUIPMENT_ICONS.meca;
     return {
-      name: item.meca_equipment_name || item.equipment_name || `Équip. méca #${item.meca_equipment_id}`,
+      name: item.meca_name || item.meca_equipment_name || item.equipment_name || `Équip. méca #${item.meca_equipment_id}`,
       type: 'meca',
       icon: <Icon size={16} className={color} />,
       link: `/app/meca?meca=${item.meca_equipment_id}`,
@@ -92,7 +92,7 @@ const getEquipmentDisplay = (item) => {
   if (item.vsd_equipment_id) {
     const { Icon, color } = EQUIPMENT_ICONS.vsd;
     return {
-      name: item.vsd_equipment_name || item.equipment_name || `Variateur #${item.vsd_equipment_id}`,
+      name: item.vsd_name || item.vsd_equipment_name || item.equipment_name || `Variateur #${item.vsd_equipment_id}`,
       type: 'vsd',
       icon: <Icon size={16} className={color} />,
       link: `/app/vsd?vsd=${item.vsd_equipment_id}`,
@@ -102,7 +102,7 @@ const getEquipmentDisplay = (item) => {
   if (item.hv_equipment_id) {
     const { Icon, color } = EQUIPMENT_ICONS.hv;
     return {
-      name: item.hv_equipment_name || item.equipment_name || `Équip. HT #${item.hv_equipment_id}`,
+      name: item.hv_name || item.hv_equipment_name || item.equipment_name || `Équip. HT #${item.hv_equipment_id}`,
       type: 'hv',
       icon: <Icon size={16} className={color} />,
       link: `/app/hv?equipment=${item.hv_equipment_id}`,
