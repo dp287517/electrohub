@@ -2042,11 +2042,11 @@ function createToolHandlers(pool, site) {
               s.id, s.name as equipment_name, s.code, s.building_code, s.floor,
               'switchboard' as equipment_type,
               sc.next_due_date,
-              EXTRACT(DAY FROM CURRENT_DATE - sc.next_due_date)::int as days_overdue,
+              (CURRENT_DATE - sc.next_due_date)::int as days_overdue,
               'overdue_control' as priority_reason,
               CASE
-                WHEN EXTRACT(DAY FROM CURRENT_DATE - sc.next_due_date) > 30 THEN 'critical'
-                WHEN EXTRACT(DAY FROM CURRENT_DATE - sc.next_due_date) > 14 THEN 'high'
+                WHEN (CURRENT_DATE - sc.next_due_date) > 30 THEN 'critical'
+                WHEN (CURRENT_DATE - sc.next_due_date) > 14 THEN 'high'
                 ELSE 'medium'
               END as priority_level
             FROM control_schedules sc
@@ -3162,7 +3162,7 @@ function createToolHandlers(pool, site) {
                 'door' as equipment_type,
                 CASE
                   WHEN c.due_date < CURRENT_DATE THEN
-                    EXTRACT(DAY FROM CURRENT_DATE - c.due_date)::int
+                    (CURRENT_DATE - c.due_date)::int
                   ELSE 0
                 END as days_overdue,
                 CASE WHEN c.started_at IS NOT NULL THEN 'En cours' ELSE 'Planifié' END as status_label
@@ -3323,7 +3323,7 @@ function createToolHandlers(pool, site) {
                 'mobile' as equipment_type,
                 CASE
                   WHEN c.due_date < CURRENT_DATE THEN
-                    EXTRACT(DAY FROM CURRENT_DATE - c.due_date)::int
+                    (CURRENT_DATE - c.due_date)::int
                   ELSE 0
                 END as days_overdue,
                 CASE
@@ -3453,7 +3453,7 @@ function createToolHandlers(pool, site) {
                 '${equipment_type}' as equipment_type,
                 CASE
                   WHEN cs.next_due_date < CURRENT_DATE THEN
-                    EXTRACT(DAY FROM CURRENT_DATE - cs.next_due_date)::int
+                    (CURRENT_DATE - cs.next_due_date)::int
                   ELSE 0
                 END as days_overdue
               FROM control_schedules cs
@@ -3476,7 +3476,7 @@ function createToolHandlers(pool, site) {
                 '${equipment_type}' as equipment_type,
                 CASE
                   WHEN cs.next_due_date < CURRENT_DATE THEN
-                    EXTRACT(DAY FROM CURRENT_DATE - cs.next_due_date)::int
+                    (CURRENT_DATE - cs.next_due_date)::int
                   ELSE 0
                 END as days_overdue
               FROM control_schedules cs
@@ -3498,7 +3498,7 @@ function createToolHandlers(pool, site) {
                 '${equipment_type}' as equipment_type,
                 CASE
                   WHEN cs.next_due_date < CURRENT_DATE THEN
-                    EXTRACT(DAY FROM CURRENT_DATE - cs.next_due_date)::int
+                    (CURRENT_DATE - cs.next_due_date)::int
                   ELSE 0
                 END as days_overdue
               FROM control_schedules cs
@@ -3694,17 +3694,18 @@ function createToolHandlers(pool, site) {
 
       let query = `
         SELECT
-          sc.id as control_id, sc.next_due_date, sc.control_type,
+          sc.id as control_id, sc.next_due_date, ct.name as control_type,
           s.id as equipment_id, s.name as equipment_name, s.code as equipment_code,
           s.building_code, s.floor, s.room,
           'switchboard' as equipment_type,
           CASE
             WHEN sc.next_due_date < CURRENT_DATE THEN
-              EXTRACT(DAY FROM CURRENT_DATE - sc.next_due_date)::int
+              (CURRENT_DATE - sc.next_due_date)::int
             ELSE 0
           END as days_overdue
         FROM control_schedules sc
         JOIN switchboards s ON sc.switchboard_id = s.id
+        LEFT JOIN control_templates ct ON sc.template_id = ct.id
         WHERE s.site = $1
         ${dateCondition}
       `;
@@ -4867,12 +4868,13 @@ function createToolHandlers(pool, site) {
         // Contrôles (recherche dans switchboards par nom)
         if (include_controls) {
           const controls = await pool.query(`
-            SELECT sc.id, sc.control_type, sc.result, sc.next_due_date,
-                   sc.control_date, sc.comments, s.name as equipment_name
+            SELECT sc.id, ct.name as control_type, sc.status as result, sc.next_due_date,
+                   sc.last_control_date as control_date, s.name as equipment_name
             FROM control_schedules sc
             JOIN switchboards s ON sc.switchboard_id = s.id
+            LEFT JOIN control_templates ct ON sc.template_id = ct.id
             WHERE s.site = $1 AND LOWER(s.name) LIKE $2
-            ORDER BY sc.control_date DESC NULLS LAST
+            ORDER BY sc.last_control_date DESC NULLS LAST
             LIMIT 10
           `, [site, `%${equipment_name.toLowerCase()}%`]);
           results.controls = controls.rows;
@@ -5072,7 +5074,7 @@ function createToolHandlers(pool, site) {
         if (include_priorities) {
           const priorities = await pool.query(`
             SELECT s.name, s.building_code,
-                   EXTRACT(DAY FROM CURRENT_DATE - sc.next_due_date)::int as days_overdue
+                   (CURRENT_DATE - sc.next_due_date)::int as days_overdue
             FROM control_schedules sc
             JOIN switchboards s ON sc.switchboard_id = s.id
             WHERE s.site = $1 AND sc.next_due_date < CURRENT_DATE
@@ -5203,7 +5205,7 @@ function createToolHandlers(pool, site) {
             // Contrôles en retard
             const overdueResult = await pool.query(`
               SELECT cs.id, cs.equipment_id, cs.equipment_type, cs.next_due_date, cs.frequency,
-                     EXTRACT(DAY FROM CURRENT_DATE - cs.next_due_date)::int as days_overdue
+                     (CURRENT_DATE - cs.next_due_date)::int as days_overdue
               FROM control_schedules cs
               WHERE cs.site = $1
               AND cs.equipment_type = $2
