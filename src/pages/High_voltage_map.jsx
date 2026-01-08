@@ -670,6 +670,8 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
         const startLongPress = (clientX, clientY) => {
           longPressTriggeredRef.current = false;
           longPressTimerRef.current = setTimeout(() => {
+            // Ne pas afficher le menu si le drag mobile est actif
+            if (mk._mobileDragActive) return;
             longPressTriggeredRef.current = true;
             onContextMenu?.(mk.__meta, { x: clientX, y: clientY });
           }, 600);
