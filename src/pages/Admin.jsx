@@ -1729,13 +1729,23 @@ function VsdPlansTab() {
 
 // ============== PLAN SCALE TAB ==============
 // Configure the scale of plans for measurements
+
+// Standard paper sizes (landscape width in cm)
+const PAPER_SIZES = [
+  { id: 'A4', label: 'A4', width: 29.7 },
+  { id: 'A3', label: 'A3', width: 42.0 },
+  { id: 'A2', label: 'A2', width: 59.4 },
+  { id: 'A1', label: 'A1', width: 84.1 },
+  { id: 'A0', label: 'A0', width: 118.9 },
+];
+
 function PlanScaleTab() {
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [scaleConfigs, setScaleConfigs] = useState({});
   const [editingPlan, setEditingPlan] = useState(null);
   const [scaleRatio, setScaleRatio] = useState('');
-  const [paperWidthCm, setPaperWidthCm] = useState('84'); // Default A1 width
+  const [paperFormat, setPaperFormat] = useState('A1'); // Default A1
   const [saving, setSaving] = useState(false);
 
   // Fetch plans
@@ -1768,12 +1778,14 @@ function PlanScaleTab() {
 
   useEffect(() => { fetchPlans(); }, []);
 
-  // Save scale from ratio and paper width
+  // Save scale from ratio and paper format
   // For architectural plans: 1:100 means 1cm on plan = 100cm real = 1m
   // If paper width is W cm, the real width = W * ratio cm = W * ratio / 100 meters
-  const saveScaleFromRatio = async (plan, ratio, paperWidth) => {
-    console.log('[PlanScaleTab] saveScaleFromRatio called', { plan: plan?.id, ratio, paperWidth });
-    if (!plan || !ratio || ratio <= 0 || !paperWidth || paperWidth <= 0) {
+  const saveScaleFromRatio = async (plan, ratio, format) => {
+    const paperSize = PAPER_SIZES.find(p => p.id === format);
+    const paperWidth = paperSize?.width || 84.1;
+    console.log('[PlanScaleTab] saveScaleFromRatio called', { plan: plan?.id, ratio, format, paperWidth });
+    if (!plan || !ratio || ratio <= 0) {
       console.log('[PlanScaleTab] Invalid params, aborting');
       return;
     }
@@ -1914,7 +1926,7 @@ function PlanScaleTab() {
                     {/* Edit Scale */}
                     {isEditing ? (
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm text-gray-600">Échelle 1 :</span>
+                        <span className="text-sm text-gray-600">1 :</span>
                         <input
                           type="number"
                           value={scaleRatio}
@@ -1923,24 +1935,24 @@ function PlanScaleTab() {
                           className="w-20 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
                           autoFocus
                         />
-                        <span className="text-sm text-gray-600">Largeur:</span>
-                        <input
-                          type="number"
-                          value={paperWidthCm}
-                          onChange={(e) => setPaperWidthCm(e.target.value)}
-                          placeholder="84"
-                          className="w-20 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                        />
-                        <span className="text-sm text-gray-600">cm</span>
+                        <select
+                          value={paperFormat}
+                          onChange={(e) => setPaperFormat(e.target.value)}
+                          className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent bg-white"
+                        >
+                          {PAPER_SIZES.map(size => (
+                            <option key={size.id} value={size.id}>{size.label}</option>
+                          ))}
+                        </select>
                         <button
-                          onClick={() => saveScaleFromRatio(plan, parseFloat(scaleRatio), parseFloat(paperWidthCm))}
-                          disabled={!scaleRatio || !paperWidthCm || saving}
+                          onClick={() => saveScaleFromRatio(plan, parseFloat(scaleRatio), paperFormat)}
+                          disabled={!scaleRatio || saving}
                           className="p-2 bg-green-500 hover:bg-green-600 text-white rounded-lg disabled:opacity-50"
                         >
                           {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
                         </button>
                         <button
-                          onClick={() => { setEditingPlan(null); setScaleRatio(''); setPaperWidthCm('84'); }}
+                          onClick={() => { setEditingPlan(null); setScaleRatio(''); setPaperFormat('A1'); }}
                           className="p-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg"
                         >
                           <X size={16} />
@@ -1974,24 +1986,17 @@ function PlanScaleTab() {
       <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
         <h4 className="font-medium text-blue-900 mb-2">Comment configurer l'échelle ?</h4>
         <div className="text-sm text-blue-800 space-y-2">
-          <p><strong>Échelle:</strong> L'échelle est généralement indiquée dans le cartouche du plan.</p>
+          <p>L'échelle est généralement indiquée dans le cartouche du plan:</p>
           <ul className="space-y-1 list-disc list-inside ml-2">
-            <li><strong>1:50</strong> - Plans de détails (1 cm = 50 cm)</li>
-            <li><strong>1:100</strong> - Plans d'étage standards (1 cm = 1 m)</li>
-            <li><strong>1:200</strong> - Plans de bâtiment (1 cm = 2 m)</li>
-            <li><strong>1:500</strong> - Plans de site (1 cm = 5 m)</li>
+            <li><strong>1:50</strong> - Plans de détails</li>
+            <li><strong>1:100</strong> - Plans d'étage standards</li>
+            <li><strong>1:200</strong> - Plans de bâtiment</li>
+            <li><strong>1:500</strong> - Plans de site</li>
           </ul>
-          <p className="mt-2"><strong>Largeur du plan:</strong> Mesurez la largeur du plan imprimé/papier en cm.</p>
-          <ul className="space-y-1 list-disc list-inside ml-2">
-            <li><strong>A4 paysage</strong> - 29.7 cm</li>
-            <li><strong>A3 paysage</strong> - 42 cm</li>
-            <li><strong>A2 paysage</strong> - 59.4 cm</li>
-            <li><strong>A1 paysage</strong> - 84.1 cm</li>
-            <li><strong>A0 paysage</strong> - 118.9 cm</li>
-          </ul>
+          <p className="mt-2">Sélectionnez aussi le format du plan (A4, A3, A2, A1, A0).</p>
         </div>
         <p className="text-xs text-blue-600 mt-3">
-          💡 Pour une calibration plus précise, utilisez l'outil "Définir l'échelle" sur la page carte elle-même.
+          💡 Pour une calibration plus précise, utilisez l'outil "Définir l'échelle" directement sur la carte.
         </p>
       </div>
     </div>
