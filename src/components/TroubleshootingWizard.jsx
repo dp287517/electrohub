@@ -1,6 +1,7 @@
 // TroubleshootingWizard - Wizard de dépannage avec agent IA
 // Permet aux techniciens d'enregistrer les dépannages avec photos et descriptions
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Wrench, Camera, Plus, X, ChevronRight, ChevronLeft, Send,
   CheckCircle, AlertTriangle, Upload, Trash2, Image, Clock,
@@ -994,6 +995,7 @@ export function TroubleshootingButton({ equipment, equipmentType, onSuccess, cla
 // TROUBLESHOOTING HISTORY - Liste des dépannages d'un équipement
 // ============================================================
 export function TroubleshootingHistory({ equipmentId, equipmentType, limit = 5, onRefresh }) {
+  const navigate = useNavigate();
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(null);
@@ -1066,19 +1068,25 @@ export function TroubleshootingHistory({ equipmentId, equipmentType, limit = 5, 
 
   return (
     <div className="space-y-3">
-      {records.map((record) => (
+      {records.map((record, idx) => (
         <div
           key={record.id}
-          className="p-3 bg-white rounded-xl border border-gray-200 hover:border-gray-300 transition-colors"
+          className="p-3 bg-white rounded-xl border border-gray-200 hover:border-gray-300 transition-colors cursor-pointer"
+          onClick={() => navigate(`/app/troubleshooting/${record.id}`)}
         >
           <div className="flex items-start justify-between">
             <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs font-mono text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                  #{record.row_number || idx + 1}
+                </span>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${severityColors[record.severity] || 'bg-gray-100 text-gray-700'}`}>
+                  {record.severity}
+                </span>
+              </div>
               <h4 className="font-medium text-gray-900 truncate">{record.title}</h4>
               <p className="text-sm text-gray-500 truncate mt-0.5">{record.description}</p>
             </div>
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${severityColors[record.severity] || 'bg-gray-100 text-gray-700'}`}>
-              {record.severity}
-            </span>
           </div>
 
           <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
@@ -1092,7 +1100,14 @@ export function TroubleshootingHistory({ equipmentId, equipmentType, limit = 5, 
             )}
           </div>
 
-          <div className="flex gap-2 mt-2">
+          <div className="flex gap-2 mt-2" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => navigate(`/app/troubleshooting/${record.id}`)}
+              className="flex items-center gap-1 px-2 py-1 text-xs bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors"
+            >
+              <Eye size={12} />
+              Voir
+            </button>
             <a
               href={`${API_BASE}/api/troubleshooting/${record.id}/pdf`}
               target="_blank"
