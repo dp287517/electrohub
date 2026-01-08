@@ -10,60 +10,290 @@ import {
   Timer, ThumbsUp, ThumbsDown, Bell, ExternalLink, Settings
 } from 'lucide-react';
 import { aiAssistant } from '../lib/ai-assistant';
-import api from '../lib/api';
 
-// Agent Avatar Component - Représente un participant virtuel à la réunion
-const AgentAvatar = ({ agent, isActive, isSpeaking, onClick }) => {
-  const avatarStyles = {
-    maintenance: { bg: 'from-amber-500 to-orange-600', icon: Wrench, ring: 'ring-amber-400' },
-    troubleshooting: { bg: 'from-red-500 to-rose-600', icon: AlertCircle, ring: 'ring-red-400' },
-    equipment: { bg: 'from-blue-500 to-indigo-600', icon: Zap, ring: 'ring-blue-400' },
-    security: { bg: 'from-emerald-500 to-green-600', icon: Shield, ring: 'ring-emerald-400' },
-    procedures: { bg: 'from-violet-500 to-purple-600', icon: ClipboardList, ring: 'ring-violet-400' },
-    ai: { bg: 'from-cyan-500 to-blue-600', icon: Bot, ring: 'ring-cyan-400' }
+// Animated AI Avatar - Personnage animé avec idle/speaking states
+const AnimatedAvatar = ({ agent, isActive, isSpeaking, onClick }) => {
+  const [blinkState, setBlinkState] = useState(false);
+
+  // Blinking animation
+  useEffect(() => {
+    const blinkInterval = setInterval(() => {
+      setBlinkState(true);
+      setTimeout(() => setBlinkState(false), 150);
+    }, 3000 + Math.random() * 2000);
+    return () => clearInterval(blinkInterval);
+  }, []);
+
+  const avatarConfig = {
+    maintenance: {
+      color: '#f59e0b',
+      bgGradient: 'from-amber-500 to-orange-600',
+      skinTone: '#e0ac69',
+      hairColor: '#4a3728',
+      shirtColor: '#f59e0b',
+      name: 'Alex',
+      role: 'Maintenance'
+    },
+    troubleshooting: {
+      color: '#ef4444',
+      bgGradient: 'from-red-500 to-rose-600',
+      skinTone: '#c68642',
+      hairColor: '#1a1a1a',
+      shirtColor: '#ef4444',
+      name: 'Sam',
+      role: 'Dépannages'
+    },
+    equipment: {
+      color: '#3b82f6',
+      bgGradient: 'from-blue-500 to-indigo-600',
+      skinTone: '#ffd5c8',
+      hairColor: '#8b4513',
+      shirtColor: '#3b82f6',
+      name: 'Jordan',
+      role: 'Équipements'
+    },
+    security: {
+      color: '#10b981',
+      bgGradient: 'from-emerald-500 to-green-600',
+      skinTone: '#d4a574',
+      hairColor: '#2d1b0e',
+      shirtColor: '#10b981',
+      name: 'Morgan',
+      role: 'Sécurité'
+    },
+    procedures: {
+      color: '#8b5cf6',
+      bgGradient: 'from-violet-500 to-purple-600',
+      skinTone: '#e8beac',
+      hairColor: '#4a0e0e',
+      shirtColor: '#8b5cf6',
+      name: 'Taylor',
+      role: 'Procédures'
+    }
   };
 
-  const style = avatarStyles[agent.type] || avatarStyles.ai;
-  const Icon = style.icon;
+  const config = avatarConfig[agent.type] || avatarConfig.equipment;
 
   return (
     <motion.button
       onClick={onClick}
-      className={`relative flex flex-col items-center gap-2 p-2 rounded-xl transition-all ${
-        isActive ? 'bg-white/10 scale-105' : 'hover:bg-white/5'
+      className={`relative flex flex-col items-center gap-2 p-3 rounded-2xl transition-all ${
+        isActive ? 'bg-white/15 scale-105' : 'hover:bg-white/5'
       }`}
       whileHover={{ scale: 1.05 }}
       whileTap={{ scale: 0.95 }}
     >
-      {/* Avatar */}
-      <div className={`relative w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-gradient-to-br ${style.bg} flex items-center justify-center shadow-lg ${
-        isActive ? `ring-4 ${style.ring} ring-opacity-50` : ''
+      {/* Video-like frame with avatar */}
+      <div className={`relative w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden shadow-2xl ${
+        isActive ? 'ring-4 ring-white/50' : ''
       }`}>
-        <Icon size={24} className="text-white" />
+        {/* Background gradient */}
+        <div className={`absolute inset-0 bg-gradient-to-br ${config.bgGradient}`} />
 
-        {/* Speaking indicator */}
+        {/* Animated character SVG */}
+        <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full">
+          {/* Body/Shoulders */}
+          <motion.ellipse
+            cx="50"
+            cy="95"
+            rx="35"
+            ry="20"
+            fill={config.shirtColor}
+            animate={isSpeaking ? {
+              cy: [95, 93, 95],
+            } : {
+              cy: [95, 94, 95]
+            }}
+            transition={{
+              duration: isSpeaking ? 0.3 : 3,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+
+          {/* Neck */}
+          <rect x="43" y="65" width="14" height="12" fill={config.skinTone} rx="2" />
+
+          {/* Head */}
+          <motion.ellipse
+            cx="50"
+            cy="45"
+            rx="22"
+            ry="26"
+            fill={config.skinTone}
+            animate={isSpeaking ? {
+              cy: [45, 43, 45, 44, 45],
+              scale: [1, 1.02, 1, 1.01, 1]
+            } : {
+              cy: [45, 44.5, 45]
+            }}
+            transition={{
+              duration: isSpeaking ? 0.5 : 4,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+
+          {/* Hair */}
+          <motion.path
+            d={`M28 40 Q30 15, 50 12 Q70 15, 72 40 Q70 30, 50 28 Q30 30, 28 40`}
+            fill={config.hairColor}
+            animate={isSpeaking ? { d: [
+              "M28 40 Q30 15, 50 12 Q70 15, 72 40 Q70 30, 50 28 Q30 30, 28 40",
+              "M28 39 Q30 14, 50 11 Q70 14, 72 39 Q70 29, 50 27 Q30 29, 28 39",
+              "M28 40 Q30 15, 50 12 Q70 15, 72 40 Q70 30, 50 28 Q30 30, 28 40"
+            ]} : {}}
+            transition={{ duration: 0.5, repeat: Infinity }}
+          />
+
+          {/* Eyes */}
+          <motion.g
+            animate={blinkState ? { scaleY: 0.1 } : { scaleY: 1 }}
+            style={{ originY: '50%' }}
+          >
+            {/* Left eye */}
+            <ellipse cx="40" cy="42" rx="4" ry="5" fill="white" />
+            <motion.circle
+              cx="40"
+              cy="43"
+              r="2.5"
+              fill="#1a1a1a"
+              animate={isActive ? { cx: [40, 41, 40, 39, 40] } : {}}
+              transition={{ duration: 2, repeat: Infinity }}
+            />
+            <circle cx="41" cy="42" r="1" fill="white" />
+
+            {/* Right eye */}
+            <ellipse cx="60" cy="42" rx="4" ry="5" fill="white" />
+            <motion.circle
+              cx="60"
+              cy="43"
+              r="2.5"
+              fill="#1a1a1a"
+              animate={isActive ? { cx: [60, 61, 60, 59, 60] } : {}}
+              transition={{ duration: 2, repeat: Infinity }}
+            />
+            <circle cx="61" cy="42" r="1" fill="white" />
+          </motion.g>
+
+          {/* Eyebrows */}
+          <motion.path
+            d="M35 36 Q40 34, 45 36"
+            stroke={config.hairColor}
+            strokeWidth="2"
+            fill="none"
+            strokeLinecap="round"
+            animate={isSpeaking ? { d: [
+              "M35 36 Q40 34, 45 36",
+              "M35 34 Q40 32, 45 34",
+              "M35 36 Q40 34, 45 36"
+            ]} : {}}
+            transition={{ duration: 0.4, repeat: Infinity }}
+          />
+          <motion.path
+            d="M55 36 Q60 34, 65 36"
+            stroke={config.hairColor}
+            strokeWidth="2"
+            fill="none"
+            strokeLinecap="round"
+            animate={isSpeaking ? { d: [
+              "M55 36 Q60 34, 65 36",
+              "M55 34 Q60 32, 65 34",
+              "M55 36 Q60 34, 65 36"
+            ]} : {}}
+            transition={{ duration: 0.4, repeat: Infinity }}
+          />
+
+          {/* Nose */}
+          <path d="M48 48 Q50 52, 52 48" stroke={config.skinTone} strokeWidth="2" fill="none" filter="brightness(0.9)" />
+
+          {/* Mouth - animated when speaking */}
+          <motion.ellipse
+            cx="50"
+            cy="58"
+            rx={isSpeaking ? "6" : "4"}
+            ry={isSpeaking ? "4" : "2"}
+            fill={isSpeaking ? "#c44" : "#b55"}
+            animate={isSpeaking ? {
+              ry: [2, 5, 3, 6, 2, 4, 2],
+              rx: [4, 7, 5, 8, 4, 6, 4]
+            } : {
+              ry: [2, 2.2, 2]
+            }}
+            transition={{
+              duration: isSpeaking ? 0.4 : 2,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+
+          {/* Smile line when not speaking */}
+          {!isSpeaking && (
+            <path
+              d="M44 58 Q50 62, 56 58"
+              stroke="#a44"
+              strokeWidth="1.5"
+              fill="none"
+              strokeLinecap="round"
+            />
+          )}
+        </svg>
+
+        {/* Speaking indicator waves */}
         {isSpeaking && (
+          <div className="absolute bottom-1 left-1/2 -translate-x-1/2 flex gap-0.5">
+            {[0, 1, 2, 3, 4].map(i => (
+              <motion.div
+                key={i}
+                className="w-1 bg-white rounded-full"
+                animate={{ height: [4, 12, 4] }}
+                transition={{
+                  duration: 0.4,
+                  repeat: Infinity,
+                  delay: i * 0.1,
+                  ease: "easeInOut"
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Active indicator glow */}
+        {isActive && (
           <motion.div
-            className="absolute inset-0 rounded-full border-4 border-white/50"
-            animate={{ scale: [1, 1.15, 1], opacity: [0.7, 0, 0.7] }}
-            transition={{ duration: 1.5, repeat: Infinity }}
+            className="absolute inset-0 bg-white/20"
+            animate={{ opacity: [0.1, 0.3, 0.1] }}
+            transition={{ duration: 2, repeat: Infinity }}
           />
         )}
 
-        {/* Notification badge */}
-        {agent.alertCount > 0 && (
-          <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center shadow-lg">
-            {agent.alertCount > 9 ? '9+' : agent.alertCount}
-          </span>
+        {/* Live badge when speaking */}
+        {isSpeaking && (
+          <div className="absolute top-1 left-1 flex items-center gap-1 px-1.5 py-0.5 bg-red-500 rounded text-[8px] font-bold text-white">
+            <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
+            LIVE
+          </div>
         )}
       </div>
 
-      {/* Name */}
-      <span className={`text-xs font-medium text-center leading-tight ${
-        isActive ? 'text-white' : 'text-slate-300'
-      }`}>
-        {agent.name}
-      </span>
+      {/* Alert badge */}
+      {agent.alertCount > 0 && (
+        <motion.span
+          className="absolute -top-1 -right-1 w-6 h-6 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center shadow-lg"
+          animate={{ scale: [1, 1.1, 1] }}
+          transition={{ duration: 1, repeat: Infinity }}
+        >
+          {agent.alertCount > 9 ? '9+' : agent.alertCount}
+        </motion.span>
+      )}
+
+      {/* Name tag */}
+      <div className="text-center">
+        <p className={`text-sm font-bold ${isActive ? 'text-white' : 'text-slate-200'}`}>
+          {config.name}
+        </p>
+        <p className="text-xs text-slate-400">{config.role}</p>
+      </div>
     </motion.button>
   );
 };
@@ -79,6 +309,14 @@ const SpeechBubble = ({ agent, items, onItemClick, onClose }) => {
     ai: { accent: 'border-cyan-500', bg: 'bg-cyan-50', text: 'text-cyan-900', badge: 'bg-cyan-100 text-cyan-700' }
   };
 
+  const agentNames = {
+    maintenance: 'Alex - Maintenance',
+    troubleshooting: 'Sam - Dépannages',
+    equipment: 'Jordan - Équipements',
+    security: 'Morgan - Sécurité',
+    procedures: 'Taylor - Procédures'
+  };
+
   const style = bubbleStyles[agent.type] || bubbleStyles.ai;
 
   return (
@@ -91,8 +329,9 @@ const SpeechBubble = ({ agent, items, onItemClick, onClose }) => {
       {/* Header */}
       <div className={`${style.bg} px-4 py-3 flex items-center justify-between`}>
         <div className="flex items-center gap-2">
-          <MessageCircle size={16} className={style.text} />
-          <span className={`font-semibold ${style.text}`}>{agent.name}</span>
+          <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+          <span className={`font-semibold ${style.text}`}>{agentNames[agent.type] || agent.name}</span>
+          <span className="text-xs text-slate-500">parle...</span>
         </div>
         <button
           onClick={onClose}
@@ -105,9 +344,13 @@ const SpeechBubble = ({ agent, items, onItemClick, onClose }) => {
       {/* Content */}
       <div className="p-4 space-y-3 max-h-64 overflow-y-auto">
         {items.length === 0 ? (
-          <p className="text-slate-500 text-sm text-center py-4">
-            Aucune information à signaler
-          </p>
+          <div className="text-center py-6">
+            <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-3">
+              <CheckCircle size={24} className="text-emerald-500" />
+            </div>
+            <p className="text-slate-600 font-medium">Rien à signaler !</p>
+            <p className="text-slate-400 text-sm">Tout est en ordre de mon côté.</p>
+          </div>
         ) : (
           items.map((item, idx) => (
             <motion.button
@@ -266,21 +509,21 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
   const loadBriefingData = async () => {
     setIsLoading(true);
     try {
-      // Fetch all data in parallel
+      // Fetch all data in parallel using fetch directly
       const [morningBrief, activitiesRes, troubleshootingRes] = await Promise.all([
         aiAssistant.getMorningBrief().catch(e => null),
-        api.get('/dashboard/activities?limit=20').catch(e => ({ data: { recent: [] } })),
-        api.get('/troubleshooting/list?limit=10').catch(e => ({ data: { records: [] } }))
+        fetch('/api/dashboard/activities?limit=20').then(r => r.json()).catch(e => ({ recent: [] })),
+        fetch('/api/troubleshooting/list?limit=10').then(r => r.json()).catch(e => ({ records: [] }))
       ]);
 
       // Process activities for timeline
-      const recentActivities = (activitiesRes?.data?.recent || []).map(a => ({
+      const recentActivities = (activitiesRes?.recent || []).map(a => ({
         ...a,
         timeAgo: getTimeAgo(a.timestamp)
       }));
 
       // Build agents data
-      const agents = buildAgentsData(morningBrief, troubleshootingRes?.data?.records || [], recentActivities);
+      const agents = buildAgentsData(morningBrief, troubleshootingRes?.records || [], recentActivities);
 
       setBriefingData({
         brief: morningBrief,
@@ -290,7 +533,7 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
           totalEquipment: morningBrief?.stats?.totalEquipment || 0,
           overdueControls: morningBrief?.stats?.controls?.overdue || 0,
           completedToday: morningBrief?.stats?.controls?.completedThisWeek || 0,
-          troubleshootingToday: troubleshootingRes?.data?.records?.filter(r =>
+          troubleshootingToday: troubleshootingRes?.records?.filter(r =>
             new Date(r.created_at).toDateString() === new Date().toDateString()
           ).length || 0
         }
@@ -464,15 +707,27 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
 
   if (isLoading) {
     return (
-      <div className="min-h-[400px] bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-2xl p-6 flex items-center justify-center">
+      <div className="min-h-[500px] bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-2xl p-6 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
-          >
-            <RefreshCw size={32} className="text-blue-400" />
-          </motion.div>
-          <p className="text-slate-400">Préparation du briefing...</p>
+          <div className="relative">
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+            >
+              <RefreshCw size={40} className="text-blue-400" />
+            </motion.div>
+          </div>
+          <p className="text-slate-400 text-lg">Connexion aux agents...</p>
+          <div className="flex gap-2">
+            {[0, 1, 2, 3, 4].map(i => (
+              <motion.div
+                key={i}
+                className="w-3 h-3 bg-blue-500 rounded-full"
+                animate={{ opacity: [0.3, 1, 0.3] }}
+                transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
+              />
+            ))}
+          </div>
         </div>
       </div>
     );
@@ -491,13 +746,19 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
               <Users size={24} className="text-white" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-lg sm:text-xl font-bold text-white truncate">
-                Briefing du {currentTime.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
+              <h2 className="text-lg sm:text-xl font-bold text-white truncate flex items-center gap-2">
+                Briefing Équipe
+                <span className="flex items-center gap-1 px-2 py-0.5 bg-red-500/20 rounded text-xs text-red-400 font-medium">
+                  <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+                  EN DIRECT
+                </span>
               </h2>
               <p className="text-slate-400 text-sm flex items-center gap-2">
+                <Calendar size={12} />
+                <span>{currentTime.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+                <span>•</span>
                 <Clock size={12} />
                 <span>{currentTime.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
-                <span className="hidden sm:inline">• Bonjour {userName || 'Technicien'}</span>
               </p>
             </div>
           </div>
@@ -572,16 +833,16 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
         </div>
       </div>
 
-      {/* Main Content - Meeting Table Layout */}
+      {/* Main Content - Video Conference Layout */}
       <div className="p-4 sm:p-6">
-        {/* Agents Row - "Participants" around the table */}
-        <div className="flex justify-center gap-2 sm:gap-4 mb-6 overflow-x-auto pb-2">
+        {/* Agents Row - "Participants" with video avatars */}
+        <div className="flex justify-center gap-3 sm:gap-6 mb-6 overflow-x-auto pb-2">
           {briefingData?.agents && Object.entries(briefingData.agents).map(([key, agent]) => (
-            <AgentAvatar
+            <AnimatedAvatar
               key={key}
               agent={agent}
               isActive={activeAgent === key}
-              isSpeaking={activeAgent === key && isAutoPlay}
+              isSpeaking={activeAgent === key}
               onClick={() => setActiveAgent(activeAgent === key ? null : key)}
             />
           ))}
@@ -610,9 +871,9 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
             <div className="w-16 h-16 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
               <MessageCircle size={28} className="text-blue-400" />
             </div>
-            <h3 className="text-white font-semibold mb-2">Bienvenue au briefing</h3>
+            <h3 className="text-white font-semibold mb-2">Bienvenue au briefing !</h3>
             <p className="text-slate-400 text-sm mb-4">
-              Cliquez sur un agent pour voir ses informations, ou activez le défilement automatique.
+              Cliquez sur un agent pour voir ses infos, ou activez le défilement automatique.
             </p>
             <div className="flex flex-wrap justify-center gap-2">
               {briefingData?.agents && Object.entries(briefingData.agents)
@@ -649,7 +910,7 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
           </button>
         </div>
 
-        <div className="space-y-2 max-h-64 overflow-y-auto">
+        <div className="space-y-2 max-h-48 overflow-y-auto">
           {activities.length === 0 ? (
             <p className="text-slate-500 text-sm text-center py-4">
               Aucune activité récente
