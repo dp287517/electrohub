@@ -399,13 +399,25 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
       const data = buildAgentData(morningBrief, troubleshootingRes?.records || [], controlsDashboard?.stats);
       setAgentData(data);
 
+      // Calculate stats from the real data
+      const overdueByType = controlsDashboard?.stats?.overdueByEquipment || {};
+      const totalOverdue = Object.values(overdueByType).reduce((sum, count) => sum + (count || 0), 0);
+      const completedRecent = controlsDashboard?.stats?.completed_30d || 0;
+      const todaysTroubleshooting = (troubleshootingRes?.records || []).filter(r =>
+        new Date(r.created_at).toDateString() === new Date().toDateString()
+      ).length;
+
+      // Calculate health score based on actual data
+      let healthScore = 100;
+      healthScore -= Math.min(totalOverdue * 10, 40); // -10 per overdue, max -40
+      healthScore -= Math.min(todaysTroubleshooting * 5, 20); // -5 per troubleshooting today, max -20
+      healthScore = Math.max(0, Math.min(100, Math.round(healthScore)));
+
       setStats({
-        healthScore: morningBrief?.healthScore || 85,
-        overdueControls: controlsDashboard?.stats?.overdue || 0,
-        completedToday: controlsDashboard?.stats?.completed_30d || 0,
-        troubleshootingToday: (troubleshootingRes?.records || []).filter(r =>
-          new Date(r.created_at).toDateString() === new Date().toDateString()
-        ).length
+        healthScore: morningBrief?.healthScore || healthScore,
+        overdueControls: totalOverdue,
+        completedToday: completedRecent,
+        troubleshootingToday: todaysTroubleshooting
       });
 
       // Welcome message from main agent
