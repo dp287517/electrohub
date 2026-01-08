@@ -497,8 +497,9 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
       const agentOutages = outagesByAgent[agentType] || [];
       const healthScore = snapshot?.health_score || null;
       const healthColor = healthScore >= 80 ? '#22C55E' : healthScore >= 60 ? '#FBBF24' : '#DC2626';
-      const hasImage = agentImages[agentType];
-      const imageUrl = hasImage ? `${APP_URL}/api/admin/settings/ai-agents/${agentType}/image` : null;
+      const imageData = agentImages[agentType];
+      // Use CID for email attachments, HTTP URL for browser preview
+      const imageUrl = imageData?.hasCid ? `cid:${imageData.cid}` : imageData?.httpUrl || null;
       const agentName = agentCustomNames[agentType] || agent.name;
 
       return `
@@ -506,7 +507,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
       <div class="agent-section">
         <div class="agent-header">
           ${imageUrl ? `
-            <img src="${imageUrl}" alt="${agentName}" class="agent-avatar" />
+            <img src="${imageUrl}" alt="${agentName}" class="agent-avatar" style="width: 70px; height: 70px; border-radius: 12px; object-fit: cover;" />
           ` : `
             <div class="agent-avatar-fallback" style="background: linear-gradient(135deg, ${agent.color}, ${agent.color}CC);">
               ${agent.icon}
@@ -620,24 +621,67 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
 // ============================================================
 
 /**
- * Get which agents have uploaded images (for email display)
+ * Get agent images data for embedding in emails (CID attachments)
+ * Returns both the list of agents with images AND the actual binary data
  */
-async function getAgentImages() {
+async function getAgentImagesData() {
+  try {
+    const result = await pool.query(`
+      SELECT key, binary_data, mime_type FROM app_settings
+      WHERE key LIKE 'ai_image_%' AND binary_data IS NOT NULL
+    `);
+
+    const agentImages = {};
+    const attachments = [];
+
+    result.rows.forEach(row => {
+      const agentType = row.key.replace('ai_image_', '');
+      const cid = `agent-${agentType}-image`;
+
+      agentImages[agentType] = {
+        hasCid: true,
+        cid: cid
+      };
+
+      // Add as attachment for SendGrid
+      attachments.push({
+        content: row.binary_data.toString('base64'),
+        filename: `${agentType}.${row.mime_type?.split('/')[1] || 'png'}`,
+        type: row.mime_type || 'image/png',
+        disposition: 'inline',
+        content_id: cid
+      });
+    });
+
+    return { agentImages, attachments };
+  } catch (error) {
+    console.error('[SendGrid] Error fetching agent images:', error.message);
+    return { agentImages: {}, attachments: [] };
+  }
+}
+
+/**
+ * Get agent images info for preview (uses HTTP URLs, not CID)
+ */
+async function getAgentImagesForPreview() {
   try {
     const result = await pool.query(`
       SELECT key FROM app_settings
-      WHERE key LIKE 'ai_image_%'
+      WHERE key LIKE 'ai_image_%' AND binary_data IS NOT NULL
     `);
 
     const agentImages = {};
     result.rows.forEach(row => {
       const agentType = row.key.replace('ai_image_', '');
-      agentImages[agentType] = true;
+      agentImages[agentType] = {
+        hasCid: false,
+        httpUrl: `${APP_URL}/api/admin/settings/ai-agents/${agentType}/image`
+      };
     });
 
     return agentImages;
   } catch (error) {
-    console.error('[SendGrid] Error fetching agent images:', error.message);
+    console.error('[SendGrid] Error fetching agent images for preview:', error.message);
     return {};
   }
 }
@@ -680,13 +724,15 @@ async function sendDailyOutageReport(email, site) {
 
   try {
     // Fetch all necessary data including agent images and custom names
-    const [outages, agentSnapshots, stats, agentImages, agentCustomNames] = await Promise.all([
+    const [outages, agentSnapshots, stats, agentImagesData, agentCustomNames] = await Promise.all([
       getYesterdayOutages(site),
       getYesterdayAgentSnapshots(site),
       getDayStats(site),
-      getAgentImages(),
+      getAgentImagesData(),
       getAgentCustomNames()
     ]);
+
+    const { agentImages, attachments } = agentImagesData;
 
     // Generate email HTML
     const htmlContent = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats, agentImages, agentCustomNames);
@@ -705,6 +751,12 @@ async function sendDailyOutageReport(email, site) {
         openTracking: { enable: true }
       }
     };
+
+    // Add inline image attachments if any
+    if (attachments.length > 0) {
+      msg.attachments = attachments;
+      console.log(`[SendGrid] Including ${attachments.length} inline image(s) in email`);
+    }
 
     // Send email
     const response = await sgMail.send(msg);
@@ -957,7 +1009,7 @@ router.get('/preview', async (req, res) => {
       getYesterdayOutages(site),
       getYesterdayAgentSnapshots(site),
       getDayStats(site),
-      getAgentImages(),
+      getAgentImagesForPreview(),
       getAgentCustomNames()
     ]);
 
