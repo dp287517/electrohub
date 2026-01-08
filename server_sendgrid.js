@@ -365,7 +365,7 @@ function generateAgentAvatarSVG(agentType, size = 40) {
  * Generate the full HTML email template
  * Structure: For each agent with data, show agent info + their troubleshooting table
  */
-function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, agentImages = {}) {
+function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, agentImages = {}, agentCustomNames = {}) {
   const formattedDate = formatDateFr(date);
   const hasOutages = outages.length > 0;
 
@@ -499,20 +499,21 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
       const healthColor = healthScore >= 80 ? '#22C55E' : healthScore >= 60 ? '#FBBF24' : '#DC2626';
       const hasImage = agentImages[agentType];
       const imageUrl = hasImage ? `${APP_URL}/api/admin/settings/ai-agents/${agentType}/image` : null;
+      const agentName = agentCustomNames[agentType] || agent.name;
 
       return `
-      <!-- Agent Section: ${agent.name} -->
+      <!-- Agent Section: ${agentName} -->
       <div class="agent-section">
         <div class="agent-header">
           ${imageUrl ? `
-            <img src="${imageUrl}" alt="${agent.name}" class="agent-avatar" />
+            <img src="${imageUrl}" alt="${agentName}" class="agent-avatar" />
           ` : `
             <div class="agent-avatar-fallback" style="background: linear-gradient(135deg, ${agent.color}, ${agent.color}CC);">
               ${agent.icon}
             </div>
           `}
           <div class="agent-header-info">
-            <div class="agent-name">${agent.name}</div>
+            <div class="agent-name">${agentName}</div>
             <div class="agent-domain">${agent.description}</div>
             ${snapshot?.ai_summary ? `<div class="agent-summary">${snapshot.ai_summary}</div>` : ''}
             <div class="agent-metrics">
@@ -642,6 +643,31 @@ async function getAgentImages() {
 }
 
 /**
+ * Get custom agent names from database
+ */
+async function getAgentCustomNames() {
+  try {
+    const result = await pool.query(`
+      SELECT key, text_value FROM app_settings
+      WHERE key LIKE 'ai_agent_name_%'
+    `);
+
+    const customNames = {};
+    result.rows.forEach(row => {
+      const agentType = row.key.replace('ai_agent_name_', '');
+      if (row.text_value) {
+        customNames[agentType] = row.text_value;
+      }
+    });
+
+    return customNames;
+  } catch (error) {
+    console.error('[SendGrid] Error fetching agent names:', error.message);
+    return {};
+  }
+}
+
+/**
  * Send the daily outage report email
  */
 async function sendDailyOutageReport(email, site) {
@@ -653,16 +679,17 @@ async function sendDailyOutageReport(email, site) {
   const yesterday = getYesterdayDate();
 
   try {
-    // Fetch all necessary data including agent images
-    const [outages, agentSnapshots, stats, agentImages] = await Promise.all([
+    // Fetch all necessary data including agent images and custom names
+    const [outages, agentSnapshots, stats, agentImages, agentCustomNames] = await Promise.all([
       getYesterdayOutages(site),
       getYesterdayAgentSnapshots(site),
       getDayStats(site),
-      getAgentImages()
+      getAgentImages(),
+      getAgentCustomNames()
     ]);
 
     // Generate email HTML
-    const htmlContent = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats, agentImages);
+    const htmlContent = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats, agentImages, agentCustomNames);
 
     // Prepare email
     const msg = {
@@ -926,14 +953,15 @@ router.get('/preview', async (req, res) => {
     const site = req.query.site || 'default';
     const yesterday = getYesterdayDate();
 
-    const [outages, agentSnapshots, stats, agentImages] = await Promise.all([
+    const [outages, agentSnapshots, stats, agentImages, agentCustomNames] = await Promise.all([
       getYesterdayOutages(site),
       getYesterdayAgentSnapshots(site),
       getDayStats(site),
-      getAgentImages()
+      getAgentImages(),
+      getAgentCustomNames()
     ]);
 
-    const html = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats, agentImages);
+    const html = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats, agentImages, agentCustomNames);
 
     res.setHeader('Content-Type', 'text/html');
     res.send(html);
