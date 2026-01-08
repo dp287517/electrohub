@@ -566,6 +566,14 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
     // Get current active agent info
     const currentAgent = agents.find(a => a.type === activeAgent);
 
+    // Build briefing context with agent data for the AI
+    const briefingContext = {};
+    Object.entries(agentData).forEach(([agentType, data]) => {
+      if (data.items?.length > 0) {
+        briefingContext[agentType] = data.items.map(item => `${item.title}: ${item.description}`);
+      }
+    });
+
     // Add user message
     setMessages(prev => [...prev, {
       id: Date.now(),
@@ -588,13 +596,23 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
           activeAgentName: currentAgent?.customName || currentAgent?.name,
           activeAgentRole: currentAgent?.role,
           // This is what the backend uses to determine who should respond
-          previousAgentType: activeAgent
+          previousAgentType: activeAgent,
+          // Include briefing data so AI knows what each agent has to report
+          briefingData: briefingContext
         }
       });
 
-      // Use the active agent to respond (not what AI says)
-      // The user clicked on an agent, so that agent should respond
-      const respondingAgent = activeAgent || result.agentType || 'main';
+      // Determine which agent should respond
+      // If the AI transferred to another agent, use that agent
+      // Otherwise use the active agent
+      let respondingAgent = activeAgent;
+
+      if (result.agentType && result.agentType !== activeAgent) {
+        // AI decided to transfer to another agent
+        respondingAgent = result.agentType;
+        setActiveAgent(respondingAgent);
+      }
+
       setSpeakingAgent(respondingAgent);
 
       // Add agent response
