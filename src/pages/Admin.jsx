@@ -1735,6 +1735,7 @@ function PlanScaleTab() {
   const [scaleConfigs, setScaleConfigs] = useState({});
   const [editingPlan, setEditingPlan] = useState(null);
   const [scaleRatio, setScaleRatio] = useState('');
+  const [paperWidthCm, setPaperWidthCm] = useState('84'); // Default A1 width
   const [saving, setSaving] = useState(false);
 
   // Fetch plans
@@ -1767,34 +1768,35 @@ function PlanScaleTab() {
 
   useEffect(() => { fetchPlans(); }, []);
 
-  // Save scale from ratio
+  // Save scale from ratio and paper width
   // For architectural plans: 1:100 means 1cm on plan = 100cm real = 1m
-  // PDF rendered at ~150 DPI: 1 inch = 150 pixels = 25.4mm
-  // 1 pixel = 25.4/150 = 0.169mm = 0.000169m
-  // At scale 1:X, 1 pixel represents 0.000169 * X meters
-  const saveScaleFromRatio = async (plan, ratio) => {
-    console.log('[PlanScaleTab] saveScaleFromRatio called', { plan: plan?.id, ratio });
-    if (!plan || !ratio || ratio <= 0) {
+  // If paper width is W cm, the real width = W * ratio cm = W * ratio / 100 meters
+  const saveScaleFromRatio = async (plan, ratio, paperWidth) => {
+    console.log('[PlanScaleTab] saveScaleFromRatio called', { plan: plan?.id, ratio, paperWidth });
+    if (!plan || !ratio || ratio <= 0 || !paperWidth || paperWidth <= 0) {
       console.log('[PlanScaleTab] Invalid params, aborting');
       return;
     }
 
     setSaving(true);
     try {
-      // Approximate: PDF at 150 DPI, 1 pixel on plan = (25.4/150) mm
-      // At scale 1:ratio, real distance = pixel_mm * ratio / 1000 meters
-      const pixelSizeMm = 25.4 / 150; // ~0.169 mm per pixel
-      const metersPerPixel = (pixelSizeMm * ratio) / 1000;
+      // Calculate real width from paper width and ratio
+      // Paper width W cm at scale 1:ratio = W * ratio cm real = W * ratio / 100 m real
+      const realWidthMeters = (paperWidth * ratio) / 100;
 
+      // For normalized coordinates (0-1 range), we use imageWidth=1 conceptually
+      // This means the metersPerPixel stored will equal the full width in meters
+      // When measuring, normalized_distance * metersPerPixel * imageWidth(1) = correct distance
       const payload = {
         planId: plan.id,
         pageIndex: 0,
         point1: { x: 0, y: 0 },
         point2: { x: 1, y: 0 },
-        realDistanceMeters: metersPerPixel * 1000, // Distance for 1000 pixels
-        imageWidth: 1000,
-        imageHeight: 750,
-        scaleRatio: ratio
+        realDistanceMeters: realWidthMeters, // Real distance for full normalized width
+        imageWidth: 1, // Use 1 so metersPerPixel = realWidthMeters
+        imageHeight: 1, // Keep aspect neutral
+        scaleRatio: ratio,
+        paperWidthCm: paperWidth
       };
       console.log('[PlanScaleTab] Sending payload:', payload);
 
@@ -1911,25 +1913,34 @@ function PlanScaleTab() {
 
                     {/* Edit Scale */}
                     {isEditing ? (
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-gray-600">1 :</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm text-gray-600">Échelle 1 :</span>
                         <input
                           type="number"
                           value={scaleRatio}
                           onChange={(e) => setScaleRatio(e.target.value)}
                           placeholder="100"
-                          className="w-24 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                          className="w-20 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
                           autoFocus
                         />
+                        <span className="text-sm text-gray-600">Largeur:</span>
+                        <input
+                          type="number"
+                          value={paperWidthCm}
+                          onChange={(e) => setPaperWidthCm(e.target.value)}
+                          placeholder="84"
+                          className="w-20 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                        />
+                        <span className="text-sm text-gray-600">cm</span>
                         <button
-                          onClick={() => saveScaleFromRatio(plan, parseFloat(scaleRatio))}
-                          disabled={!scaleRatio || saving}
+                          onClick={() => saveScaleFromRatio(plan, parseFloat(scaleRatio), parseFloat(paperWidthCm))}
+                          disabled={!scaleRatio || !paperWidthCm || saving}
                           className="p-2 bg-green-500 hover:bg-green-600 text-white rounded-lg disabled:opacity-50"
                         >
                           {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
                         </button>
                         <button
-                          onClick={() => { setEditingPlan(null); setScaleRatio(''); }}
+                          onClick={() => { setEditingPlan(null); setScaleRatio(''); setPaperWidthCm('84'); }}
                           className="p-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg"
                         >
                           <X size={16} />
@@ -1961,15 +1972,26 @@ function PlanScaleTab() {
 
       {/* Help section */}
       <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
-        <h4 className="font-medium text-blue-900 mb-2">Comment trouver l'echelle ?</h4>
-        <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
-          <li><strong>1:50</strong> - Plans de details (1 cm = 50 cm)</li>
-          <li><strong>1:100</strong> - Plans d'etage standards (1 cm = 1 m)</li>
-          <li><strong>1:200</strong> - Plans de batiment (1 cm = 2 m)</li>
-          <li><strong>1:500</strong> - Plans de site (1 cm = 5 m)</li>
-        </ul>
-        <p className="text-xs text-blue-600 mt-2">
-          L'echelle est generalement indiquee dans le cartouche du plan.
+        <h4 className="font-medium text-blue-900 mb-2">Comment configurer l'échelle ?</h4>
+        <div className="text-sm text-blue-800 space-y-2">
+          <p><strong>Échelle:</strong> L'échelle est généralement indiquée dans le cartouche du plan.</p>
+          <ul className="space-y-1 list-disc list-inside ml-2">
+            <li><strong>1:50</strong> - Plans de détails (1 cm = 50 cm)</li>
+            <li><strong>1:100</strong> - Plans d'étage standards (1 cm = 1 m)</li>
+            <li><strong>1:200</strong> - Plans de bâtiment (1 cm = 2 m)</li>
+            <li><strong>1:500</strong> - Plans de site (1 cm = 5 m)</li>
+          </ul>
+          <p className="mt-2"><strong>Largeur du plan:</strong> Mesurez la largeur du plan imprimé/papier en cm.</p>
+          <ul className="space-y-1 list-disc list-inside ml-2">
+            <li><strong>A4 paysage</strong> - 29.7 cm</li>
+            <li><strong>A3 paysage</strong> - 42 cm</li>
+            <li><strong>A2 paysage</strong> - 59.4 cm</li>
+            <li><strong>A1 paysage</strong> - 84.1 cm</li>
+            <li><strong>A0 paysage</strong> - 118.9 cm</li>
+          </ul>
+        </div>
+        <p className="text-xs text-blue-600 mt-3">
+          💡 Pour une calibration plus précise, utilisez l'outil "Définir l'échelle" sur la page carte elle-même.
         </p>
       </div>
     </div>
