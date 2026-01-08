@@ -857,9 +857,9 @@ router.post('/send-to-all', authenticateToken, async (req, res) => {
 
 /**
  * GET /api/sendgrid/preview
- * Preview the daily report email (for testing)
+ * Preview the daily report email (for testing - no auth required)
  */
-router.get('/preview', authenticateToken, async (req, res) => {
+router.get('/preview', async (req, res) => {
   try {
     const site = req.query.site || 'default';
     const yesterday = getYesterdayDate();
