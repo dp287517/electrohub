@@ -399,13 +399,25 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
       const data = buildAgentData(morningBrief, troubleshootingRes?.records || [], controlsDashboard?.stats);
       setAgentData(data);
 
+      // Calculate stats from the real data
+      const overdueByType = controlsDashboard?.stats?.overdueByEquipment || {};
+      const totalOverdue = Object.values(overdueByType).reduce((sum, count) => sum + (count || 0), 0);
+      const completedRecent = controlsDashboard?.stats?.completed_30d || 0;
+      const todaysTroubleshooting = (troubleshootingRes?.records || []).filter(r =>
+        new Date(r.created_at).toDateString() === new Date().toDateString()
+      ).length;
+
+      // Calculate health score based on actual data
+      let healthScore = 100;
+      healthScore -= Math.min(totalOverdue * 10, 40); // -10 per overdue, max -40
+      healthScore -= Math.min(todaysTroubleshooting * 5, 20); // -5 per troubleshooting today, max -20
+      healthScore = Math.max(0, Math.min(100, Math.round(healthScore)));
+
       setStats({
-        healthScore: morningBrief?.healthScore || 85,
-        overdueControls: controlsDashboard?.stats?.overdue || 0,
-        completedToday: controlsDashboard?.stats?.completed_30d || 0,
-        troubleshootingToday: (troubleshootingRes?.records || []).filter(r =>
-          new Date(r.created_at).toDateString() === new Date().toDateString()
-        ).length
+        healthScore: morningBrief?.healthScore || healthScore,
+        overdueControls: totalOverdue,
+        completedToday: completedRecent,
+        troubleshootingToday: todaysTroubleshooting
       });
 
       // Welcome message from main agent
@@ -566,6 +578,14 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
     // Get current active agent info
     const currentAgent = agents.find(a => a.type === activeAgent);
 
+    // Build briefing context with agent data for the AI
+    const briefingContext = {};
+    Object.entries(agentData).forEach(([agentType, data]) => {
+      if (data.items?.length > 0) {
+        briefingContext[agentType] = data.items.map(item => `${item.title}: ${item.description}`);
+      }
+    });
+
     // Add user message
     setMessages(prev => [...prev, {
       id: Date.now(),
@@ -588,13 +608,23 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
           activeAgentName: currentAgent?.customName || currentAgent?.name,
           activeAgentRole: currentAgent?.role,
           // This is what the backend uses to determine who should respond
-          previousAgentType: activeAgent
+          previousAgentType: activeAgent,
+          // Include briefing data so AI knows what each agent has to report
+          briefingData: briefingContext
         }
       });
 
-      // Use the active agent to respond (not what AI says)
-      // The user clicked on an agent, so that agent should respond
-      const respondingAgent = activeAgent || result.agentType || 'main';
+      // Determine which agent should respond
+      // If the AI transferred to another agent, use that agent
+      // Otherwise use the active agent
+      let respondingAgent = activeAgent;
+
+      if (result.agentType && result.agentType !== activeAgent) {
+        // AI decided to transfer to another agent
+        respondingAgent = result.agentType;
+        setActiveAgent(respondingAgent);
+      }
+
       setSpeakingAgent(respondingAgent);
 
       // Add agent response
