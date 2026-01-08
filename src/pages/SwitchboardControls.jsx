@@ -2263,62 +2263,78 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
     }
   };
 
-  // Calculate smart distribution dates grouped by building
+  // Calculate smart distribution dates - grouped by building/floor, spread across 12 months
   const calculateSmartDistribution = () => {
     if ((targetType !== 'switchboard' && !isMecaCategory) || !useSmartDistribution) return null;
 
     const equipmentList = getCurrentEquipmentList();
     const selectedEquipment = equipmentList.filter(eq => selectedIds.has(eq.id));
+    const total = selectedEquipment.length;
 
-    // Group by building (and floor if available)
-    const groups = {};
+    if (total === 0) return null;
+
+    // Step 1: Group equipment by building+floor (to keep same location together)
+    const locationGroups = {};
     selectedEquipment.forEach(eq => {
       const building = eq.building || eq.building_code || 'Sans bâtiment';
-      const floor = eq.floor || eq.meta?.floor || '';
-      const groupKey = floor ? `${building}|${floor}` : building;
-
-      if (!groups[groupKey]) {
-        groups[groupKey] = {
-          building,
-          floor,
-          items: []
-        };
+      const floor = eq.floor || '';
+      const key = `${building}|${floor}`;
+      if (!locationGroups[key]) {
+        locationGroups[key] = { building, floor, items: [] };
       }
-      groups[groupKey].items.push(eq);
+      locationGroups[key].items.push(eq);
     });
 
-    // Sort groups by building name then floor
-    const sortedGroups = Object.values(groups).sort((a, b) => {
+    // Step 2: Sort groups by building then floor
+    const sortedGroups = Object.values(locationGroups).sort((a, b) => {
       if (a.building !== b.building) return a.building.localeCompare(b.building);
       return (a.floor || '').localeCompare(b.floor || '');
     });
 
-    // Calculate dates - distribute groups across months
+    // Step 3: Calculate items per month to spread across 12 months
+    const itemsPerMonth = Math.ceil(total / 12);
     const [year, month] = startMonth.split('-').map(Number);
     const dateMapping = {};
-    let currentMonthOffset = 0;
-    let controlsInCurrentMonth = 0;
+    const monthGroups = []; // For preview display
 
+    let currentMonthOffset = 0;
+    let itemsInCurrentMonth = 0;
+
+    // Step 4: Distribute groups across months, keeping groups together
     sortedGroups.forEach(group => {
-      // Check if adding this group would exceed the monthly limit
-      if (controlsInCurrentMonth > 0 && controlsInCurrentMonth + group.items.length > controlsPerMonth) {
+      // If adding this group exceeds monthly target, move to next month
+      if (itemsInCurrentMonth > 0 && itemsInCurrentMonth + group.items.length > itemsPerMonth) {
         currentMonthOffset++;
-        controlsInCurrentMonth = 0;
+        itemsInCurrentMonth = 0;
       }
 
-      // Calculate the date for this group (15th of the month for stability)
       const groupDate = new Date(year, month - 1 + currentMonthOffset, 15);
       const dateStr = groupDate.toISOString().split('T')[0];
+      const monthName = groupDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 
-      // Assign the same date to all items in the group
+      // Assign date to all items in this group
       group.items.forEach(eq => {
         dateMapping[eq.id] = dateStr;
       });
 
-      controlsInCurrentMonth += group.items.length;
+      // Track for preview - show building/floor grouping
+      monthGroups.push({
+        building: group.building,
+        floor: group.floor,
+        monthName,
+        items: group.items
+      });
+
+      itemsInCurrentMonth += group.items.length;
     });
 
-    return { dateMapping, groups: sortedGroups, monthsNeeded: currentMonthOffset + 1 };
+    return {
+      dateMapping,
+      groups: monthGroups,
+      monthsNeeded: currentMonthOffset + 1,
+      itemsPerMonth,
+      totalItems: total
+    };
   };
 
   // Get distribution preview for UI
@@ -2772,49 +2788,32 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
 
               {useSmartDistribution && (
                 <div className="mt-4 space-y-3 pt-3 border-t border-amber-200">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Contrôles/mois</label>
-                      <input
-                        type="number"
-                        min="5"
-                        max="50"
-                        value={controlsPerMonth}
-                        onChange={(e) => setControlsPerMonth(Math.max(5, Math.min(50, parseInt(e.target.value) || 15)))}
-                        className="w-full border rounded-lg px-3 py-2 text-sm bg-white text-gray-900"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Mois de début</label>
-                      <input
-                        type="month"
-                        value={startMonth}
-                        onChange={(e) => setStartMonth(e.target.value)}
-                        className="w-full border rounded-lg px-3 py-2 text-sm bg-white text-gray-900"
-                      />
-                    </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Mois de début</label>
+                    <input
+                      type="month"
+                      value={startMonth}
+                      onChange={(e) => setStartMonth(e.target.value)}
+                      className="w-full border rounded-lg px-3 py-2 text-sm bg-white text-gray-900"
+                    />
                   </div>
 
                   {/* Distribution Preview */}
                   {distributionPreview && (
                     <div className="bg-white rounded-lg p-3 text-sm">
                       <p className="font-medium text-amber-800 mb-2">
-                        Répartition sur {distributionPreview.monthsNeeded} mois :
+                        {distributionPreview.totalItems} équipements sur {distributionPreview.monthsNeeded} mois (~{distributionPreview.itemsPerMonth}/mois)
                       </p>
-                      <div className="max-h-32 overflow-y-auto space-y-1">
-                        {distributionPreview.groups.map((group, idx) => {
-                          const date = distributionPreview.dateMapping[group.items[0].id];
-                          const monthName = new Date(date).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
-                          return (
-                            <div key={idx} className="flex justify-between text-xs">
-                              <span className="text-gray-600 truncate flex-1">
-                                {group.building}{group.floor ? ` (${group.floor})` : ''}
-                              </span>
-                              <span className="text-gray-500 ml-2">{group.items.length} tab.</span>
-                              <span className="text-amber-700 font-medium ml-2 w-24 text-right">{monthName}</span>
-                            </div>
-                          );
-                        })}
+                      <div className="max-h-40 overflow-y-auto space-y-1">
+                        {distributionPreview.groups.map((group, idx) => (
+                          <div key={idx} className="flex items-center justify-between text-xs py-1 border-b border-amber-100 last:border-0">
+                            <span className="text-gray-700 truncate flex-1">
+                              {group.building}{group.floor ? ` (${group.floor})` : ''}
+                            </span>
+                            <span className="text-gray-500 mx-2">{group.items.length} éq.</span>
+                            <span className="text-amber-700 font-medium">{group.monthName}</span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
