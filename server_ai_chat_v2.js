@@ -722,6 +722,23 @@ Quand il demande de transférer un dépannage vers un autre équipement, utilise
   prompt += `\n\n## DATE ET HEURE
 Aujourd'hui: ${dayNames[now.getDay()]} ${now.toLocaleDateString('fr-FR')} - ${now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
 
+  // Gestion des suggestions d'équipements
+  prompt += `\n\n## 🔍 SUGGESTIONS D'ÉQUIPEMENTS
+Quand **search_equipment** retourne des résultats avec has_suggestions=true :
+1. L'utilisateur a peut-être fait une faute de frappe ou utilisé un nom partiel
+2. Les suggestions sont des équipements qui correspondent aux mots-clés
+3. PRÉSENTE les suggestions de façon claire pour que l'utilisateur puisse choisir
+
+**Format de réponse avec suggestions :**
+"Je n'ai pas trouvé d'équipement correspondant exactement à **[recherche]**.
+
+🔍 **Équipements similaires trouvés :**
+(les suggestions s'affichent automatiquement en dessous comme boutons cliquables)
+
+Clique sur l'équipement qui correspond ou donne-moi plus de détails."
+
+**IMPORTANT**: Les suggestions s'affichent automatiquement comme boutons cliquables en dessous de ta réponse. Tu n'as PAS besoin de les lister à nouveau dans ton texte.`;
+
   // Instructions de formatage
   prompt += `\n\n## FORMAT DES RÉPONSES
 - Sois concis mais complet

@@ -2229,14 +2229,16 @@ function createToolHandlers(pool, site) {
           columns: 'id, name, code, building_code, floor, room',
           siteColumn: 'site',
           buildingCol: 'building_code',
-          codeCol: 'code'
+          codeCol: 'code',
+          label: 'Tableau électrique'
         },
         vsd: {
           table: 'vsd_equipments',
           columns: 'id, name, building as building_code, floor, location as room',
           siteColumn: 'site',
           buildingCol: 'building',
-          codeCol: null // pas de code/tag
+          codeCol: null, // pas de code/tag
+          label: 'Variateur (VSD)'
         },
         meca: {
           table: 'meca_equipments',
@@ -2245,7 +2247,8 @@ function createToolHandlers(pool, site) {
           siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id',
           siteCondition: "s.name = $1",
           buildingCol: 'building',
-          codeCol: null
+          codeCol: null,
+          label: 'Équipement mécanique'
         },
         atex: {
           table: 'atex_equipments',
@@ -2254,28 +2257,32 @@ function createToolHandlers(pool, site) {
           siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id',
           siteCondition: "s.name = $1",
           buildingCol: 'building',
-          codeCol: 'tag'
+          codeCol: 'tag',
+          label: 'Zone ATEX'
         },
         mobile: {
           table: 'me_equipments',
           columns: 'id, name, code, building as building_code, floor, location as room',
           siteColumn: null, // pas de filtre site apparent
           buildingCol: 'building',
-          codeCol: 'code'
+          codeCol: 'code',
+          label: 'Équipement mobile'
         },
         hv: {
           table: 'hv_equipments',
           columns: 'id, name, code, building_code, floor, room',
           siteColumn: null, // pas de filtre site apparent
           buildingCol: 'building_code',
-          codeCol: 'code'
+          codeCol: 'code',
+          label: 'Haute tension'
         },
         glo: {
           table: 'glo_equipments',
           columns: 'id, name, tag as code, building as building_code, floor, location as room',
           siteColumn: null,
           buildingCol: 'building',
-          codeCol: 'tag'
+          codeCol: 'tag',
+          label: 'Éclairage de sécurité'
         },
         datahub: {
           table: 'dh_items',
@@ -2283,14 +2290,26 @@ function createToolHandlers(pool, site) {
           siteColumn: 'site',
           buildingCol: 'building',
           codeCol: 'code',
-          hasCategory: true // Flag pour recherche dans catégories
+          hasCategory: true, // Flag pour recherche dans catégories
+          label: 'Capteur/Monitoring'
         },
         infrastructure: {
           table: 'inf_items',
           columns: 'id, name, code, building as building_code, floor, location as room',
           siteColumn: null,
           buildingCol: 'building',
-          codeCol: 'code'
+          codeCol: 'code',
+          label: 'Infrastructure'
+        },
+        doors: {
+          table: 'fd_doors',
+          columns: 'id, name, building as building_code, floor, location as room',
+          siteColumn: null,
+          siteJoin: 'INNER JOIN sites s ON s.id = {table}.site_id',
+          siteCondition: "s.name = $1",
+          buildingCol: 'building',
+          codeCol: null,
+          label: 'Porte coupe-feu'
         }
       };
 
@@ -2684,6 +2703,107 @@ function createToolHandlers(pool, site) {
 
       try {
         const result = await pool.query(query, queryParams);
+
+        return {
+          success: true,
+          count: result.rows.length,
+          equipment_type: actualType,
+          filters: { building, floor, name, code },
+          equipment: result.rows.map(eq => ({
+            id: eq.id,
+            name: eq.name,
+            code: eq.code,
+            building_code: eq.building_code,
+            floor: eq.floor,
+            room: eq.room,
+            equipment_type: actualType
+          })),
+          summary: result.rows.length === 0
+            ? `Aucun équipement ${actualType} trouvé avec ces critères.`
+            : `${result.rows.length} équipement(s) ${actualType} trouvé(s).`
+        };
+
+        // ========== SUGGESTIONS SI AUCUN RÉSULTAT ==========
+        // Si aucun résultat, chercher des suggestions dans le même type d'équipement
+        if (result.rows.length === 0 && name) {
+          try {
+            const searchName = name.toLowerCase();
+            // Préparer les termes de recherche (mots individuels + chiffres)
+            const searchTerms = searchName.split(/[\s.\-_]+/).filter(t => t.length >= 1);
+
+            let suggestQuery;
+            let suggestParams = [];
+
+            // Construire une requête de suggestions avec OR pour chaque terme
+            if (tableInfo.siteJoin) {
+              suggestQuery = `
+                SELECT ${tableInfo.columns}, '${actualType}' as equipment_type
+                FROM ${tableInfo.table} e
+                ${tableInfo.siteJoin.replace('{table}', 'e')}
+                WHERE ${tableInfo.siteCondition}
+                  AND (
+                    ${searchTerms.map((_, i) => `LOWER(e.name) LIKE $${i + 2}`).join(' OR ')}
+                    ${tableInfo.codeCol ? `OR ${searchTerms.map((_, i) => `LOWER(e.${tableInfo.codeCol}) LIKE $${i + 2}`).join(' OR ')}` : ''}
+                  )
+                ORDER BY e.name
+                LIMIT 10
+              `;
+              suggestParams = [site, ...searchTerms.map(t => `%${t}%`)];
+            } else if (tableInfo.siteColumn) {
+              suggestQuery = `
+                SELECT ${tableInfo.columns}, '${actualType}' as equipment_type
+                FROM ${tableInfo.table}
+                WHERE ${tableInfo.siteColumn} = $1
+                  AND (
+                    ${searchTerms.map((_, i) => `LOWER(name) LIKE $${i + 2}`).join(' OR ')}
+                    ${tableInfo.codeCol ? `OR ${searchTerms.map((_, i) => `LOWER(${tableInfo.codeCol}) LIKE $${i + 2}`).join(' OR ')}` : ''}
+                  )
+                ORDER BY name
+                LIMIT 10
+              `;
+              suggestParams = [site, ...searchTerms.map(t => `%${t}%`)];
+            } else {
+              suggestQuery = `
+                SELECT ${tableInfo.columns}, '${actualType}' as equipment_type
+                FROM ${tableInfo.table}
+                WHERE (
+                  ${searchTerms.map((_, i) => `LOWER(name) LIKE $${i + 1}`).join(' OR ')}
+                  ${tableInfo.codeCol ? `OR ${searchTerms.map((_, i) => `LOWER(${tableInfo.codeCol}) LIKE $${i + 1}`).join(' OR ')}` : ''}
+                )
+                ORDER BY name
+                LIMIT 10
+              `;
+              suggestParams = searchTerms.map(t => `%${t}%`);
+            }
+
+            const suggestResult = await pool.query(suggestQuery, suggestParams);
+
+            if (suggestResult.rows.length > 0) {
+              return {
+                success: true,
+                count: 0,
+                equipment_type: actualType,
+                filters: { building, floor, name, code },
+                equipment: [],
+                suggestions: suggestResult.rows.map(eq => ({
+                  id: eq.id,
+                  name: eq.name,
+                  code: eq.code,
+                  building_code: eq.building_code,
+                  floor: eq.floor,
+                  room: eq.room,
+                  equipment_type: actualType
+                })),
+                has_suggestions: true,
+                summary: `Aucun équipement ne correspond exactement à "${name}", mais voici des équipements ${tableInfo.label} similaires.`,
+                message: `Je n'ai pas trouvé "${name}" exactement. Voici des suggestions basées sur les mots-clés "${searchTerms.join('", "')}":`,
+                suggestion_list: suggestResult.rows.slice(0, 10).map(s => `• ${s.name}${s.code ? ` (${s.code})` : ''}${s.building_code ? ` - Bât. ${s.building_code}` : ''}`).join('\n')
+              };
+            }
+          } catch (suggestError) {
+            console.error('[TOOL] search_equipment suggestions error:', suggestError.message);
+          }
+        }
 
         return {
           success: true,
