@@ -551,7 +551,9 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
           briefingMode: true,
           activeAgent: activeAgent,
           activeAgentName: currentAgent?.customName || currentAgent?.name,
-          activeAgentRole: currentAgent?.role
+          activeAgentRole: currentAgent?.role,
+          // This is what the backend uses to determine who should respond
+          previousAgentType: activeAgent
         }
       });
 
