@@ -373,11 +373,12 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
   const loadBriefingData = async () => {
     setIsLoading(true);
     try {
-      const [agentListRes, agentNamesRes, morningBrief, troubleshootingRes] = await Promise.all([
+      const [agentListRes, agentNamesRes, morningBrief, troubleshootingRes, controlsDashboard] = await Promise.all([
         fetch('/api/admin/settings/ai-agents/list').then(r => r.json()).catch(() => ({ agents: [] })),
         fetch('/api/admin/settings/ai-agents/names').then(r => r.json()).catch(() => ({ names: {} })),
         aiAssistant.getMorningBrief().catch(() => null),
-        fetch('/api/troubleshooting/list?limit=10').then(r => r.json()).catch(() => ({ records: [] }))
+        fetch('/api/troubleshooting/list?limit=10').then(r => r.json()).catch(() => ({ records: [] })),
+        fetch('/api/switchboard/controls/dashboard').then(r => r.json()).catch(() => ({ stats: {} }))
       ]);
 
       // Filter agents based on permissions
@@ -394,13 +395,14 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
 
       setAgents(filteredAgents);
 
-      const data = buildAgentData(morningBrief, troubleshootingRes?.records || []);
+      // Pass controls by type to buildAgentData
+      const data = buildAgentData(morningBrief, troubleshootingRes?.records || [], controlsDashboard?.stats);
       setAgentData(data);
 
       setStats({
         healthScore: morningBrief?.healthScore || 85,
-        overdueControls: morningBrief?.stats?.controls?.overdue || 0,
-        completedToday: morningBrief?.stats?.controls?.completedThisWeek || 0,
+        overdueControls: controlsDashboard?.stats?.overdue || 0,
+        completedToday: controlsDashboard?.stats?.completed_30d || 0,
         troubleshootingToday: (troubleshootingRes?.records || []).filter(r =>
           new Date(r.created_at).toDateString() === new Date().toDateString()
         ).length
@@ -445,8 +447,24 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
     return roles[type] || type;
   };
 
-  const buildAgentData = (brief, troubleshooting) => {
+  const buildAgentData = (brief, troubleshooting, controlsStats = {}) => {
     const data = {};
+
+    // Mapping from API equipment_type to agent type
+    const equipmentTypeToAgent = {
+      switchboard: 'switchboard',
+      mobile_equipment: 'mobile',
+      vsd: 'vsd',
+      meca: 'meca',
+      hv: 'hv',
+      glo: 'glo',
+      datahub: 'datahub',
+      infrastructure: 'infrastructure'
+    };
+
+    // Get controls by equipment type
+    const overdueByType = controlsStats?.overdueByEquipment || {};
+    const pendingByType = controlsStats?.pendingByEquipment || {};
 
     // Main agent
     data.main = { items: [], actionUrl: '/dashboard' };
@@ -454,32 +472,49 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
       data.main.items.push({ id: 'insight', icon: '💡', title: 'Conseil du jour', description: brief.aiInsight });
     }
 
-    // Switchboard
-    const overdueControls = brief?.stats?.controls?.overdue || 0;
-    const thisWeekControls = brief?.stats?.controls?.thisWeek || 0;
-    data.switchboard = { items: [], actionUrl: '/app/switchboard-controls' };
-    if (overdueControls > 0) {
-      data.switchboard.items.push({ id: 'overdue', icon: '🚨', title: `${overdueControls} contrôle(s) en retard`, description: 'Priorité haute' });
-    }
-    if (thisWeekControls > 0) {
-      data.switchboard.items.push({ id: 'week', icon: '📅', title: `${thisWeekControls} contrôle(s) cette semaine`, description: 'À planifier' });
-    }
+    // Initialize all agents with empty data
+    const agentTypes = ['switchboard', 'vsd', 'meca', 'hv', 'glo', 'mobile', 'datahub', 'infrastructure', 'doors', 'firecontrol', 'atex'];
+    agentTypes.forEach(type => {
+      const appPath = type === 'mobile' ? 'mobile-equipments' : type === 'firecontrol' ? 'fire-control' : type;
+      data[type] = { items: [], actionUrl: `/app/${appPath}` };
+    });
 
-    // Other agents - initialize empty
-    ['vsd', 'meca', 'hv', 'glo', 'mobile', 'datahub', 'infrastructure', 'doors', 'firecontrol'].forEach(type => {
-      data[type] = { items: [], actionUrl: `/app/${type === 'mobile' ? 'mobile-equipments' : type === 'firecontrol' ? 'fire-control' : type}` };
+    // Add controls by equipment type to the correct agent
+    Object.entries(equipmentTypeToAgent).forEach(([eqType, agentType]) => {
+      const overdue = overdueByType[eqType] || 0;
+      const pending = pendingByType[eqType] || 0;
+
+      if (overdue > 0) {
+        data[agentType].items.push({
+          id: `${agentType}-overdue`,
+          icon: '🚨',
+          title: `${overdue} contrôle(s) en retard`,
+          description: 'Priorité haute'
+        });
+      }
+      if (pending > 0) {
+        data[agentType].items.push({
+          id: `${agentType}-pending`,
+          icon: '📅',
+          title: `${pending} contrôle(s) à venir`,
+          description: 'À planifier'
+        });
+      }
     });
 
     // ATEX
     const ncCount = brief?.stats?.nonConformities?.pending || 0;
-    data.atex = { items: [], actionUrl: '/app/atex' };
     if (ncCount > 0) {
       data.atex.items.push({ id: 'nc', icon: '⚠️', title: `${ncCount} non-conformité(s)`, description: 'Action requise' });
     }
 
     // Add troubleshooting to relevant agents
     troubleshooting.slice(0, 5).forEach(t => {
-      const agentType = t.equipment_type || 'switchboard';
+      // Map equipment_type from troubleshooting to agent type
+      let agentType = t.equipment_type || 'switchboard';
+      if (agentType === 'mobile_equipment') agentType = 'mobile';
+      if (agentType === 'door') agentType = 'doors';
+
       if (data[agentType]) {
         data[agentType].items.push({
           id: t.id,
