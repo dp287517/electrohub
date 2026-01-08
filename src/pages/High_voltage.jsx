@@ -15,6 +15,7 @@ import { api, get, post, del } from '../lib/api';
 import { getUserPermissions } from '../lib/permissions';
 import { EquipmentAIChat } from '../components/AIAvatar';
 import MiniElectro from '../components/MiniElectro';
+import ImageLightbox, { useLightbox } from '../components/ImageLightbox';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
@@ -416,7 +417,7 @@ const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings,
 
 // ==================== EDIT FORM ====================
 
-const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, lvDevices, onPhotoUpdated }) => {
+const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, lvDevices, onPhotoUpdated, onOpenLightbox }) => {
   const isNew = !equipment?.id;
   const [form, setForm] = useState({
     name: '', code: '', building_code: '', floor: '', room: '',
@@ -539,8 +540,12 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, 
               Photo de profil
             </h4>
             <div className="flex items-center gap-4">
-              {/* Photo preview */}
-              <div className="relative w-24 h-24 rounded-xl overflow-hidden bg-gray-100 border-2 border-amber-200 flex-shrink-0">
+              {/* Photo preview - cliquable pour agrandir */}
+              <div
+                className={`relative w-24 h-24 rounded-xl overflow-hidden bg-gray-100 border-2 border-amber-200 flex-shrink-0 ${equipment?.has_photo ? 'cursor-pointer hover:ring-2 hover:ring-amber-400 transition-all' : ''}`}
+                onClick={() => equipment?.has_photo && onOpenLightbox(`${api.hv.equipmentPhotoUrl(equipment.id, { bust: false })}&v=${photoVersion}`, equipment?.name || 'Photo équipement')}
+                title={equipment?.has_photo ? 'Cliquer pour agrandir' : ''}
+              >
                 {equipment?.has_photo ? (
                   <img
                     src={`${api.hv.equipmentPhotoUrl(equipment.id, { bust: false })}&v=${photoVersion}`}
@@ -911,7 +916,8 @@ const DetailPanel = ({
   onLoadDevices,
   controlStatuses,
   navigate,
-  onPhotoUpdated
+  onPhotoUpdated,
+  onOpenLightbox
 }) => {
   const [showTechnical, setShowTechnical] = useState(false);
   const [showDevices, setShowDevices] = useState(true);
@@ -971,10 +977,17 @@ const DetailPanel = ({
         </div>
 
         <div className="flex items-start gap-4">
-          {/* Photo cliquable - similaire à Switchboards */}
+          {/* Photo cliquable - agrandir si photo existe, upload sinon */}
           <div
-            onClick={() => photoInputRef.current?.click()}
+            onClick={() => {
+              if (equipment.has_photo) {
+                onOpenLightbox?.(`${api.hv.equipmentPhotoUrl(equipment.id, { bust: false })}&v=${photoVersion}`, equipment.name || 'Équipement HV');
+              } else {
+                photoInputRef.current?.click();
+              }
+            }}
             className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl flex items-center justify-center overflow-hidden cursor-pointer relative group ${equipment.is_principal ? 'bg-gradient-to-br from-amber-200 to-orange-300 text-amber-800' : 'bg-white/20'}`}
+            title={equipment.has_photo ? 'Cliquer pour agrandir' : 'Ajouter une photo'}
           >
             <input ref={photoInputRef} type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden" />
             {equipment.has_photo ? (
@@ -995,6 +1008,8 @@ const DetailPanel = ({
             <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
               {isUploadingPhoto ? (
                 <RefreshCw size={24} className="text-white animate-spin" />
+              ) : equipment.has_photo ? (
+                <Eye size={24} className="text-white" />
               ) : (
                 <Camera size={24} className="text-white" />
               )}
@@ -1338,6 +1353,9 @@ export default function HighVoltage() {
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportFilters, setReportFilters] = useState({ building: '', voltage_class: '', device_type: '' });
   const [reportLoading, setReportLoading] = useState(false);
+
+  // Lightbox for image enlargement
+  const { lightbox, openLightbox, closeLightbox } = useLightbox();
 
   const showToast = (message, type = 'success') => setToast({ message, type });
 
@@ -1885,6 +1903,7 @@ export default function HighVoltage() {
                     setSelectedEquipment(updated);
                     setEquipments(prev => prev.map(eq => eq.id === updated.id ? { ...eq, has_photo: updated.has_photo } : eq));
                   }}
+                  onOpenLightbox={openLightbox}
                 />
               ) : (
                 <DetailPanel
@@ -1907,6 +1926,7 @@ export default function HighVoltage() {
                     setSelectedEquipment(updated);
                     setEquipments(prev => prev.map(eq => eq.id === updated.id ? { ...eq, has_photo: updated.has_photo } : eq));
                   }}
+                  onOpenLightbox={openLightbox}
                 />
               )}
             </>
@@ -2073,6 +2093,15 @@ export default function HighVoltage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Image Lightbox */}
+      {lightbox.open && (
+        <ImageLightbox
+          src={lightbox.src}
+          title={lightbox.title}
+          onClose={closeLightbox}
+        />
       )}
 
       {/* Toast */}
