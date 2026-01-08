@@ -1041,6 +1041,14 @@ app.delete("/api/mobile-equipment/equipments/:id", async (req, res) => {
 
     await pool.query(`DELETE FROM me_equipments WHERE id=$1`, [equipmentId]);
 
+    // 🧹 Cleanup orphaned equipment links (positions are auto-deleted via CASCADE)
+    const linksResult = await pool.query(`
+      DELETE FROM equipment_links
+      WHERE (source_type = 'mobile_equipment' AND source_id = $1)
+         OR (target_type = 'mobile_equipment' AND target_id = $1)
+    `, [equipmentId]);
+    console.log(`[MOBILE EQUIPMENT DELETE] Cleaned up ${linksResult.rowCount} equipment links for mobile equipment ${equipmentId}`);
+
     // AUDIT: Log deletion
     await audit.log(req, AUDIT_ACTIONS.DELETED, {
       entityType: 'equipment',
