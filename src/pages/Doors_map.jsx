@@ -22,6 +22,7 @@ import "../styles/atex-map.css"; // Styles de netteté pour les plans
 
 // Mobile optimization
 import { getOptimalImageFormat } from "../config/mobile-optimization.js";
+import { setupMobileDrag, getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 
 // Icons
 import {
@@ -472,9 +473,10 @@ const DoorLeafletViewer = forwardRef(({
       const isSelected = p.door_id === selectedIdRef.current;
       const icon = makeDoorIcon(isSelected, p.status);
 
+      const wantsDraggable = !disabled && !placementActiveRef.current;
       const mk = L.marker(latlng, {
         icon,
-        draggable: !disabled && !placementActiveRef.current,
+        draggable: getMarkerDraggableOption(wantsDraggable),
         autoPan: true,
         bubblingMouseEvents: false,
         keyboard: false,
@@ -523,6 +525,11 @@ const DoorLeafletViewer = forwardRef(({
 
       mk.addTo(g);
       markersMapRef.current.set(p.door_id, mk);
+
+      // 📱 Mobile: activer le drag par long-press uniquement
+      if (wantsDraggable) {
+        setupMobileDrag(mk);
+      }
 
       // Long press for mobile
       setTimeout(() => {
