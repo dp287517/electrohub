@@ -131,20 +131,28 @@ initEmailTables();
 // ============================================================
 
 /**
- * Get yesterday's date in YYYY-MM-DD format
+ * Get yesterday's date in YYYY-MM-DD format (Paris timezone)
  */
 function getYesterdayDate() {
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  return yesterday.toISOString().split('T')[0];
+  // Use Paris timezone
+  const now = new Date();
+  const parisTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+  parisTime.setDate(parisTime.getDate() - 1);
+  return parisTime.toISOString().split('T')[0];
 }
 
 /**
- * Format date for display in French
+ * Format date for display in French (Paris timezone)
  */
 function formatDateFr(dateStr) {
-  const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-  return new Date(dateStr).toLocaleDateString('fr-FR', options);
+  const options = {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'Europe/Paris'
+  };
+  return new Date(dateStr + 'T12:00:00').toLocaleDateString('fr-FR', options);
 }
 
 /**
@@ -355,19 +363,53 @@ function generateAgentAvatarSVG(agentType, size = 40) {
 
 /**
  * Generate the full HTML email template
+ * Structure: For each agent with data, show agent info + their troubleshooting table
  */
-function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
+function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, agentImages = {}) {
   const formattedDate = formatDateFr(date);
   const hasOutages = outages.length > 0;
-  const hasAgentData = agentSnapshots.length > 0;
 
-  // Group outages by equipment type
-  const outagesByType = outages.reduce((acc, outage) => {
+  // Group outages by equipment type (agent type)
+  const outagesByAgent = outages.reduce((acc, outage) => {
     const type = outage.equipment_type || 'other';
     if (!acc[type]) acc[type] = [];
     acc[type].push(outage);
     return acc;
   }, {});
+
+  // Create a map of agent snapshots by type
+  const snapshotsByAgent = {};
+  agentSnapshots.forEach(snapshot => {
+    snapshotsByAgent[snapshot.agent_type] = snapshot;
+  });
+
+  // Get all agent types that have either snapshots or outages
+  const allAgentTypes = new Set([
+    ...Object.keys(outagesByAgent),
+    ...Object.keys(snapshotsByAgent)
+  ]);
+
+  // Filter to only agents with data (outages or meaningful snapshot data)
+  const agentsWithData = Array.from(allAgentTypes).filter(agentType => {
+    const hasOutagesForAgent = outagesByAgent[agentType]?.length > 0;
+    const snapshot = snapshotsByAgent[agentType];
+    const hasSnapshotData = snapshot && (
+      snapshot.troubleshooting_count > 0 ||
+      snapshot.equipment_critical > 0 ||
+      snapshot.controls_overdue > 0 ||
+      snapshot.nc_open > 0
+    );
+    return hasOutagesForAgent || hasSnapshotData;
+  });
+
+  // Sort agents: main first, then by number of outages
+  agentsWithData.sort((a, b) => {
+    if (a === 'main') return -1;
+    if (b === 'main') return 1;
+    const outagesA = outagesByAgent[a]?.length || 0;
+    const outagesB = outagesByAgent[b]?.length || 0;
+    return outagesB - outagesA;
+  });
 
   return `
 <!DOCTYPE html>
@@ -379,7 +421,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6; line-height: 1.6; }
-    .container { max-width: 800px; margin: 0 auto; background: white; }
+    .container { max-width: 900px; margin: 0 auto; background: white; }
     .header { background: linear-gradient(135deg, #1e40af, #3b82f6); padding: 30px; text-align: center; color: white; }
     .header h1 { font-size: 24px; margin-bottom: 8px; }
     .header p { opacity: 0.9; font-size: 14px; }
@@ -388,35 +430,36 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
     .stat-box:last-child { border-right: none; }
     .stat-value { font-size: 28px; font-weight: bold; color: #1e40af; }
     .stat-label { font-size: 12px; color: #6b7280; text-transform: uppercase; }
-    .section { padding: 25px; border-bottom: 1px solid #e5e7eb; }
-    .section-title { font-size: 18px; font-weight: 600; color: #1f2937; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
-    .section-icon { width: 24px; height: 24px; }
+    .agent-section { border-bottom: 2px solid #e5e7eb; }
+    .agent-header { display: flex; align-items: center; gap: 15px; padding: 20px 25px; background: linear-gradient(to right, #f8fafc, #ffffff); }
+    .agent-avatar { width: 70px; height: 70px; border-radius: 12px; object-fit: cover; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .agent-avatar-fallback { width: 70px; height: 70px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: white; font-size: 28px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .agent-header-info { flex: 1; }
+    .agent-name { font-size: 18px; font-weight: 700; color: #1f2937; margin-bottom: 2px; }
+    .agent-domain { font-size: 13px; color: #6b7280; margin-bottom: 8px; }
+    .agent-summary { font-size: 13px; color: #374151; line-height: 1.5; }
+    .agent-metrics { display: flex; gap: 20px; margin-top: 10px; flex-wrap: wrap; }
+    .agent-metric { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #6b7280; }
+    .agent-metric strong { color: #1f2937; font-size: 14px; }
+    .health-badge { display: inline-flex; align-items: center; justify-content: center; padding: 4px 10px; border-radius: 20px; font-weight: 600; font-size: 12px; color: white; }
     .outage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .outage-table th { background: #f9fafb; padding: 12px 10px; text-align: left; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; }
-    .outage-table td { padding: 12px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
-    .outage-table tr:hover { background: #f9fafb; }
-    .severity-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; color: white; }
-    .status-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 500; }
-    .agent-card { display: flex; align-items: flex-start; gap: 15px; padding: 15px; background: #f9fafb; border-radius: 8px; margin-bottom: 12px; }
-    .agent-avatar { flex-shrink: 0; }
-    .agent-info { flex: 1; }
-    .agent-name { font-weight: 600; color: #1f2937; margin-bottom: 4px; }
-    .agent-domain { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
-    .agent-summary { font-size: 13px; color: #374151; }
-    .agent-stats { display: flex; gap: 15px; margin-top: 10px; flex-wrap: wrap; }
-    .agent-stat { font-size: 12px; color: #6b7280; }
-    .agent-stat strong { color: #1f2937; }
-    .health-score { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; font-weight: bold; font-size: 12px; color: white; }
-    .equipment-type-header { background: #e5e7eb; padding: 8px 12px; font-weight: 600; font-size: 13px; color: #374151; margin-top: 15px; border-radius: 4px 4px 0 0; }
-    .no-data { text-align: center; padding: 40px; color: #6b7280; }
-    .no-data-icon { font-size: 48px; margin-bottom: 15px; }
+    .outage-table th { background: #f1f5f9; padding: 12px 15px; text-align: left; font-weight: 600; color: #475569; border-bottom: 2px solid #e2e8f0; }
+    .outage-table td { padding: 12px 15px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    .outage-table tr:last-child td { border-bottom: none; }
+    .outage-table tr:hover { background: #f8fafc; }
+    .severity-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; color: white; }
+    .status-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; }
+    .no-outages { padding: 20px 25px; text-align: center; color: #6b7280; font-size: 13px; background: #f9fafb; }
+    .no-data { text-align: center; padding: 60px 25px; color: #6b7280; }
+    .no-data-icon { font-size: 56px; margin-bottom: 15px; }
     .footer { background: #1f2937; padding: 25px; text-align: center; color: #9ca3af; font-size: 12px; }
-    .footer a { color: #60a5fa; text-decoration: none; }
     @media (max-width: 600px) {
       .stats-grid { grid-template-columns: repeat(2, 1fr); }
       .stat-box { border-bottom: 1px solid #e5e7eb; }
+      .agent-header { flex-direction: column; text-align: center; }
+      .agent-metrics { justify-content: center; }
       .outage-table { font-size: 11px; }
-      .outage-table th, .outage-table td { padding: 8px 6px; }
+      .outage-table th, .outage-table td { padding: 8px 10px; }
     }
   </style>
 </head>
@@ -424,15 +467,15 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
   <div class="container">
     <!-- Header -->
     <div class="header">
-      <h1>📊 Rapport quotidien des pannes</h1>
-      <p>${formattedDate} - Site: ${site}</p>
+      <h1>📊 Rapport quotidien des dépannages</h1>
+      <p>${formattedDate} • Site: ${site}</p>
     </div>
 
     <!-- Stats Summary -->
     <div class="stats-grid">
       <div class="stat-box">
         <div class="stat-value">${stats.total_outages || 0}</div>
-        <div class="stat-label">Pannes totales</div>
+        <div class="stat-label">Dépannages</div>
       </div>
       <div class="stat-box">
         <div class="stat-value" style="color: #DC2626;">${stats.critical_count || 0}</div>
@@ -440,7 +483,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
       </div>
       <div class="stat-box">
         <div class="stat-value" style="color: #22C55E;">${stats.resolved_count || 0}</div>
-        <div class="stat-label">Résolues</div>
+        <div class="stat-label">Résolus</div>
       </div>
       <div class="stat-box">
         <div class="stat-value">${Math.round(stats.total_downtime || 0)}<span style="font-size: 14px;">min</span></div>
@@ -448,84 +491,80 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
       </div>
     </div>
 
-    ${hasAgentData ? `
-    <!-- Agent Summaries -->
-    <div class="section">
-      <div class="section-title">
-        <span>🤖</span> Résumé des Agents IA
-      </div>
-      ${agentSnapshots.map(snapshot => {
-        const agent = AGENT_AVATARS[snapshot.agent_type] || AGENT_AVATARS.main;
-        const healthColor = snapshot.health_score >= 80 ? '#22C55E' : snapshot.health_score >= 60 ? '#FBBF24' : '#DC2626';
-        return `
-        <div class="agent-card">
-          <div class="agent-avatar">
-            <div style="
-              width: 50px;
-              height: 50px;
-              border-radius: 50%;
-              background: linear-gradient(135deg, ${agent.color}, ${agent.color}CC);
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              color: white;
-              font-weight: bold;
-              font-size: 18px;
-              box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-            ">${agent.icon}</div>
-          </div>
-          <div class="agent-info">
+    ${agentsWithData.length > 0 ? agentsWithData.map(agentType => {
+      const agent = AGENT_AVATARS[agentType] || AGENT_AVATARS.main;
+      const snapshot = snapshotsByAgent[agentType];
+      const agentOutages = outagesByAgent[agentType] || [];
+      const healthScore = snapshot?.health_score || null;
+      const healthColor = healthScore >= 80 ? '#22C55E' : healthScore >= 60 ? '#FBBF24' : '#DC2626';
+      const hasImage = agentImages[agentType];
+      const imageUrl = hasImage ? `${APP_URL}/api/admin/settings/ai-agents/${agentType}/image` : null;
+
+      return `
+      <!-- Agent Section: ${agent.name} -->
+      <div class="agent-section">
+        <div class="agent-header">
+          ${imageUrl ? `
+            <img src="${imageUrl}" alt="${agent.name}" class="agent-avatar" />
+          ` : `
+            <div class="agent-avatar-fallback" style="background: linear-gradient(135deg, ${agent.color}, ${agent.color}CC);">
+              ${agent.icon}
+            </div>
+          `}
+          <div class="agent-header-info">
             <div class="agent-name">${agent.name}</div>
             <div class="agent-domain">${agent.description}</div>
-            ${snapshot.ai_summary ? `<div class="agent-summary">${snapshot.ai_summary}</div>` : ''}
-            <div class="agent-stats">
-              <div class="agent-stat">
-                <div class="health-score" style="background: ${healthColor};">${snapshot.health_score || '-'}%</div>
-              </div>
-              <div class="agent-stat">Équipements: <strong>${snapshot.total_equipment || 0}</strong> (${snapshot.equipment_ok || 0} OK, ${snapshot.equipment_warning || 0} ⚠️, ${snapshot.equipment_critical || 0} 🔴)</div>
-              <div class="agent-stat">Dépannages: <strong>${snapshot.troubleshooting_count || 0}</strong> (${snapshot.troubleshooting_resolved || 0} résolus)</div>
-              ${snapshot.controls_overdue > 0 ? `<div class="agent-stat" style="color: #DC2626;">Contrôles en retard: <strong>${snapshot.controls_overdue}</strong></div>` : ''}
+            ${snapshot?.ai_summary ? `<div class="agent-summary">${snapshot.ai_summary}</div>` : ''}
+            <div class="agent-metrics">
+              ${healthScore !== null ? `
+                <div class="agent-metric">
+                  <span class="health-badge" style="background: ${healthColor};">${healthScore}%</span>
+                  <span>Santé</span>
+                </div>
+              ` : ''}
+              ${snapshot ? `
+                <div class="agent-metric">
+                  <strong>${snapshot.total_equipment || 0}</strong> équipements
+                  ${snapshot.equipment_critical > 0 ? `<span style="color: #DC2626;">(${snapshot.equipment_critical} 🔴)</span>` : ''}
+                </div>
+                <div class="agent-metric">
+                  <strong>${agentOutages.length}</strong> dépannages hier
+                </div>
+                ${snapshot.controls_overdue > 0 ? `
+                  <div class="agent-metric" style="color: #DC2626;">
+                    <strong>${snapshot.controls_overdue}</strong> contrôles en retard
+                  </div>
+                ` : ''}
+              ` : `
+                <div class="agent-metric">
+                  <strong>${agentOutages.length}</strong> dépannages hier
+                </div>
+              `}
             </div>
           </div>
         </div>
-        `;
-      }).join('')}
-    </div>
-    ` : ''}
 
-    <!-- Outages Table -->
-    <div class="section">
-      <div class="section-title">
-        <span>🔧</span> Détail des pannes
-      </div>
-
-      ${hasOutages ? `
-        ${Object.entries(outagesByType).map(([type, typeOutages]) => {
-          const agent = AGENT_AVATARS[type] || { name: type, color: '#6B7280', icon: '📦' };
-          return `
-          <div class="equipment-type-header">
-            ${agent.icon} ${agent.name} - ${agent.description || type} (${typeOutages.length})
-          </div>
+        ${agentOutages.length > 0 ? `
           <table class="outage-table">
             <thead>
               <tr>
-                <th style="width: 22%;">Équipement</th>
-                <th style="width: 28%;">Problème</th>
+                <th style="width: 25%;">Équipement</th>
+                <th style="width: 30%;">Problème</th>
                 <th style="width: 12%;">Sévérité</th>
                 <th style="width: 12%;">Statut</th>
-                <th style="width: 13%;">Durée</th>
-                <th style="width: 13%;">Action</th>
+                <th style="width: 12%;">Durée</th>
+                <th style="width: 9%;">Lien</th>
               </tr>
             </thead>
             <tbody>
-              ${typeOutages.map(outage => `
+              ${agentOutages.map(outage => `
               <tr>
                 <td>
                   <strong>${outage.equipment_name || outage.equipment_code || '-'}</strong>
                   ${outage.building_code ? `<br><span style="font-size: 11px; color: #6b7280;">📍 ${outage.building_code}${outage.floor ? ` / ${outage.floor}` : ''}</span>` : ''}
                 </td>
                 <td>
-                  <strong>${outage.title}</strong>
+                  <strong>${outage.title || '-'}</strong>
                   ${outage.root_cause ? `<br><span style="font-size: 11px; color: #6b7280;">Cause: ${outage.root_cause}</span>` : ''}
                 </td>
                 <td>
@@ -540,7 +579,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
                 </td>
                 <td>
                   ${outage.duration_minutes ? `${outage.duration_minutes} min` : '-'}
-                  ${outage.downtime_minutes ? `<br><span style="font-size: 11px; color: #DC2626;">⏱️ ${outage.downtime_minutes} min arrêt</span>` : ''}
+                  ${outage.downtime_minutes ? `<br><span style="font-size: 11px; color: #DC2626;">⏱️ ${outage.downtime_minutes}min</span>` : ''}
                 </td>
                 <td>
                   <a href="${APP_URL}/app/troubleshooting/${outage.id}" style="color: #3B82F6; text-decoration: none; font-weight: 500;">Voir →</a>
@@ -549,25 +588,24 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
               `).join('')}
             </tbody>
           </table>
-          `;
-        }).join('')}
-      ` : `
-        <div class="no-data">
-          <div class="no-data-icon">✅</div>
-          <p><strong>Aucune panne enregistrée hier</strong></p>
-          <p style="margin-top: 8px;">Excellente journée ! Tous les équipements ont fonctionné normalement.</p>
-        </div>
-      `}
-    </div>
+        ` : `
+          <div class="no-outages">
+            ✅ Aucun dépannage enregistré hier pour cet agent
+          </div>
+        `}
+      </div>
+      `;
+    }).join('') : `
+      <div class="no-data">
+        <div class="no-data-icon">✅</div>
+        <p style="font-size: 18px; font-weight: 600; color: #1f2937;">Aucun dépannage enregistré hier</p>
+        <p style="margin-top: 10px;">Excellente journée ! Tous les équipements ont fonctionné normalement.</p>
+      </div>
+    `}
 
     <!-- Footer -->
     <div class="footer">
       <p>Ce rapport a été généré automatiquement par Haleon-tool</p>
-      <p style="margin-top: 10px;">
-        <a href="#">Se désinscrire</a> |
-        <a href="#">Préférences email</a> |
-        <a href="${APP_URL}">Accéder à l'application</a>
-      </p>
       <p style="margin-top: 15px; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Tous droits réservés</p>
     </div>
   </div>
@@ -581,6 +619,29 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
 // ============================================================
 
 /**
+ * Get which agents have uploaded images (for email display)
+ */
+async function getAgentImages() {
+  try {
+    const result = await pool.query(`
+      SELECT key FROM app_settings
+      WHERE key LIKE 'ai_image_%'
+    `);
+
+    const agentImages = {};
+    result.rows.forEach(row => {
+      const agentType = row.key.replace('ai_image_', '');
+      agentImages[agentType] = true;
+    });
+
+    return agentImages;
+  } catch (error) {
+    console.error('[SendGrid] Error fetching agent images:', error.message);
+    return {};
+  }
+}
+
+/**
  * Send the daily outage report email
  */
 async function sendDailyOutageReport(email, site) {
@@ -592,15 +653,16 @@ async function sendDailyOutageReport(email, site) {
   const yesterday = getYesterdayDate();
 
   try {
-    // Fetch all necessary data
-    const [outages, agentSnapshots, stats] = await Promise.all([
+    // Fetch all necessary data including agent images
+    const [outages, agentSnapshots, stats, agentImages] = await Promise.all([
       getYesterdayOutages(site),
       getYesterdayAgentSnapshots(site),
-      getDayStats(site)
+      getDayStats(site),
+      getAgentImages()
     ]);
 
     // Generate email HTML
-    const htmlContent = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats);
+    const htmlContent = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats, agentImages);
 
     // Prepare email
     const msg = {
@@ -864,13 +926,14 @@ router.get('/preview', async (req, res) => {
     const site = req.query.site || 'default';
     const yesterday = getYesterdayDate();
 
-    const [outages, agentSnapshots, stats] = await Promise.all([
+    const [outages, agentSnapshots, stats, agentImages] = await Promise.all([
       getYesterdayOutages(site),
       getYesterdayAgentSnapshots(site),
-      getDayStats(site)
+      getDayStats(site),
+      getAgentImages()
     ]);
 
-    const html = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats);
+    const html = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats, agentImages);
 
     res.setHeader('Content-Type', 'text/html');
     res.send(html);
