@@ -1338,16 +1338,20 @@ function createToolHandlers(pool, site) {
 
         // 3. Préparer les termes de recherche (mots individuels pour recherche floue)
         // IMPORTANT: Garder les chiffres et mots courts car ils sont souvent importants (ex: "Otrivin 3")
-        const searchTerms = target_equipment_name.toLowerCase().split(/\s+/).filter(t => t.length >= 1);
+        const searchTerms = target_equipment_name.toLowerCase().split(/[\s.\-_]+/).filter(t => t.length >= 1);
         const exactPattern = `%${target_equipment_name.toLowerCase()}%`;
 
-        // Si un seul mot, ajouter aussi une recherche sans les espaces pour les numéros collés
-        const compactPattern = target_equipment_name.replace(/\s+/g, '').toLowerCase();
-        const alternatePattern = compactPattern !== target_equipment_name.toLowerCase() ? `%${compactPattern}%` : null;
+        // Pattern normalisé: retire TOUS les séparateurs (espace, -, ., _)
+        // "27-9-G" → "279g", "27.9.g" → "279g", "lampe pied" → "lampepied"
+        const normalizedPattern = target_equipment_name.replace(/[\s.\-_]+/g, '').toLowerCase();
+        const alternatePattern = normalizedPattern !== target_equipment_name.toLowerCase() ? `%${normalizedPattern}%` : null;
 
-        // NOUVEAU: Pattern compact pour chercher "portailsite" → "portail site"
-        // Si l'utilisateur tape un mot sans espace, on cherche aussi dans les noms en retirant leurs espaces
-        const compactSearchPattern = `%${compactPattern}%`;
+        // Pattern compact pour chercher "portailsite" → "portail site" ou "27-9-G" → "27 9 G"
+        const compactSearchPattern = `%${normalizedPattern}%`;
+
+        // Helper: fonction SQL pour normaliser les noms en base (retire espaces, -, .)
+        // Utilisé pour comparer "27-9-G" avec "27.9.G" ou "27 9 G"
+        const normalizeSQL = (col) => `LOWER(REPLACE(REPLACE(REPLACE(${col}, ' ', ''), '-', ''), '.', ''))`;
 
         for (const eqType of typesToSearch) {
           const config = tableMap[eqType];
@@ -1357,44 +1361,42 @@ function createToolHandlers(pool, site) {
             // Recherche spéciale pour datahub avec catégories
             // NOTE: dh_items n'a PAS de colonne site - pas de filtre site
             if (config.hasCategory) {
-              // Recherche dans nom ET catégorie pour datahub - inclut pattern alternatif (ex: "otrivin3")
-              const datahubPatterns = alternatePattern ? [exactPattern, alternatePattern] : [exactPattern];
+              // Recherche dans nom ET catégorie pour datahub
+              // Normalisation complète: "27-9-G" = "27.9.g" = "27 9 g"
+              let datahubQuery = `
+                SELECT dh.id, dh.name, dh.building, dhc.name as category_name,
+                       '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                FROM dh_items dh
+                LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
+                WHERE (
+                  LOWER(dh.name) LIKE $1
+                  OR LOWER(dhc.name) LIKE $1
+                  OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $1
+                  OR ${normalizeSQL('dh.name')} LIKE $2
+                  OR ${normalizeSQL('dhc.name')} LIKE $2
+                  OR ${normalizeSQL("COALESCE(dhc.name, '') || dh.name")} LIKE $2
+                  OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $1)
+                  OR (dh.code IS NOT NULL AND ${normalizeSQL('dh.code')} LIKE $2)
+                )
+              `;
+              let datahubParams = [exactPattern, compactSearchPattern];
 
-              for (const pattern of datahubPatterns) {
-                let datahubQuery = `
-                  SELECT dh.id, dh.name, dh.building, dhc.name as category_name,
-                         '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
-                  FROM dh_items dh
-                  LEFT JOIN dh_categories dhc ON dh.category_id = dhc.id
-                  WHERE (
-                    LOWER(dh.name) LIKE $1
-                    OR LOWER(dhc.name) LIKE $1
-                    OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $1
-                    OR LOWER(REPLACE(COALESCE(dhc.name, '') || dh.name, ' ', '')) LIKE $1
-                    OR LOWER(REPLACE(dh.name, ' ', '')) LIKE $2
-                    OR LOWER(REPLACE(dhc.name, ' ', '')) LIKE $2
-                    OR (dh.code IS NOT NULL AND LOWER(dh.code) LIKE $1)
-                  )
-                `;
-                let datahubParams = [pattern, compactSearchPattern];
+              if (target_building) {
+                datahubQuery += ` AND UPPER(dh.building) = $3`;
+                datahubParams.push(target_building.toUpperCase());
+              }
 
-                if (target_building) {
-                  datahubQuery += ` AND UPPER(dh.building) = $3`;
-                  datahubParams.push(target_building.toUpperCase());
-                }
+              datahubQuery += ` LIMIT 5`;
+              const datahubResult = await pool.query(datahubQuery, datahubParams);
 
-                datahubQuery += ` LIMIT 5`;
-                const datahubResult = await pool.query(datahubQuery, datahubParams);
-
-                // Formater le nom avec la catégorie
-                for (const row of datahubResult.rows) {
-                  if (!candidates.find(c => c.id === row.id && c.equipment_type === eqType)) {
-                    candidates.push({
-                      ...row,
-                      name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
-                      original_name: row.name
-                    });
-                  }
+              // Formater le nom avec la catégorie
+              for (const row of datahubResult.rows) {
+                if (!candidates.find(c => c.id === row.id && c.equipment_type === eqType)) {
+                  candidates.push({
+                    ...row,
+                    name: row.category_name ? `${row.category_name} - ${row.name}` : row.name,
+                    original_name: row.name
+                  });
                 }
               }
 
@@ -1437,11 +1439,12 @@ function createToolHandlers(pool, site) {
             // Construire la requête selon la configuration du site
             let searchQuery;
             let searchParams;
-            // Condition de nom avec recherche exacte + recherche compact (sans espaces)
-            // $PATTERN = pattern exact, $COMPACT = pattern sans espaces
+            // Condition de nom avec recherche exacte + recherche normalisée (sans espaces, -, .)
+            // $PATTERN = pattern exact, $COMPACT = pattern normalisé
+            // Ex: "27-9-G" matchera "27.9.g", "27 9 G", "279G", etc.
             const nameCondition = config.codeCol
-              ? `(LOWER(e.${config.nameCol}) LIKE $PATTERN OR LOWER(e.${config.codeCol}) LIKE $PATTERN OR LOWER(REPLACE(e.${config.nameCol}, ' ', '')) LIKE $COMPACT)`
-              : `(LOWER(e.${config.nameCol}) LIKE $PATTERN OR LOWER(REPLACE(e.${config.nameCol}, ' ', '')) LIKE $COMPACT)`;
+              ? `(LOWER(e.${config.nameCol}) LIKE $PATTERN OR LOWER(e.${config.codeCol}) LIKE $PATTERN OR ${normalizeSQL('e.' + config.nameCol)} LIKE $COMPACT OR ${normalizeSQL('e.' + config.codeCol)} LIKE $COMPACT)`
+              : `(LOWER(e.${config.nameCol}) LIKE $PATTERN OR ${normalizeSQL('e.' + config.nameCol)} LIKE $COMPACT)`;
             const buildingCondition = target_building ? `AND UPPER(e.${config.buildingCol}) = $BUILDING` : '';
 
             if (config.siteJoin) {
@@ -1491,8 +1494,56 @@ function createToolHandlers(pool, site) {
               break; // Arrêter dès qu'on trouve dans ce type
             }
 
-            // Si pas de résultat exact, recherche floue avec les mots individuels
+            // Si pas de résultat exact, recherche floue
             if (searchTerms.length > 0) {
+              // 1. D'abord, recherche AND: tous les termes doivent être présents
+              // Ex: "lampe pied" trouve "lampe sur pied" car "lampe" ET "pied" sont présents
+              if (searchTerms.length >= 2) {
+                const andConditions = searchTerms.map((_, i) => `LOWER(e.${config.nameCol}) LIKE $${config.siteJoin || config.siteColumn ? i + 2 : i + 1}`).join(' AND ');
+                let andQuery;
+                let andParams;
+
+                if (config.siteJoin) {
+                  andQuery = `
+                    SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
+                           '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                    FROM ${config.table} e
+                    ${config.siteJoin.replace('{table}', 'e')}
+                    WHERE ${config.siteCondition} AND ${andConditions}
+                    LIMIT 5
+                  `;
+                  andParams = [site, ...searchTerms.map(t => `%${t}%`)];
+                } else if (config.siteColumn) {
+                  andQuery = `
+                    SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
+                           '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                    FROM ${config.table} e
+                    WHERE e.${config.siteColumn} = $1 AND ${andConditions}
+                    LIMIT 5
+                  `;
+                  andParams = [site, ...searchTerms.map(t => `%${t}%`)];
+                } else {
+                  andQuery = `
+                    SELECT e.id, e.${config.nameCol} as name, e.${config.buildingCol} as building,
+                           '${eqType}' as equipment_type, '${config.label}' as type_label, '${config.agent}' as agent_name
+                    FROM ${config.table} e
+                    WHERE ${andConditions}
+                    LIMIT 5
+                  `;
+                  andParams = searchTerms.map(t => `%${t}%`);
+                }
+
+                try {
+                  const andResult = await pool.query(andQuery, andParams);
+                  for (const row of andResult.rows) {
+                    if (!similarEquipments.find(s => s.id === row.id)) {
+                      similarEquipments.push(row);
+                    }
+                  }
+                } catch (e) { /* ignore */ }
+              }
+
+              // 2. Ensuite, recherche OR: au moins un terme présent (suggestions plus larges)
               for (const term of searchTerms) {
                 let fuzzyQuery;
                 let fuzzyParams;
@@ -2388,10 +2439,14 @@ function createToolHandlers(pool, site) {
       if (!equipment_type && name) {
         try {
           const allResults = [];
-          const searchTerms = name.toLowerCase().split(/\s+/).filter(t => t.length > 2);
-          // Pattern compact pour mots collés (ex: "portailsite" → "portail site")
-          const compactName = name.replace(/\s+/g, '').toLowerCase();
-          const compactPattern = `%${compactName}%`;
+          // Split sur tous les séparateurs: espace, -, ., _
+          const searchTerms = name.toLowerCase().split(/[\s.\-_]+/).filter(t => t.length >= 1);
+          // Pattern normalisé: retire TOUS les séparateurs
+          // "27-9-G" → "279g", "lampe pied" → "lampepied"
+          const normalizedName = name.replace(/[\s.\-_]+/g, '').toLowerCase();
+          const compactPattern = `%${normalizedName}%`;
+          // Helper SQL pour normaliser les noms en base
+          const normalizeSQL = (col) => `LOWER(REPLACE(REPLACE(REPLACE(${col}, ' ', ''), '-', ''), '.', ''))`;
 
           for (const [eqType, tableInfo] of Object.entries(tableMap)) {
             try {
@@ -2400,6 +2455,7 @@ function createToolHandlers(pool, site) {
 
               // Recherche spéciale pour datahub avec catégories
               // NOTE: dh_items n'a PAS de colonne site - pas de filtre site
+              // Normalisation complète: "27-9-G" = "27.9.g" = "27 9 g"
               if (tableInfo.hasCategory) {
                 query = `
                   SELECT dh.id, dh.name, dh.code, dh.building as building_code, dh.floor, dh.location as room,
@@ -2410,8 +2466,10 @@ function createToolHandlers(pool, site) {
                     LOWER(dh.name) LIKE $1
                     OR LOWER(dhc.name) LIKE $1
                     OR LOWER(COALESCE(dhc.name, '') || ' ' || dh.name) LIKE $1
-                    OR LOWER(REPLACE(dh.name, ' ', '')) LIKE $2
-                    OR LOWER(REPLACE(dhc.name, ' ', '')) LIKE $2
+                    OR ${normalizeSQL('dh.name')} LIKE $2
+                    OR ${normalizeSQL('dhc.name')} LIKE $2
+                    OR ${normalizeSQL("COALESCE(dhc.name, '') || dh.name")} LIKE $2
+                    OR (dh.code IS NOT NULL AND ${normalizeSQL('dh.code')} LIKE $2)
                   )
                   LIMIT 5
                 `;
@@ -2455,12 +2513,12 @@ function createToolHandlers(pool, site) {
 
               if (tableInfo.siteJoin) {
                 // Tables avec join sur sites
-                // Inclut recherche compact pour mots collés (ex: "portailsite" → "portail site")
+                // Normalisation complète: "27-9-G" = "27.9.g" = "27 9 g"
                 query = `
                   SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
                   FROM ${tableInfo.table} e
                   ${tableInfo.siteJoin.replace('{table}', 'e')}
-                  WHERE ${tableInfo.siteCondition} AND (LOWER(e.name) LIKE $2 OR LOWER(REPLACE(e.name, ' ', '')) LIKE $3)
+                  WHERE ${tableInfo.siteCondition} AND (LOWER(e.name) LIKE $2 OR ${normalizeSQL('e.name')} LIKE $3)
                   LIMIT 5
                 `;
                 queryParams = [site, `%${name.toLowerCase()}%`, compactPattern];
@@ -2469,7 +2527,7 @@ function createToolHandlers(pool, site) {
                 query = `
                   SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
                   FROM ${tableInfo.table}
-                  WHERE ${tableInfo.siteColumn} = $1 AND (LOWER(name) LIKE $2 OR LOWER(REPLACE(name, ' ', '')) LIKE $3)
+                  WHERE ${tableInfo.siteColumn} = $1 AND (LOWER(name) LIKE $2 OR ${normalizeSQL('name')} LIKE $3)
                   LIMIT 5
                 `;
                 queryParams = [site, `%${name.toLowerCase()}%`, compactPattern];
@@ -2478,7 +2536,7 @@ function createToolHandlers(pool, site) {
                 query = `
                   SELECT ${tableInfo.columns}, '${eqType}' as equipment_type
                   FROM ${tableInfo.table}
-                  WHERE (LOWER(name) LIKE $1 OR LOWER(REPLACE(name, ' ', '')) LIKE $2)
+                  WHERE (LOWER(name) LIKE $1 OR ${normalizeSQL('name')} LIKE $2)
                   LIMIT 5
                 `;
                 queryParams = [`%${name.toLowerCase()}%`, compactPattern];
