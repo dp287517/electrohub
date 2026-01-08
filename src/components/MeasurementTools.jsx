@@ -596,11 +596,6 @@ export default function MeasurementTools({
       map.off("mousemove", handleMapMouseMove);
       try { map.doubleClickZoom.enable(); } catch (e) {}
       map.getContainer().style.cursor = "";
-      // Clear any pending click timeout
-      if (clickTimeoutRef.current) {
-        clearTimeout(clickTimeoutRef.current);
-        clickTimeoutRef.current = null;
-      }
     };
   }, [mapRef, mode, handleMapClick, handleMapDblClick, handleMapMouseMove]);
 
