@@ -3,13 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Wrench, AlertTriangle, CheckCircle, Clock,
-  Zap, Activity, RefreshCw, Users,
+  Zap, RefreshCw, Users,
   ChevronRight, ChevronDown, Calendar,
   MessageCircle, Play, Pause, ArrowRight, Send,
   Mic, MicOff, X
 } from 'lucide-react';
 import { aiAssistant } from '../lib/ai-assistant';
 import { getUserPermissions } from '../lib/permissions';
+import { get } from '../lib/api';
 
 // Mapping agent type to app permission
 const AGENT_TO_APP_MAP = {
@@ -373,13 +374,16 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
   const loadBriefingData = async () => {
     setIsLoading(true);
     try {
+      // Use get() from api.js which properly includes X-Site header
       const [agentListRes, agentNamesRes, morningBrief, troubleshootingRes, controlsDashboard] = await Promise.all([
-        fetch('/api/admin/settings/ai-agents/list').then(r => r.json()).catch(() => ({ agents: [] })),
-        fetch('/api/admin/settings/ai-agents/names').then(r => r.json()).catch(() => ({ names: {} })),
+        get('/api/admin/settings/ai-agents/list').catch(() => ({ agents: [] })),
+        get('/api/admin/settings/ai-agents/names').catch(() => ({ names: {} })),
         aiAssistant.getMorningBrief().catch(() => null),
-        fetch('/api/troubleshooting/list?limit=10').then(r => r.json()).catch(() => ({ records: [] })),
-        fetch('/api/switchboard/controls/dashboard').then(r => r.json()).catch(() => ({ stats: {} }))
+        get('/api/troubleshooting/list', { limit: 10 }).catch(() => ({ records: [] })),
+        get('/api/switchboard/controls/dashboard').catch(() => ({ stats: {} }))
       ]);
+
+      console.log('[BriefingBoard] controlsDashboard:', controlsDashboard);
 
       // Filter agents based on permissions
       const filteredAgents = (agentListRes.agents || []).filter(agent => {
@@ -395,26 +399,25 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
 
       setAgents(filteredAgents);
 
+      // Get stats from dashboard - these now include mobile and doors
+      const dashboardStats = controlsDashboard?.stats || {};
+      console.log('[BriefingBoard] dashboardStats:', dashboardStats);
+
       // Pass controls by type to buildAgentData
-      const data = buildAgentData(morningBrief, troubleshootingRes?.records || [], controlsDashboard?.stats);
+      const data = buildAgentData(morningBrief, troubleshootingRes?.records || [], dashboardStats);
       setAgentData(data);
 
-      // Calculate stats from the real data
-      const totalOverdue = controlsDashboard?.stats?.overdue || 0;
-      const totalPending = controlsDashboard?.stats?.pending || 0;
-      const completedRecent = controlsDashboard?.stats?.completed_30d || 0;
+      // Use stats directly from dashboard API
+      const totalOverdue = dashboardStats.overdue || 0;
+      const totalPending = dashboardStats.pending || 0;
+      const completedRecent = dashboardStats.completed_30d || 0;
       const todaysTroubleshooting = (troubleshootingRes?.records || []).filter(r =>
         new Date(r.created_at).toDateString() === new Date().toDateString()
       ).length;
 
-      // Calculate health score based on actual data
-      let healthScore = 100;
-      healthScore -= Math.min(totalOverdue * 10, 40); // -10 per overdue, max -40
-      healthScore -= Math.min(todaysTroubleshooting * 5, 20); // -5 per troubleshooting today, max -20
-      healthScore = Math.max(0, Math.min(100, Math.round(healthScore)));
+      console.log('[BriefingBoard] Stats:', { totalOverdue, totalPending, completedRecent, todaysTroubleshooting });
 
       setStats({
-        healthScore: morningBrief?.healthScore || healthScore,
         overdueControls: totalOverdue,
         pendingControls: totalPending,
         completedToday: completedRecent,
@@ -467,6 +470,7 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
     const equipmentTypeToAgent = {
       switchboard: 'switchboard',
       mobile_equipment: 'mobile',
+      doors: 'doors',
       vsd: 'vsd',
       meca: 'meca',
       hv: 'hv',
@@ -475,9 +479,12 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
       infrastructure: 'infrastructure'
     };
 
-    // Get controls by equipment type
+    // Get controls by equipment type from dashboard stats
     const overdueByType = controlsStats?.overdueByEquipment || {};
     const pendingByType = controlsStats?.pendingByEquipment || {};
+
+    console.log('[BriefingBoard] buildAgentData - overdueByType:', overdueByType);
+    console.log('[BriefingBoard] buildAgentData - pendingByType:', pendingByType);
 
     // Main agent
     data.main = { items: [], actionUrl: '/dashboard' };
@@ -713,8 +720,7 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
 
       {/* Quick Stats */}
       <div className="px-3 py-2 bg-black/20 border-b border-white/5 flex-shrink-0">
-        <div className="grid grid-cols-5 gap-2">
-          <QuickStat icon={Activity} value={stats.healthScore || 0} label="Santé" color={stats.healthScore >= 80 ? 'green' : 'amber'} onClick={() => navigate('/app/switchboard-controls')} />
+        <div className="grid grid-cols-4 gap-2">
           <QuickStat icon={AlertTriangle} value={stats.overdueControls || 0} label="Retard" color="red" onClick={() => navigate('/app/switchboard-controls?filter=overdue')} />
           <QuickStat icon={Clock} value={stats.pendingControls || 0} label="À faire" color="blue" onClick={() => navigate('/app/switchboard-controls')} />
           <QuickStat icon={Wrench} value={stats.troubleshootingToday || 0} label="Dépan." color="amber" onClick={() => navigate('/app/troubleshooting')} />
