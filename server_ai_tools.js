@@ -84,8 +84,15 @@ UTILISE CETTE FONCTION QUAND l'utilisateur dit:
 - "transfère ce dépannage vers...", "déplace l'intervention sur..."
 - "erreur, c'était l'équipement X", "corrige l'équipement"
 
+**IMPORTANT - NE PAS DEVINER LA DESTINATION !**
+Si l'utilisateur dit juste "c'est pas le bon équipement" SANS préciser la destination:
+→ NE PAS appeler cette fonction !
+→ DEMANDE d'abord: "Vers quel équipement voulez-vous transférer ce dépannage ?"
+
+N'appelle cette fonction QUE si l'utilisateur a clairement indiqué l'équipement CIBLE.
+
 WORKFLOW:
-1. L'utilisateur signale une erreur sur un dépannage récent
+1. L'utilisateur signale une erreur ET précise l'équipement cible
 2. Tu recherches l'équipement cible
 3. Tu proposes le transfert avec un bouton de confirmation
 4. L'utilisateur confirme et le transfert est effectué`,
@@ -98,7 +105,7 @@ WORKFLOW:
           },
           target_equipment_name: {
             type: "string",
-            description: "Nom ou partie du nom de l'équipement cible"
+            description: "Nom ou partie du nom de l'équipement CIBLE (où le dépannage DOIT être transféré)"
           },
           target_equipment_type: {
             type: "string",
@@ -108,6 +115,10 @@ WORKFLOW:
           target_building: {
             type: "string",
             description: "Bâtiment de l'équipement cible (optionnel, pour affiner la recherche)"
+          },
+          current_equipment_id: {
+            type: "string",
+            description: "ID de l'équipement actuel à EXCLURE des résultats (car l'utilisateur est dessus)"
           }
         },
         required: ["target_equipment_name"]
@@ -1249,7 +1260,7 @@ function createToolHandlers(pool, site) {
     // TRANSFERT DE DÉPANNAGE (Version intelligente)
     // -----------------------------------------------------------------------
     propose_troubleshooting_transfer: async (params) => {
-      const { troubleshooting_id, target_equipment_name, target_equipment_type, target_building } = params;
+      const { troubleshooting_id, target_equipment_name, target_equipment_type, target_building, current_equipment_id } = params;
 
       try {
         // 1. Récupérer le dépannage à transférer (le plus récent si pas d'ID)
@@ -1481,6 +1492,19 @@ function createToolHandlers(pool, site) {
           } catch (e) {
             // Table might not exist, continue
           }
+        }
+
+        // 3.5 Filtrer l'équipement actuel (ne pas proposer de transférer vers soi-même !)
+        if (current_equipment_id) {
+          const currentIdStr = String(current_equipment_id);
+          // Filtrer les candidats exacts
+          const filteredCandidates = candidates.filter(c => String(c.id) !== currentIdStr);
+          candidates.length = 0;
+          candidates.push(...filteredCandidates);
+          // Filtrer les équipements similaires
+          const filteredSimilar = similarEquipments.filter(s => String(s.id) !== currentIdStr);
+          similarEquipments.length = 0;
+          similarEquipments.push(...filteredSimilar);
         }
 
         // 4. Si aucun candidat exact trouvé
@@ -4882,16 +4906,25 @@ const SIMPLIFIED_SYSTEM_PROMPT = `Tu es **Electro**, l'assistant IA d'ElectroHub
 | "je me suis trompé d'équipement", "mauvais équipement", "transfère ce dépannage" | propose_troubleshooting_transfer |
 
 ## 🔄 TRANSFERT DE DÉPANNAGE
-**IMPORTANT**: Quand l'utilisateur veut transférer un dépannage vers un autre équipement:
-1. Si tu es un agent spécialisé (Nexus pour datahub, Shakira pour VSD, etc.), **PRIORISE ton type d'équipement**
-   - Exemple: En tant que Nexus (datahub), pour "transfère vers Otrivin 3", appelle **propose_troubleshooting_transfer** avec target_equipment_type="datahub"
-2. Si l'équipement n'est pas trouvé dans ton type, la recherche s'étendra automatiquement aux autres types
-3. Si l'utilisateur mentionne un type différent (ex: "vers le tableau Otrivin"), respecte son choix
+**RÈGLE CRITIQUE - NE PAS DEVINER LA DESTINATION !**
+Si l'utilisateur dit "c'est pas le bon équipement" ou "mauvais équipement" SANS préciser où transférer:
+→ **NE PAS** appeler propose_troubleshooting_transfer !
+→ **DEMANDE D'ABORD**: "Vers quel équipement voulez-vous transférer ce dépannage ?"
+→ Attends que l'utilisateur précise la destination
 
-**EXEMPLES**:
-- Agent Nexus: "transfère vers Otrivin 3" → propose_troubleshooting_transfer(target_equipment_name="Otrivin 3", target_equipment_type="datahub")
-- Agent Matrix: "transfère vers TGBT" → propose_troubleshooting_transfer(target_equipment_name="TGBT", target_equipment_type="switchboard")
-- Tout agent: "transfère vers le tableau Otrivin" → propose_troubleshooting_transfer(target_equipment_name="Tableau Otrivin", target_equipment_type="switchboard")
+**UNIQUEMENT** quand l'utilisateur a CLAIREMENT indiqué l'équipement CIBLE (ex: "transfère vers Otrivin 3"):
+1. Si tu es un agent spécialisé, **PRIORISE ton type d'équipement**
+2. **PASSE current_equipment_id** si l'utilisateur est sur une fiche équipement (pour ne pas proposer le même équipement !)
+3. Si l'équipement n'est pas trouvé dans ton type, la recherche s'étendra automatiquement aux autres types
+
+**EXEMPLES CORRECTS**:
+- User: "transfère vers Otrivin 3" → propose_troubleshooting_transfer(target_equipment_name="Otrivin 3", target_equipment_type="datahub", current_equipment_id="123")
+- User: "transfère vers TGBT" → propose_troubleshooting_transfer(target_equipment_name="TGBT", target_equipment_type="switchboard")
+
+**EXEMPLES INCORRECTS** (à NE PAS faire):
+- User: "c'est pas le bon équipement" → ❌ NE PAS appeler propose_troubleshooting_transfer
+- User: "mauvais équipement" → ❌ NE PAS appeler propose_troubleshooting_transfer
+→ Réponds plutôt: "Vers quel équipement voulez-vous transférer ce dépannage ?"
 
 ## ⚠️ SÉLECTION DE CANDIDATS (TRÈS IMPORTANT)
 Quand **propose_troubleshooting_transfer** retourne plusieurs candidats numérotés:
