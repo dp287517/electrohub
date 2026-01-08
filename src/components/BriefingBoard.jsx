@@ -667,7 +667,7 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
 
   if (isLoading) {
     return (
-      <div className="min-h-[500px] bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-2xl p-6 flex items-center justify-center">
+      <div className="h-screen w-full bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <motion.div animate={{ rotate: 360 }} transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}>
             <RefreshCw size={40} className="text-blue-400" />
@@ -679,7 +679,7 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
   }
 
   return (
-    <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+    <div className="h-screen w-full bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 overflow-hidden flex flex-col">
       {/* Header */}
       <div className="relative px-4 py-3 border-b border-white/10 flex-shrink-0">
         <div className="flex items-center justify-between gap-3">
@@ -754,12 +754,11 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
       </div>
 
       {/* Chat Area */}
-      <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {/* Messages */}
         <div
           ref={chatContainerRef}
           className="flex-1 overflow-y-auto p-4 space-y-4"
-          style={{ minHeight: '200px' }}
         >
           <AnimatePresence>
             {messages.map(msg => (
