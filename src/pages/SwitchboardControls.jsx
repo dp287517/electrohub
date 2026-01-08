@@ -1769,7 +1769,17 @@ function TemplateModal({ template, datahubCategories = [], mecaCategories = [], 
                 <option value="switchboard">⚡ Tableau électrique</option>
                 <option value="device">🔌 Disjoncteur</option>
                 <option value="vsd">⚙️ Variateur (VSD)</option>
-                <option value="meca">🔧 Équip. Mécanique</option>
+                {mecaCategories.length > 0 ? (
+                  <optgroup label="🔧 Équip. Mécanique">
+                    {mecaCategories.map(cat => (
+                      <option key={cat.id} value={`meca_${cat.id}`}>
+                        {cat.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : (
+                  <option value="meca">🔧 Équip. Mécanique</option>
+                )}
                 <option value="mobile_equipment">🚜 Équip. Mobile</option>
                 <option value="hv">⚡ Haute Tension (HT)</option>
                 <option value="glo">🔋 Équip. GLO</option>
@@ -1777,15 +1787,6 @@ function TemplateModal({ template, datahubCategories = [], mecaCategories = [], 
                   <optgroup label="📦 Datahub">
                     {datahubCategories.map(cat => (
                       <option key={cat.id} value={`datahub_${cat.id}`}>
-                        {cat.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {mecaCategories.length > 0 && (
-                  <optgroup label="🔧 Meca">
-                    {mecaCategories.map(cat => (
-                      <option key={cat.id} value={`meca_${cat.id}`}>
                         {cat.name}
                       </option>
                     ))}
@@ -2477,7 +2478,17 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
               <option value="switchboard">⚡ Tableau électrique</option>
               <option value="device">🔌 Disjoncteur</option>
               <option value="vsd">⚙️ Variateur (VSD)</option>
-              <option value="meca">🔧 Équip. Mécanique</option>
+              {mecaCategories.length > 0 ? (
+                <optgroup label="🔧 Équip. Mécanique">
+                  {mecaCategories.map(cat => (
+                    <option key={cat.id} value={`meca_${cat.id}`}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : (
+                <option value="meca">🔧 Équip. Mécanique</option>
+              )}
               <option value="mobile_equipment">🚜 Équip. Mobile</option>
               <option value="hv">⚡ Haute Tension (HT)</option>
               <option value="glo">🔋 Équip. GLO</option>
@@ -2485,15 +2496,6 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
                 <optgroup label="📦 Datahub">
                   {datahubCategories.map(cat => (
                     <option key={cat.id} value={`datahub_${cat.id}`}>
-                      {cat.name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {mecaCategories.length > 0 && (
-                <optgroup label="🔧 Meca">
-                  {mecaCategories.map(cat => (
-                    <option key={cat.id} value={`meca_${cat.id}`}>
                       {cat.name}
                     </option>
                   ))}
