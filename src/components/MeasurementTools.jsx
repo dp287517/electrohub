@@ -247,6 +247,12 @@ export default function MeasurementTools({
   const [selectedId, setSelectedId] = useState(null);
   const [hoverPoint, setHoverPoint] = useState(null);
 
+  // Refs to track current values (avoid stale closures)
+  const modeRef = useRef(mode);
+  const drawingPointsRef = useRef(drawingPoints);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => { drawingPointsRef.current = drawingPoints; }, [drawingPoints]);
+
   // Layers
   const allLayersRef = useRef([]);
   const drawingLayerRef = useRef(null);
@@ -470,7 +476,11 @@ export default function MeasurementTools({
   }, [mode, screenToFrac, scalePoints.length]);
 
   const handleMapDblClick = useCallback((e) => {
-    if (!mode || mode === "scale") return;
+    // Use refs to get current values (avoid stale closures)
+    const currentMode = modeRef.current;
+    const currentPoints = drawingPointsRef.current;
+
+    if (!currentMode || currentMode === "scale") return;
     L.DomEvent.stopPropagation(e);
     L.DomEvent.preventDefault(e);
 
@@ -482,19 +492,19 @@ export default function MeasurementTools({
     pendingClickRef.current = null;
 
     // Finish if we have enough points
-    if ((mode === "line" && drawingPoints.length >= 2) || (mode === "polygon" && drawingPoints.length >= 3)) {
+    if ((currentMode === "line" && currentPoints.length >= 2) || (currentMode === "polygon" && currentPoints.length >= 3)) {
       finishDrawingRef.current();
     }
-  }, [mode, drawingPoints.length]);
+  }, []); // No dependencies - uses refs
 
   const handleMapMouseMove = useCallback((e) => {
     if (!mode) return;
     setHoverPoint(screenToFrac(e.latlng));
   }, [mode, screenToFrac]);
 
-  // Finish drawing
+  // Finish drawing - uses refs to get current values
   const finishDrawingRef = useRef(null);
-  const finishDrawing = useCallback(async () => {
+  finishDrawingRef.current = async () => {
     // Clear any pending click timeout
     if (clickTimeoutRef.current) {
       clearTimeout(clickTimeoutRef.current);
@@ -502,20 +512,26 @@ export default function MeasurementTools({
     }
     pendingClickRef.current = null;
 
-    if (mode === "line" && drawingPoints.length >= 2) {
-      const measurement = await createMeasurement({ type: "line", points: drawingPoints, color: COLORS[measurements.length % COLORS.length] });
+    // Use refs to get current values
+    const currentMode = modeRef.current;
+    const currentPoints = [...drawingPointsRef.current]; // Copy to avoid mutation issues
+
+    console.log("[finishDrawing] mode:", currentMode, "points:", currentPoints.length);
+
+    if (currentMode === "line" && currentPoints.length >= 2) {
+      const measurement = await createMeasurement({ type: "line", points: currentPoints, color: COLORS[measurements.length % COLORS.length] });
+      console.log("[finishDrawing] line measurement created:", measurement);
       if (measurement) setSelectedId(measurement.id);
-    } else if (mode === "polygon" && drawingPoints.length >= 3) {
-      const measurement = await createMeasurement({ type: "polygon", points: drawingPoints, color: COLORS[measurements.length % COLORS.length] });
+    } else if (currentMode === "polygon" && currentPoints.length >= 3) {
+      const measurement = await createMeasurement({ type: "polygon", points: currentPoints, color: COLORS[measurements.length % COLORS.length] });
+      console.log("[finishDrawing] polygon measurement created:", measurement);
       if (measurement) setSelectedId(measurement.id);
     }
     setMode(null);
     setDrawingPoints([]);
     setHoverPoint(null);
     setShowList(true);
-  }, [mode, drawingPoints, createMeasurement, measurements.length]);
-
-  useEffect(() => { finishDrawingRef.current = finishDrawing; }, [finishDrawing]);
+  };
 
   const cancelDrawing = () => {
     // Clear any pending click timeout
@@ -748,7 +764,7 @@ export default function MeasurementTools({
                 )}
                 {mode !== "scale" && (
                   <button
-                    onClick={finishDrawing}
+                    onClick={() => finishDrawingRef.current?.()}
                     disabled={(mode === "line" && drawingPoints.length < 2) || (mode === "polygon" && drawingPoints.length < 3)}
                     className="px-2 py-1 text-xs bg-green-500 text-white hover:bg-green-600 rounded-lg flex items-center gap-1 disabled:opacity-50"
                   >
