@@ -980,6 +980,8 @@ const SwitchboardLeafletViewer = forwardRef(
           mk.on("contextmenu", (e) => {
             L.DomEvent.stopPropagation(e);
             L.DomEvent.preventDefault(e);
+            // Ne pas afficher le menu si le drag mobile est actif
+            if (mk._mobileDragActive) return;
             const containerPoint = map.latLngToContainerPoint(e.latlng);
             const rect = wrapRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
             onContextMenu?.(mk.__meta, {
