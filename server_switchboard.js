@@ -1891,6 +1891,18 @@ app.delete('/api/switchboard/boards/:id', async (req, res) => {
     const r = await quickQuery(`DELETE FROM switchboards WHERE id=$1 AND site=$2 RETURNING id, name`, [id, site]);
     if (r.rowCount === 0) return res.status(404).json({ error: 'Board not found' });
 
+    // 🧹 Cleanup orphaned positions and equipment links
+    const posResult = await quickQuery(`DELETE FROM switchboard_positions WHERE switchboard_id = $1 AND site = $2`, [id, site]);
+    const linksResult = await quickQuery(`
+      DELETE FROM equipment_links
+      WHERE site = $1
+      AND (
+        (source_type = 'switchboard' AND source_id = $2)
+        OR (target_type = 'switchboard' AND target_id = $2)
+      )
+    `, [site, String(id)]);
+    console.log(`[DELETE BOARD] Cleaned up ${posResult.rowCount} positions and ${linksResult.rowCount} equipment links for switchboard ${id}`);
+
     // 📝 AUDIT: Log suppression tableau
     await audit.log(req, AUDIT_ACTIONS.DELETED, {
       entityType: 'switchboard',
@@ -9309,6 +9321,45 @@ app.delete('/api/equipment/links/:id', async (req, res) => {
     res.json({ ok: true, deleted: result.rows[0] });
   } catch (e) {
     console.error('[EQUIPMENT_LINKS] Delete link error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 🧹 Cleanup orphaned equipment links (links pointing to deleted equipment)
+app.post('/api/equipment/links/cleanup-orphans', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    console.log(`[EQUIPMENT_LINKS] Cleaning up orphaned links for site: ${site}`);
+
+    // Delete links where the source or target equipment no longer exists
+    const result = await quickQuery(`
+      DELETE FROM equipment_links el
+      WHERE site = $1
+      AND (
+        -- Source equipment doesn't exist
+        (source_type = 'switchboard' AND NOT EXISTS (SELECT 1 FROM switchboards WHERE id::text = el.source_id AND site = el.site))
+        OR (source_type = 'hv' AND NOT EXISTS (SELECT 1 FROM hv_equipments WHERE id::text = el.source_id AND site = el.site))
+        OR (source_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.source_id))
+        OR (source_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.source_id AND site = el.site))
+        OR (source_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.source_id))
+        OR (source_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM mobile_equipments WHERE id = el.source_id))
+        -- Target equipment doesn't exist
+        OR (target_type = 'switchboard' AND NOT EXISTS (SELECT 1 FROM switchboards WHERE id::text = el.target_id AND site = el.site))
+        OR (target_type = 'hv' AND NOT EXISTS (SELECT 1 FROM hv_equipments WHERE id::text = el.target_id AND site = el.site))
+        OR (target_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.target_id))
+        OR (target_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.target_id AND site = el.site))
+        OR (target_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.target_id))
+        OR (target_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM mobile_equipments WHERE id = el.target_id))
+      )
+      RETURNING *
+    `, [site]);
+
+    console.log(`[EQUIPMENT_LINKS] Cleaned up ${result.rowCount} orphaned links`);
+    res.json({ ok: true, deletedCount: result.rowCount, deleted: result.rows });
+  } catch (e) {
+    console.error('[EQUIPMENT_LINKS] Cleanup orphans error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

@@ -822,6 +822,15 @@ app.delete("/api/glo/equipments/:id", async (req, res) => {
     }
 
     await pool.query(`DELETE FROM glo_equipments WHERE id=$1`, [id]);
+
+    // 🧹 Cleanup orphaned equipment links (positions are auto-deleted via CASCADE)
+    const linksResult = await pool.query(`
+      DELETE FROM equipment_links
+      WHERE (source_type = 'glo' AND source_id = $1)
+         OR (target_type = 'glo' AND target_id = $1)
+    `, [id]);
+    console.log(`[GLO DELETE] Cleaned up ${linksResult.rowCount} equipment links for GLO equipment ${id}`);
+
     await logEvent("glo_equipment_deleted", { id, name: equipment.name }, u);
 
     // 🔔 Push notification for deleted equipment

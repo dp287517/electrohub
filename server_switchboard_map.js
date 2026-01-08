@@ -625,6 +625,32 @@ app.post("/api/switchboard/maps/cleanup-duplicates", async (req, res) => {
   }
 });
 
+// 🧹 POST /api/switchboard/maps/cleanup-orphans - Nettoyer les positions orphelines (switchboards supprimés)
+app.post("/api/switchboard/maps/cleanup-orphans", async (req, res) => {
+  try {
+    const site = getSite(req);
+    console.log(`[swb-map] Cleaning up orphaned positions for site: ${site}`);
+
+    // Delete positions where the switchboard no longer exists
+    const result = await pool.query(`
+      DELETE FROM switchboard_positions sp
+      WHERE site = $1
+      AND NOT EXISTS (SELECT 1 FROM switchboards s WHERE s.id = sp.switchboard_id AND s.site = sp.site)
+      RETURNING *
+    `, [site]);
+
+    console.log(`[swb-map] Cleaned up ${result.rowCount} orphaned positions`);
+    res.json({
+      ok: true,
+      deletedCount: result.rowCount,
+      deleted: result.rows.map(p => ({ id: p.id, switchboard_id: p.switchboard_id, logical_name: p.logical_name }))
+    });
+  } catch (e) {
+    console.error("[swb-map] Cleanup orphans error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // DELETE /api/switchboard/maps/positions/:id - Supprimer une position
 app.delete("/api/switchboard/maps/positions/:id", async (req, res) => {
   try {
