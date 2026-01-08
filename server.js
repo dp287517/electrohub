@@ -15,6 +15,7 @@ import troubleshootingRouter, { initTroubleshootingTables } from "./server_troub
 import { createChatV2Router, initChatV2Tables } from "./server_ai_chat_v2.js";
 import { createAgentMemoryRouter, initAgentMemoryTables, generateAllDailySnapshots } from "./server_agent_memory.js";
 import measurementsRouter, { initMeasurementsTables } from "./server_measurements.js";
+import sendgridRouter, { initEmailTables } from "./server_sendgrid.js";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import multer from "multer";
@@ -10307,6 +10308,13 @@ console.log('[Agent-Memory] Agent Memory router mounted - Daily snapshots enable
 console.log('[Measurements] Mounting measurements router at /api/measurements');
 app.use("/api/measurements", measurementsRouter);
 console.log('[Measurements] Measurements router mounted');
+
+/* ================================================================
+   📧 SendGrid Email API Routes - Daily outage reports
+   ================================================================ */
+console.log('[SendGrid] Mounting sendgrid router at /api/sendgrid');
+app.use("/api/sendgrid", sendgridRouter);
+console.log('[SendGrid] SendGrid router mounted - Daily reports enabled');
 
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");

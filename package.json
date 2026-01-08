@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "db:explore": "node scripts/db-explore.js",
-    "start": "concurrently -k \"node server_atex.js\" \"node server_learn_ex.js\" \"node server_dcf.js\" \"node server_meca.js\" \"node server_loopcalc.js\" \"node server_switchboard.js\" \"node server_selectivity.js\" \"node server_fla.js\" \"node server_arcflash.js\" \"node server_obsolescence.js\" \"node server_hv.js\" \"node server_diagram.js\" \"node server_oibt.js\" \"node server_project.js\" \"node server_comp_ext.js\" \"node server_ask_veeva.js\" \"node server_doors.js\" \"node server_fire_control.js\" \"node server_vsd.js\" \"node server_mobile_equipment.js\" \"node server_glo.js\" \"node server_datahub.js\" \"node server_infrastructure.js\" \"node server_custom_modules.js\" \"node server_ai_assistant.js\" \"node server_procedures.js\" \"node server.js\""
+    "start": "concurrently -k \"node server_atex.js\" \"node server_learn_ex.js\" \"node server_dcf.js\" \"node server_meca.js\" \"node server_loopcalc.js\" \"node server_switchboard.js\" \"node server_selectivity.js\" \"node server_fla.js\" \"node server_arcflash.js\" \"node server_obsolescence.js\" \"node server_hv.js\" \"node server_diagram.js\" \"node server_oibt.js\" \"node server_project.js\" \"node server_comp_ext.js\" \"node server_ask_veeva.js\" \"node server_doors.js\" \"node server_fire_control.js\" \"node server_vsd.js\" \"node server_mobile_equipment.js\" \"node server_glo.js\" \"node server_datahub.js\" \"node server_infrastructure.js\" \"node server_custom_modules.js\" \"node server_ai_assistant.js\" \"node server_procedures.js\" \"node server_sendgrid.js\" \"node server.js\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.679.0",
@@ -20,6 +20,7 @@
     "@radix-ui/react-tooltip": "^1.1.2",
     "@react-three/drei": "^9.99.0",
     "@react-three/fiber": "^8.15.12",
+    "@sendgrid/mail": "^8.1.6",
     "archiver": "^6.0.2",
     "axios": "^1.7.7",
     "bcryptjs": "^2.4.3",
