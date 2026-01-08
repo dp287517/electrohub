@@ -18,6 +18,7 @@ import { getDashboardStats as getProceduresDashboard } from '../lib/procedures-a
 import WeatherBackground from '../components/WeatherBackground';
 import FloatingAssistant from '../components/AIAvatar/FloatingAssistant';
 import StoryBrief from '../components/StoryBrief';
+import BriefingBoard from '../components/BriefingBoard';
 import { aiAssistant } from '../lib/ai-assistant';
 import NotificationCenter from '../components/NotificationCenter';
 
@@ -315,6 +316,7 @@ export default function Dashboard() {
   const [user, setUser] = useState({});
   const [showProfile, setShowProfile] = useState(false);
   const [showStory, setShowStory] = useState(false);
+  const [showBriefingBoard, setShowBriefingBoard] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [departments, setDepartments] = useState([]);
   const [sites, setSites] = useState([]);
@@ -526,28 +528,43 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Story Button - Spectacular - Only show if user has equipment access */}
+            {/* Briefing Buttons - Only show if user has equipment access */}
             {canSeeEquipmentStats && (
-              <button onClick={() => setShowStory(true)}
-                className="group relative overflow-hidden flex items-center gap-4 px-6 py-4 bg-white/20 backdrop-blur-xl border-2 border-white/40 rounded-2xl hover:bg-white/30 transition-all hover:scale-105 shadow-2xl">
-                {/* Animated background */}
-                <div className="absolute inset-0 bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-indigo-500/20 opacity-0 group-hover:opacity-100 transition-opacity" />
-
-                {/* Pulsing ring */}
-                <div className="relative">
-                  <div className="absolute inset-0 bg-gradient-to-r from-pink-500 to-purple-500 rounded-xl animate-pulse-glow" />
-                  <div className="relative w-12 h-12 rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 flex items-center justify-center shadow-lg shadow-purple-500/50">
-                    <Play size={20} className="text-white fill-white ml-0.5" />
+              <div className="flex flex-col sm:flex-row gap-3">
+                {/* Team Briefing Board Button - NEW */}
+                <button onClick={() => setShowBriefingBoard(true)}
+                  className="group relative overflow-hidden flex items-center gap-3 px-5 py-3 bg-white/20 backdrop-blur-xl border-2 border-white/40 rounded-2xl hover:bg-white/30 transition-all hover:scale-105 shadow-2xl">
+                  <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/20 via-blue-500/20 to-indigo-500/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <div className="relative">
+                    <div className="absolute inset-0 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-xl animate-pulse-glow" />
+                    <div className="relative w-11 h-11 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-500 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/50">
+                      <Users size={18} className="text-white" />
+                    </div>
                   </div>
-                </div>
+                  <div className="text-left relative">
+                    <p className="text-white font-bold text-sm sm:text-base">Briefing Équipe</p>
+                    <p className="text-white/70 text-xs">Tableau de réunion</p>
+                  </div>
+                  <ChevronRight size={20} className="text-white/60 group-hover:translate-x-1 transition-transform" />
+                </button>
 
-                <div className="text-left relative">
-                  <p className="text-white font-bold text-base sm:text-lg">Brief du matin</p>
-                  <p className="text-white/70 text-sm">Voir la story</p>
-                </div>
-
-                <ChevronRight size={24} className="text-white/60 group-hover:translate-x-2 transition-transform" />
-              </button>
+                {/* Story Button */}
+                <button onClick={() => setShowStory(true)}
+                  className="group relative overflow-hidden flex items-center gap-3 px-5 py-3 bg-white/20 backdrop-blur-xl border-2 border-white/40 rounded-2xl hover:bg-white/30 transition-all hover:scale-105 shadow-2xl">
+                  <div className="absolute inset-0 bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-indigo-500/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <div className="relative">
+                    <div className="absolute inset-0 bg-gradient-to-r from-pink-500 to-purple-500 rounded-xl animate-pulse-glow" />
+                    <div className="relative w-11 h-11 rounded-xl bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 flex items-center justify-center shadow-lg shadow-purple-500/50">
+                      <Play size={18} className="text-white fill-white ml-0.5" />
+                    </div>
+                  </div>
+                  <div className="text-left relative">
+                    <p className="text-white font-bold text-sm sm:text-base">Story Mode</p>
+                    <p className="text-white/70 text-xs">Présentation rapide</p>
+                  </div>
+                  <ChevronRight size={20} className="text-white/60 group-hover:translate-x-1 transition-transform" />
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -703,6 +720,18 @@ export default function Dashboard() {
           autoPlay={true}
           slideDuration={6000}
         />
+      )}
+
+      {showBriefingBoard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-scaleIn">
+          <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <BriefingBoard
+              userName={user?.name?.split(' ')[0]}
+              userEmail={user?.email}
+              onClose={() => setShowBriefingBoard(false)}
+            />
+          </div>
+        </div>
       )}
 
       {/* Mobile Assistant */}
