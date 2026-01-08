@@ -543,7 +543,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
                   ${outage.downtime_minutes ? `<br><span style="font-size: 11px; color: #DC2626;">⏱️ ${outage.downtime_minutes} min arrêt</span>` : ''}
                 </td>
                 <td>
-                  <a href="${APP_URL}/troubleshooting/${outage.id}" style="color: #3B82F6; text-decoration: none; font-weight: 500;">Voir →</a>
+                  <a href="${APP_URL}/app/troubleshooting/${outage.id}" style="color: #3B82F6; text-decoration: none; font-weight: 500;">Voir →</a>
                 </td>
               </tr>
               `).join('')}
@@ -675,8 +675,8 @@ async function sendDailyReportsToAllSubscribers(site) {
 // ============================================================
 function scheduleDailyReports() {
   const now = new Date();
-  const scheduledHour = 7; // 7:00 AM
-  const scheduledMinute = 0;
+  const scheduledHour = 5; // 5:59 AM
+  const scheduledMinute = 59;
 
   // Calculate time until next scheduled run
   let nextRun = new Date(now);
@@ -878,6 +878,47 @@ router.get('/preview', async (req, res) => {
   } catch (error) {
     console.error('[SendGrid] Preview error:', error.message);
     res.status(500).json({ error: 'Failed to generate preview' });
+  }
+});
+
+/**
+ * GET /api/sendgrid/test-send
+ * Send a test email (for admin testing - no auth for simplicity)
+ * Usage: /api/sendgrid/test-send?email=xxx@xxx.com&site=Nyon
+ */
+router.get('/test-send', async (req, res) => {
+  try {
+    const { email, site } = req.query;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email parameter required. Usage: ?email=xxx@xxx.com&site=Nyon' });
+    }
+
+    if (!site) {
+      return res.status(400).json({ error: 'Site parameter required. Usage: ?email=xxx@xxx.com&site=Nyon' });
+    }
+
+    console.log(`[SendGrid] 🧪 Test send requested for ${email} - site: ${site}`);
+
+    const result = await sendDailyOutageReport(email, site);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: `✅ Email envoyé avec succès à ${email}`,
+        messageId: result.messageId
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: `❌ Erreur lors de l'envoi`,
+        error: result.error
+      });
+    }
+
+  } catch (error) {
+    console.error('[SendGrid] Test send error:', error.message);
+    res.status(500).json({ error: 'Failed to send test email: ' + error.message });
   }
 });
 
