@@ -517,7 +517,7 @@ UTILISE CETTE FONCTION pour obtenir:
       description: `Récupère les contrôles planifiés, en retard ou à venir pour tous types d'équipements.
 
 ⚠️ IMPORTANT:
-- Les contrôles des tableaux électriques sont dans "Switchboard Controls" (scheduled_controls)
+- Les contrôles des tableaux électriques sont dans "Switchboard Controls" (control_schedules)
 - Les contrôles des portes coupe-feu sont dans "Fire Door Checks" (fd_checks)
 - Cette fonction gère automatiquement les deux types selon le paramètre equipment_type
 
@@ -1936,8 +1936,8 @@ function createToolHandlers(pool, site) {
             `, [site, building.toUpperCase()]),
             pool.query(`
               SELECT COUNT(*) as total,
-                COUNT(*) FILTER (WHERE next_control_date < CURRENT_DATE) as overdue
-              FROM scheduled_controls sc
+                COUNT(*) FILTER (WHERE next_due_date < CURRENT_DATE) as overdue
+              FROM control_schedules sc
               JOIN switchboards s ON sc.switchboard_id = s.id
               WHERE s.site = $1 AND UPPER(s.building_code) = $2
             `, [site, building.toUpperCase()]),
@@ -1980,10 +1980,10 @@ function createToolHandlers(pool, site) {
               (SELECT COUNT(*) FROM troubleshooting_records tr
                WHERE tr.site = $1 AND tr.building_code = s.building_code
                AND tr.started_at >= NOW() - INTERVAL '${parseInt(period_days)} days') as failure_count,
-              (SELECT COUNT(*) FROM scheduled_controls sc2
+              (SELECT COUNT(*) FROM control_schedules sc2
                JOIN switchboards s2 ON sc2.switchboard_id = s2.id
                WHERE s2.site = $1 AND s2.building_code = s.building_code
-               AND sc2.next_control_date < CURRENT_DATE) as overdue_controls
+               AND sc2.next_due_date < CURRENT_DATE) as overdue_controls
             FROM switchboards s
             WHERE s.site = $1 AND s.building_code IS NOT NULL
             GROUP BY s.building_code
@@ -2041,17 +2041,17 @@ function createToolHandlers(pool, site) {
             SELECT
               s.id, s.name as equipment_name, s.code, s.building_code, s.floor,
               'switchboard' as equipment_type,
-              sc.next_control_date,
-              EXTRACT(DAY FROM CURRENT_DATE - sc.next_control_date)::int as days_overdue,
+              sc.next_due_date,
+              EXTRACT(DAY FROM CURRENT_DATE - sc.next_due_date)::int as days_overdue,
               'overdue_control' as priority_reason,
               CASE
-                WHEN EXTRACT(DAY FROM CURRENT_DATE - sc.next_control_date) > 30 THEN 'critical'
-                WHEN EXTRACT(DAY FROM CURRENT_DATE - sc.next_control_date) > 14 THEN 'high'
+                WHEN EXTRACT(DAY FROM CURRENT_DATE - sc.next_due_date) > 30 THEN 'critical'
+                WHEN EXTRACT(DAY FROM CURRENT_DATE - sc.next_due_date) > 14 THEN 'high'
                 ELSE 'medium'
               END as priority_level
-            FROM scheduled_controls sc
+            FROM control_schedules sc
             JOIN switchboards s ON sc.switchboard_id = s.id
-            WHERE s.site = $1 AND sc.next_control_date < CURRENT_DATE
+            WHERE s.site = $1 AND sc.next_due_date < CURRENT_DATE
           `;
           const queryParams = [site];
 
@@ -3029,7 +3029,7 @@ function createToolHandlers(pool, site) {
 
     // -----------------------------------------------------------------------
     // CONTRÔLES (Switchboard Controls + Fire Door Checks)
-    // NOTE: Gère les contrôles de tableaux (scheduled_controls) ET portes (fd_checks)
+    // NOTE: Gère les contrôles de tableaux (control_schedules) ET portes (fd_checks)
     // -----------------------------------------------------------------------
     get_controls: async (params) => {
       const { filter = 'overdue', equipment_type = 'all', building, equipment_id, equipment_name, limit = 20 } = params;
@@ -3658,34 +3658,34 @@ function createToolHandlers(pool, site) {
         }
       }
 
-      // ===== TABLEAUX ÉLECTRIQUES (scheduled_controls) =====
+      // ===== TABLEAUX ÉLECTRIQUES (control_schedules) =====
       // Calculer les dates selon le filtre
       let dateCondition = '';
       switch (filter) {
         case 'overdue':
-          dateCondition = `AND sc.next_control_date < '${today}'`;
+          dateCondition = `AND sc.next_due_date < '${today}'`;
           break;
         case 'today':
-          dateCondition = `AND sc.next_control_date = '${today}'`;
+          dateCondition = `AND sc.next_due_date = '${today}'`;
           break;
         case 'this_week':
           const weekEnd = new Date(now);
           weekEnd.setDate(weekEnd.getDate() + 7);
-          dateCondition = `AND sc.next_control_date BETWEEN '${today}' AND '${weekEnd.toISOString().split('T')[0]}'`;
+          dateCondition = `AND sc.next_due_date BETWEEN '${today}' AND '${weekEnd.toISOString().split('T')[0]}'`;
           break;
         case 'this_month':
           const monthEnd = new Date(now);
           monthEnd.setDate(monthEnd.getDate() + 30);
-          dateCondition = `AND sc.next_control_date BETWEEN '${today}' AND '${monthEnd.toISOString().split('T')[0]}'`;
+          dateCondition = `AND sc.next_due_date BETWEEN '${today}' AND '${monthEnd.toISOString().split('T')[0]}'`;
           break;
         case 'next_30_days':
           const thirtyDays = new Date(now);
           thirtyDays.setDate(thirtyDays.getDate() + 30);
-          dateCondition = `AND sc.next_control_date BETWEEN '${today}' AND '${thirtyDays.toISOString().split('T')[0]}'`;
+          dateCondition = `AND sc.next_due_date BETWEEN '${today}' AND '${thirtyDays.toISOString().split('T')[0]}'`;
           break;
         case 'last':
         case 'history':
-          // Pour switchboards, pas d'historique dans scheduled_controls (c'est dans control_records)
+          // Pour switchboards, pas d'historique dans control_schedules (c'est dans control_records)
           dateCondition = '';
           break;
         default:
@@ -3694,16 +3694,16 @@ function createToolHandlers(pool, site) {
 
       let query = `
         SELECT
-          sc.id as control_id, sc.next_control_date, sc.control_type,
+          sc.id as control_id, sc.next_due_date, sc.control_type,
           s.id as equipment_id, s.name as equipment_name, s.code as equipment_code,
           s.building_code, s.floor, s.room,
           'switchboard' as equipment_type,
           CASE
-            WHEN sc.next_control_date < CURRENT_DATE THEN
-              EXTRACT(DAY FROM CURRENT_DATE - sc.next_control_date)::int
+            WHEN sc.next_due_date < CURRENT_DATE THEN
+              EXTRACT(DAY FROM CURRENT_DATE - sc.next_due_date)::int
             ELSE 0
           END as days_overdue
-        FROM scheduled_controls sc
+        FROM control_schedules sc
         JOIN switchboards s ON sc.switchboard_id = s.id
         WHERE s.site = $1
         ${dateCondition}
@@ -3733,7 +3733,7 @@ function createToolHandlers(pool, site) {
         paramIndex++;
       }
 
-      query += ` ORDER BY sc.next_control_date ASC LIMIT ${maxLimit}`;
+      query += ` ORDER BY sc.next_due_date ASC LIMIT ${maxLimit}`;
 
       try {
         const result = await pool.query(query, queryParams);
@@ -3758,7 +3758,7 @@ function createToolHandlers(pool, site) {
           building_filter: building || 'all',
           controls: result.rows.map(c => ({
             control_id: c.control_id,
-            next_control_date: c.next_control_date,
+            next_due_date: c.next_due_date,
             control_type: c.control_type,
             equipment_id: c.equipment_id,
             equipment_name: c.equipment_name,
@@ -4111,10 +4111,10 @@ function createToolHandlers(pool, site) {
               pool.query(`SELECT COUNT(*) as count FROM switchboards WHERE site = $1`, [site]),
               pool.query(`
                 SELECT
-                  COUNT(*) FILTER (WHERE next_control_date < CURRENT_DATE) as overdue,
-                  COUNT(*) FILTER (WHERE next_control_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 7) as this_week,
-                  COUNT(*) FILTER (WHERE next_control_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 30) as this_month
-                FROM scheduled_controls sc
+                  COUNT(*) FILTER (WHERE next_due_date < CURRENT_DATE) as overdue,
+                  COUNT(*) FILTER (WHERE next_due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 7) as this_week,
+                  COUNT(*) FILTER (WHERE next_due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 30) as this_month
+                FROM control_schedules sc
                 JOIN switchboards s ON sc.switchboard_id = s.id
                 WHERE s.site = $1
               `, [site]),
@@ -4867,9 +4867,9 @@ function createToolHandlers(pool, site) {
         // Contrôles (recherche dans switchboards par nom)
         if (include_controls) {
           const controls = await pool.query(`
-            SELECT sc.id, sc.control_type, sc.result, sc.next_control_date,
+            SELECT sc.id, sc.control_type, sc.result, sc.next_due_date,
                    sc.control_date, sc.comments, s.name as equipment_name
-            FROM scheduled_controls sc
+            FROM control_schedules sc
             JOIN switchboards s ON sc.switchboard_id = s.id
             WHERE s.site = $1 AND LOWER(s.name) LIKE $2
             ORDER BY sc.control_date DESC NULLS LAST
@@ -4919,25 +4919,25 @@ function createToolHandlers(pool, site) {
         let dateFilter = '';
         switch (period) {
           case 'today':
-            dateFilter = "sc.next_control_date = CURRENT_DATE";
+            dateFilter = "sc.next_due_date = CURRENT_DATE";
             break;
           case 'this_week':
-            dateFilter = "sc.next_control_date >= CURRENT_DATE AND sc.next_control_date <= CURRENT_DATE + INTERVAL '7 days'";
+            dateFilter = "sc.next_due_date >= CURRENT_DATE AND sc.next_due_date <= CURRENT_DATE + INTERVAL '7 days'";
             break;
           case 'next_week':
-            dateFilter = "sc.next_control_date >= CURRENT_DATE + INTERVAL '7 days' AND sc.next_control_date <= CURRENT_DATE + INTERVAL '14 days'";
+            dateFilter = "sc.next_due_date >= CURRENT_DATE + INTERVAL '7 days' AND sc.next_due_date <= CURRENT_DATE + INTERVAL '14 days'";
             break;
           case 'this_month':
-            dateFilter = "sc.next_control_date >= CURRENT_DATE AND sc.next_control_date <= CURRENT_DATE + INTERVAL '30 days'";
+            dateFilter = "sc.next_due_date >= CURRENT_DATE AND sc.next_due_date <= CURRENT_DATE + INTERVAL '30 days'";
             break;
           default:
-            dateFilter = "sc.next_control_date >= CURRENT_DATE AND sc.next_control_date <= CURRENT_DATE + INTERVAL '7 days'";
+            dateFilter = "sc.next_due_date >= CURRENT_DATE AND sc.next_due_date <= CURRENT_DATE + INTERVAL '7 days'";
         }
 
         // Contrôles à venir
         const upcoming = await pool.query(`
           SELECT COUNT(*) as count
-          FROM scheduled_controls sc
+          FROM control_schedules sc
           JOIN switchboards s ON sc.switchboard_id = s.id
           WHERE s.site = $1 AND ${dateFilter}
         `, [site]);
@@ -4947,9 +4947,9 @@ function createToolHandlers(pool, site) {
         if (include_overdue) {
           overdue = await pool.query(`
             SELECT COUNT(*) as count
-            FROM scheduled_controls sc
+            FROM control_schedules sc
             JOIN switchboards s ON sc.switchboard_id = s.id
-            WHERE s.site = $1 AND sc.next_control_date < CURRENT_DATE
+            WHERE s.site = $1 AND sc.next_due_date < CURRENT_DATE
           `, [site]);
         }
 
@@ -5029,16 +5029,16 @@ function createToolHandlers(pool, site) {
         // Tâches du jour
         const todayControls = await pool.query(`
           SELECT COUNT(*) as count
-          FROM scheduled_controls sc
+          FROM control_schedules sc
           JOIN switchboards s ON sc.switchboard_id = s.id
-          WHERE s.site = $1 AND sc.next_control_date = CURRENT_DATE
+          WHERE s.site = $1 AND sc.next_due_date = CURRENT_DATE
         `, [site]);
 
         const overdueControls = await pool.query(`
           SELECT COUNT(*) as count
-          FROM scheduled_controls sc
+          FROM control_schedules sc
           JOIN switchboards s ON sc.switchboard_id = s.id
-          WHERE s.site = $1 AND sc.next_control_date < CURRENT_DATE
+          WHERE s.site = $1 AND sc.next_due_date < CURRENT_DATE
         `, [site]);
 
         briefing.today_tasks = {
@@ -5072,10 +5072,10 @@ function createToolHandlers(pool, site) {
         if (include_priorities) {
           const priorities = await pool.query(`
             SELECT s.name, s.building_code,
-                   EXTRACT(DAY FROM CURRENT_DATE - sc.next_control_date)::int as days_overdue
-            FROM scheduled_controls sc
+                   EXTRACT(DAY FROM CURRENT_DATE - sc.next_due_date)::int as days_overdue
+            FROM control_schedules sc
             JOIN switchboards s ON sc.switchboard_id = s.id
-            WHERE s.site = $1 AND sc.next_control_date < CURRENT_DATE
+            WHERE s.site = $1 AND sc.next_due_date < CURRENT_DATE
             ORDER BY days_overdue DESC
             LIMIT 5
           `, [site]);
