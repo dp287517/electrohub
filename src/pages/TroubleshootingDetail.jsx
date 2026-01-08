@@ -587,8 +587,14 @@ export default function TroubleshootingDetail() {
                   Localisation sur plan
                 </h2>
                 <MiniEquipmentPreview
+                  equipment={{
+                    id: record.equipment_id,
+                    name: record.equipment_name,
+                    code: record.equipment_code,
+                    building_code: record.building_code,
+                    floor: record.floor
+                  }}
                   equipmentType={record.equipment_type}
-                  equipmentId={record.equipment_id}
                 />
               </div>
             )}
