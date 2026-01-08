@@ -3230,6 +3230,434 @@ function createToolHandlers(pool, site) {
         }
       }
 
+      // ===== ÉQUIPEMENTS MOBILES (me_checks) =====
+      if (equipment_type === 'mobile') {
+        try {
+          let mobileQuery = '';
+          const mobileParams = [];
+          let paramIdx = 1;
+
+          if (filter === 'last' || filter === 'history') {
+            // Historique des contrôles effectués
+            mobileQuery = `
+              SELECT
+                c.id as control_id,
+                c.due_date,
+                c.closed_at,
+                c.status,
+                c.result,
+                c.closed_by_name,
+                c.closed_by_email,
+                e.id as equipment_id,
+                e.name as equipment_name,
+                e.code as equipment_code,
+                e.building as building_code,
+                e.floor,
+                e.location as room,
+                'mobile' as equipment_type,
+                CASE
+                  WHEN c.status = 'ok' THEN 'Conforme'
+                  WHEN c.status = 'nc' THEN 'Non conforme'
+                  ELSE c.status
+                END as status_label
+              FROM me_checks c
+              JOIN me_equipments e ON c.equipment_id = e.id
+              WHERE c.closed_at IS NOT NULL
+            `;
+
+            if (equipment_id) {
+              mobileQuery += ` AND e.id = $${paramIdx}`;
+              mobileParams.push(equipment_id);
+              paramIdx++;
+            }
+
+            if (equipment_name) {
+              mobileQuery += ` AND (LOWER(e.name) LIKE $${paramIdx} OR LOWER(e.code) LIKE $${paramIdx})`;
+              mobileParams.push(`%${equipment_name.toLowerCase()}%`);
+              paramIdx++;
+            }
+
+            if (building) {
+              mobileQuery += ` AND UPPER(e.building) = $${paramIdx}`;
+              mobileParams.push(building.toUpperCase());
+              paramIdx++;
+            }
+
+            mobileQuery += ` ORDER BY c.closed_at DESC LIMIT ${maxLimit}`;
+          } else {
+            // Contrôles planifiés (à venir ou en retard)
+            let dateCondition = '';
+            switch (filter) {
+              case 'overdue':
+                dateCondition = `AND c.due_date < '${today}'`;
+                break;
+              case 'today':
+                dateCondition = `AND c.due_date = '${today}'`;
+                break;
+              case 'this_week':
+                const weekEnd = new Date(now);
+                weekEnd.setDate(weekEnd.getDate() + 7);
+                dateCondition = `AND c.due_date BETWEEN '${today}' AND '${weekEnd.toISOString().split('T')[0]}'`;
+                break;
+              case 'this_month':
+              case 'next_30_days':
+                const monthEnd = new Date(now);
+                monthEnd.setDate(monthEnd.getDate() + 30);
+                dateCondition = `AND c.due_date BETWEEN '${today}' AND '${monthEnd.toISOString().split('T')[0]}'`;
+                break;
+              default:
+                dateCondition = '';
+            }
+
+            mobileQuery = `
+              SELECT
+                c.id as control_id,
+                c.due_date as next_control_date,
+                c.started_at,
+                e.id as equipment_id,
+                e.name as equipment_name,
+                e.code as equipment_code,
+                e.building as building_code,
+                e.floor,
+                e.location as room,
+                'mobile' as equipment_type,
+                CASE
+                  WHEN c.due_date < CURRENT_DATE THEN
+                    EXTRACT(DAY FROM CURRENT_DATE - c.due_date)::int
+                  ELSE 0
+                END as days_overdue,
+                CASE
+                  WHEN c.started_at IS NOT NULL THEN 'En cours'
+                  ELSE 'Planifié'
+                END as status_label
+              FROM me_checks c
+              JOIN me_equipments e ON c.equipment_id = e.id
+              WHERE c.closed_at IS NULL ${dateCondition}
+            `;
+
+            if (equipment_id) {
+              mobileQuery += ` AND e.id = $${paramIdx}`;
+              mobileParams.push(equipment_id);
+              paramIdx++;
+            }
+
+            if (equipment_name) {
+              mobileQuery += ` AND (LOWER(e.name) LIKE $${paramIdx} OR LOWER(e.code) LIKE $${paramIdx})`;
+              mobileParams.push(`%${equipment_name.toLowerCase()}%`);
+              paramIdx++;
+            }
+
+            if (building) {
+              mobileQuery += ` AND UPPER(e.building) = $${paramIdx}`;
+              mobileParams.push(building.toUpperCase());
+              paramIdx++;
+            }
+
+            mobileQuery += ` ORDER BY c.due_date ASC LIMIT ${maxLimit}`;
+          }
+
+          const result = await pool.query(mobileQuery, mobileParams);
+
+          const overdueCount = result.rows.filter(r => r.days_overdue > 0).length;
+          const upcomingCount = result.rows.filter(r => !r.days_overdue || r.days_overdue === 0).length;
+
+          return {
+            success: true,
+            filter,
+            equipment_type: 'mobile',
+            count: result.rows.length,
+            overdue_count: overdueCount,
+            upcoming_count: upcomingCount,
+            building_filter: building || 'all',
+            controls: result.rows.map(c => ({
+              control_id: c.control_id,
+              next_control_date: c.next_control_date || c.due_date,
+              closed_at: c.closed_at,
+              status: c.status,
+              status_label: c.status_label,
+              equipment_id: c.equipment_id,
+              equipment_name: c.equipment_name,
+              equipment_code: c.equipment_code,
+              building: c.building_code,
+              floor: c.floor,
+              room: c.room,
+              equipment_type: 'mobile',
+              days_overdue: c.days_overdue || 0
+            })),
+            summary: result.rows.length === 0
+              ? `Aucun contrôle ${filter === 'overdue' ? 'en retard' : filter === 'history' ? 'dans l\'historique' : 'prévu'} pour les équipements mobiles${building ? ` (bâtiment ${building})` : ''}.`
+              : `${result.rows.length} contrôle(s) ${filter === 'overdue' ? 'en retard' : filter === 'history' ? 'dans l\'historique' : 'prévu(s)'} pour les équipements mobiles${overdueCount > 0 ? ` (${overdueCount} en retard)` : ''}.`
+          };
+        } catch (error) {
+          console.error('[TOOL] get_controls (mobile) error:', error.message);
+          return { success: false, error: error.message, controls: [] };
+        }
+      }
+
+      // ===== VSD, MECA, HV, GLO, DATAHUB (control_schedules) =====
+      // Ces types utilisent la table unifiée control_schedules
+      const unifiedTypes = ['vsd', 'meca', 'hv', 'glo', 'datahub'];
+      if (unifiedTypes.includes(equipment_type)) {
+        try {
+          const typeColumnMap = {
+            vsd: { idCol: 'vsd_equipment_id', table: 'vsd_equipments', nameCol: 'name', buildingCol: 'building', siteCol: 'site' },
+            meca: { idCol: 'meca_equipment_id', table: 'meca_equipments', nameCol: 'name', buildingCol: 'building', siteJoin: 'INNER JOIN sites st ON st.id = eq.site_id', siteCondition: 'st.name = $1' },
+            hv: { idCol: 'hv_equipment_id', table: 'hv_equipments', nameCol: 'name', buildingCol: 'building_code', siteCol: null },
+            glo: { idCol: 'glo_equipment_id', table: 'glo_equipments', nameCol: 'name', buildingCol: 'building', siteCol: null },
+            datahub: { idCol: 'datahub_equipment_id', table: 'dh_items', nameCol: 'name', buildingCol: 'building', siteCol: null }
+          };
+
+          const config = typeColumnMap[equipment_type];
+          if (!config) {
+            return { success: false, error: `Type d'équipement ${equipment_type} non supporté pour les contrôles.`, controls: [] };
+          }
+
+          let dateCondition = '';
+          switch (filter) {
+            case 'overdue':
+              dateCondition = `AND cs.next_due_date < '${today}'`;
+              break;
+            case 'today':
+              dateCondition = `AND cs.next_due_date = '${today}'`;
+              break;
+            case 'this_week':
+              const weekEnd = new Date(now);
+              weekEnd.setDate(weekEnd.getDate() + 7);
+              dateCondition = `AND cs.next_due_date BETWEEN '${today}' AND '${weekEnd.toISOString().split('T')[0]}'`;
+              break;
+            case 'this_month':
+            case 'next_30_days':
+              const monthEnd = new Date(now);
+              monthEnd.setDate(monthEnd.getDate() + 30);
+              dateCondition = `AND cs.next_due_date BETWEEN '${today}' AND '${monthEnd.toISOString().split('T')[0]}'`;
+              break;
+            default:
+              dateCondition = '';
+          }
+
+          let scheduleQuery;
+          const scheduleParams = [site];
+          let paramIdx = 2;
+
+          if (config.siteJoin) {
+            // Tables avec join sur sites (meca)
+            scheduleQuery = `
+              SELECT
+                cs.id as control_id,
+                cs.next_due_date as next_control_date,
+                cs.status,
+                ct.name as control_type,
+                eq.id as equipment_id,
+                eq.${config.nameCol} as equipment_name,
+                eq.${config.buildingCol} as building_code,
+                '${equipment_type}' as equipment_type,
+                CASE
+                  WHEN cs.next_due_date < CURRENT_DATE THEN
+                    EXTRACT(DAY FROM CURRENT_DATE - cs.next_due_date)::int
+                  ELSE 0
+                END as days_overdue
+              FROM control_schedules cs
+              JOIN ${config.table} eq ON cs.${config.idCol} = eq.id
+              ${config.siteJoin.replace('eq.', 'eq.')}
+              LEFT JOIN control_templates ct ON cs.template_id = ct.id
+              WHERE ${config.siteCondition} AND cs.${config.idCol} IS NOT NULL ${dateCondition}
+            `;
+          } else if (config.siteCol) {
+            // Tables avec colonne site directe (vsd)
+            scheduleQuery = `
+              SELECT
+                cs.id as control_id,
+                cs.next_due_date as next_control_date,
+                cs.status,
+                ct.name as control_type,
+                eq.id as equipment_id,
+                eq.${config.nameCol} as equipment_name,
+                eq.${config.buildingCol} as building_code,
+                '${equipment_type}' as equipment_type,
+                CASE
+                  WHEN cs.next_due_date < CURRENT_DATE THEN
+                    EXTRACT(DAY FROM CURRENT_DATE - cs.next_due_date)::int
+                  ELSE 0
+                END as days_overdue
+              FROM control_schedules cs
+              JOIN ${config.table} eq ON cs.${config.idCol} = eq.id
+              LEFT JOIN control_templates ct ON cs.template_id = ct.id
+              WHERE eq.${config.siteCol} = $1 AND cs.${config.idCol} IS NOT NULL ${dateCondition}
+            `;
+          } else {
+            // Tables sans filtre site (hv, glo, datahub)
+            scheduleQuery = `
+              SELECT
+                cs.id as control_id,
+                cs.next_due_date as next_control_date,
+                cs.status,
+                ct.name as control_type,
+                eq.id as equipment_id,
+                eq.${config.nameCol} as equipment_name,
+                eq.${config.buildingCol} as building_code,
+                '${equipment_type}' as equipment_type,
+                CASE
+                  WHEN cs.next_due_date < CURRENT_DATE THEN
+                    EXTRACT(DAY FROM CURRENT_DATE - cs.next_due_date)::int
+                  ELSE 0
+                END as days_overdue
+              FROM control_schedules cs
+              JOIN ${config.table} eq ON cs.${config.idCol} = eq.id
+              LEFT JOIN control_templates ct ON cs.template_id = ct.id
+              WHERE cs.site = $1 AND cs.${config.idCol} IS NOT NULL ${dateCondition}
+            `;
+          }
+
+          if (equipment_id) {
+            scheduleQuery += ` AND eq.id = $${paramIdx}`;
+            scheduleParams.push(equipment_id);
+            paramIdx++;
+          }
+
+          if (equipment_name) {
+            scheduleQuery += ` AND LOWER(eq.${config.nameCol}) LIKE $${paramIdx}`;
+            scheduleParams.push(`%${equipment_name.toLowerCase()}%`);
+            paramIdx++;
+          }
+
+          if (building) {
+            scheduleQuery += ` AND UPPER(eq.${config.buildingCol}) = $${paramIdx}`;
+            scheduleParams.push(building.toUpperCase());
+            paramIdx++;
+          }
+
+          scheduleQuery += ` ORDER BY cs.next_due_date ASC LIMIT ${maxLimit}`;
+
+          const result = await pool.query(scheduleQuery, scheduleParams);
+
+          const overdueCount = result.rows.filter(r => r.days_overdue > 0).length;
+
+          const typeLabels = {
+            vsd: 'variateurs (VSD)',
+            meca: 'équipements mécaniques',
+            hv: 'haute tension',
+            glo: 'éclairage de sécurité (GLO)',
+            datahub: 'capteurs/monitoring'
+          };
+
+          return {
+            success: true,
+            filter,
+            equipment_type,
+            count: result.rows.length,
+            overdue_count: overdueCount,
+            upcoming_count: result.rows.length - overdueCount,
+            building_filter: building || 'all',
+            controls: result.rows.map(c => ({
+              control_id: c.control_id,
+              next_control_date: c.next_control_date,
+              control_type: c.control_type,
+              status: c.status,
+              equipment_id: c.equipment_id,
+              equipment_name: c.equipment_name,
+              building: c.building_code,
+              equipment_type: c.equipment_type,
+              days_overdue: c.days_overdue
+            })),
+            summary: result.rows.length === 0
+              ? `Aucun contrôle ${filter === 'overdue' ? 'en retard' : 'prévu'} pour les ${typeLabels[equipment_type]}${building ? ` (bâtiment ${building})` : ''}.`
+              : `${result.rows.length} contrôle(s) ${filter === 'overdue' ? 'en retard' : 'prévu(s)'} pour les ${typeLabels[equipment_type]}${overdueCount > 0 ? ` (${overdueCount} en retard)` : ''}.`
+          };
+        } catch (error) {
+          console.error(`[TOOL] get_controls (${equipment_type}) error:`, error.message);
+          return { success: false, error: error.message, controls: [] };
+        }
+      }
+
+      // ===== ATEX (atex_checks) =====
+      if (equipment_type === 'atex') {
+        try {
+          // ATEX n'a pas de due_date, donc on retourne les derniers contrôles effectués
+          let atexQuery = `
+            SELECT
+              c.id as control_id,
+              c.date as control_date,
+              c.status,
+              c.result,
+              c.user_name,
+              c.user_email,
+              e.id as equipment_id,
+              e.name as equipment_name,
+              e.tag as equipment_code,
+              e.building as building_code,
+              e.floor,
+              e.location as room,
+              'atex' as equipment_type,
+              CASE
+                WHEN c.result = 'conforme' THEN 'Conforme'
+                WHEN c.result = 'non_conforme' THEN 'Non conforme'
+                ELSE c.result
+              END as status_label
+            FROM atex_checks c
+            JOIN atex_equipments e ON c.equipment_id = e.id
+            JOIN sites st ON st.id = e.site_id
+            WHERE st.name = $1
+          `;
+          const atexParams = [site];
+          let paramIdx = 2;
+
+          if (equipment_id) {
+            atexQuery += ` AND e.id = $${paramIdx}`;
+            atexParams.push(equipment_id);
+            paramIdx++;
+          }
+
+          if (equipment_name) {
+            atexQuery += ` AND (LOWER(e.name) LIKE $${paramIdx} OR LOWER(e.tag) LIKE $${paramIdx})`;
+            atexParams.push(`%${equipment_name.toLowerCase()}%`);
+            paramIdx++;
+          }
+
+          if (building) {
+            atexQuery += ` AND UPPER(e.building) = $${paramIdx}`;
+            atexParams.push(building.toUpperCase());
+            paramIdx++;
+          }
+
+          atexQuery += ` ORDER BY c.date DESC LIMIT ${maxLimit}`;
+
+          const result = await pool.query(atexQuery, atexParams);
+
+          const ncCount = result.rows.filter(r => r.result === 'non_conforme').length;
+
+          return {
+            success: true,
+            filter: 'history',
+            equipment_type: 'atex',
+            count: result.rows.length,
+            nc_count: ncCount,
+            building_filter: building || 'all',
+            controls: result.rows.map(c => ({
+              control_id: c.control_id,
+              control_date: c.control_date,
+              status: c.status,
+              result: c.result,
+              status_label: c.status_label,
+              equipment_id: c.equipment_id,
+              equipment_name: c.equipment_name,
+              equipment_code: c.equipment_code,
+              building: c.building_code,
+              floor: c.floor,
+              room: c.room,
+              equipment_type: 'atex',
+              user_name: c.user_name
+            })),
+            summary: result.rows.length === 0
+              ? `Aucun contrôle ATEX trouvé${building ? ` pour le bâtiment ${building}` : ''}.`
+              : `${result.rows.length} contrôle(s) ATEX effectué(s)${ncCount > 0 ? ` (${ncCount} non conforme(s))` : ''}.`,
+            note: 'Les équipements ATEX utilisent un système de contrôles sans planification de dates futures. Voici l\'historique des contrôles.'
+          };
+        } catch (error) {
+          console.error('[TOOL] get_controls (atex) error:', error.message);
+          return { success: false, error: error.message, controls: [] };
+        }
+      }
+
       // ===== TABLEAUX ÉLECTRIQUES (scheduled_controls) =====
       // Calculer les dates selon le filtre
       let dateCondition = '';
