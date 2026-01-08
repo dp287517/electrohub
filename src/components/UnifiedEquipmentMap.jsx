@@ -1136,7 +1136,7 @@ export default function UnifiedEquipmentMap({
   };
 
   // Handle click on a linked equipment
-  const handleLinkClick = (link) => {
+  const handleLinkClick = async (link) => {
     const eq = link.linkedEquipment;
     if (!eq) return;
 
@@ -1155,12 +1155,37 @@ export default function UnifiedEquipmentMap({
         viewerRef.current?.highlightMarker?.(eq.id, eq.type);
       }
     } else if (eq.hasPosition && eq.plan) {
-      // Navigate to the other plan
+      // Navigate to the other plan and highlight the target equipment
       const targetPlan = plans.find(p => p.logical_name === eq.plan || p.id === eq.plan);
       if (targetPlan) {
+        const targetPageIndex = eq.pageIndex !== undefined ? eq.pageIndex : 0;
+
+        // Reset state and switch to target plan
         setSelectedPlan(targetPlan);
-        if (eq.pageIndex !== undefined) setPageIndex(eq.pageIndex);
-        // Will need to select the equipment after plan loads
+        setPageIndex(targetPageIndex);
+        setPdfReady(false);
+
+        // Close current detail panel during transition
+        setSelectedPosition(null);
+        setLinks([]);
+
+        // Wait for positions to load
+        const positions = await loadAllPositions(targetPlan, targetPageIndex);
+
+        // Find the target equipment after positions are loaded
+        const targetPos = (positions || []).find(
+          p => p.equipment_type === eq.type && String(p.equipment_id) === String(eq.id)
+        );
+
+        // Small delay to let viewer render markers, then highlight and select
+        setTimeout(() => {
+          if (targetPos) {
+            setSelectedPosition({ ...targetPos, control_status: controlStatuses[`${eq.type}_${eq.id}`] || 'none' });
+            loadEquipmentLinks(eq.type, eq.id);
+          }
+          // Always highlight to show the user which equipment it is (flash animation)
+          viewerRef.current?.highlightMarker?.(eq.id, eq.type);
+        }, 500);
       }
     } else {
       // No position - could navigate to equipment detail page
@@ -1254,6 +1279,7 @@ export default function UnifiedEquipmentMap({
 
     setAllPositions(allPos);
     setLoadingPositions(false);
+    return allPos;
   };
 
   // Filter positions based on search, status, and user permissions

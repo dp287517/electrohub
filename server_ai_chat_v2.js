@@ -699,7 +699,9 @@ Tu peux:
 ${eq.type === 'doors' || eq.type === 'door' || (eq.name && eq.name.toLowerCase().includes('porte'))
   ? `- **get_controls** avec equipment_type="doors", equipment_name="${eq.name}" et filter="last" pour le dernier contrôle de cette porte
 - **get_controls** avec equipment_type="doors", equipment_name="${eq.name}" et filter="history" pour l'historique des contrôles`
-  : `- **get_controls** avec building="${eq.building}" pour les contrôles`}
+  : `- **get_controls** avec equipment_type="${eq.type}", equipment_id="${eq.id}" pour les contrôles de cet équipement
+- **get_controls** avec equipment_type="${eq.type}", filter="overdue" pour les contrôles en retard
+- **get_controls** avec equipment_type="${eq.type}", filter="history", equipment_id="${eq.id}" pour l'historique des contrôles`}
 - **get_non_conformities** pour les NC associées
 - **propose_troubleshooting_transfer** avec target_equipment_type="${eq.type}" pour transférer un dépannage vers un équipement du même type
 

@@ -1837,7 +1837,7 @@ export default function SwitchboardMap() {
   };
 
   // Handle click on a linked equipment
-  const handleLinkClick = (link) => {
+  const handleLinkClick = async (link) => {
     const eq = link.linkedEquipment;
     if (!eq) return;
 
@@ -1854,11 +1854,39 @@ export default function SwitchboardMap() {
         viewerRef.current?.highlightMarker?.(eq.id);
       }
     } else if (eq.hasPosition && eq.plan) {
-      // Navigate to the other plan
+      // Navigate to the other plan and highlight the target equipment
       const targetPlan = plans.find(p => p.logical_name === eq.plan);
       if (targetPlan) {
+        const targetPageIndex = eq.pageIndex !== undefined ? eq.pageIndex : 0;
+
+        // Reset state and switch to target plan
         setSelectedPlan(targetPlan);
-        if (eq.pageIndex !== undefined) setPageIndex(eq.pageIndex);
+        setPageIndex(targetPageIndex);
+        setPdfReady(false);
+        setInitialPoints([]);
+
+        // Close current detail panel during transition
+        setSelectedPosition(null);
+        setLinks([]);
+
+        // Wait for positions to load
+        const positions = await refreshPositions(targetPlan, targetPageIndex);
+        setInitialPoints(positions || []);
+
+        // Find and select the target equipment after positions are loaded
+        const targetPos = (positions || []).find(
+          p => String(p.switchboard_id) === String(eq.id)
+        );
+
+        // Small delay to let viewer render markers, then highlight and select
+        setTimeout(() => {
+          if (targetPos) {
+            setSelectedPosition(targetPos);
+            loadEquipmentLinks(eq.id);
+          }
+          // Always highlight to show the user which equipment it is (flash animation)
+          viewerRef.current?.highlightMarker?.(eq.id);
+        }, 500);
       }
     } else {
       // No position - navigate to equipment detail page
