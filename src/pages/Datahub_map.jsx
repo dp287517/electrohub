@@ -17,6 +17,7 @@ import {
   HardDrive, Monitor, Cable, Droplet, Wind, Sun, Cloud, Package, Link2, Loader2,
   ExternalLink
 } from "lucide-react";
+import MeasurementTools from "../components/MeasurementTools";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -2032,6 +2033,18 @@ export default function DatahubMap() {
                   currentPlan={selectedPlan}
                   currentPageIndex={pageIndex}
                   mapContainerRef={mapContainerRef}
+                />
+              )}
+
+              {/* Measurement Tools */}
+              {pdfReady && selectedPlan && (
+                <MeasurementTools
+                  planId={selectedPlan.id}
+                  pageIndex={pageIndex}
+                  mapRef={mapRef}
+                  imageBounds={imgSizeRef.current.w > 0 ? [[0, 0], [imgSizeRef.current.h, imgSizeRef.current.w]] : null}
+                  imageWidth={imgSizeRef.current.w}
+                  imageHeight={imgSizeRef.current.h}
                 />
               )}
             </>

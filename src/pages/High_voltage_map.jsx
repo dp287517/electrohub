@@ -40,6 +40,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "../styles/atex-map.css"; // Styles de netteté pour les plans
 import { api } from "../lib/api";
+import MeasurementTools from "../components/MeasurementTools";
 
 // ─────────────────────────────────────────────────────────────────────
 // PDF.js worker
@@ -983,6 +984,10 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
     adjust,
     drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
     highlightMarker,
+    // Expose map info for MeasurementTools
+    getMapRef: () => mapRef.current,
+    getImageBounds: () => imgSize.w > 0 ? [[0, 0], [imgSize.h, imgSize.w]] : null,
+    getImageSize: () => imgSize,
   }));
 
   const onPickEquipment = useCallback((it) => {
@@ -1874,6 +1879,18 @@ export default function HighVoltageMap() {
               y={contextMenu.y}
               onDelete={() => askDeletePosition(contextMenu.position)}
               onClose={() => setContextMenu(null)}
+            />
+          )}
+
+          {/* Measurement Tools */}
+          {pdfReady && stableSelectedPlan && (
+            <MeasurementTools
+              planId={stableSelectedPlan.id}
+              pageIndex={pageIndex}
+              mapRef={{ current: viewerRef.current?.getMapRef?.() }}
+              imageBounds={viewerRef.current?.getImageBounds?.()}
+              imageWidth={viewerRef.current?.getImageSize?.()?.w}
+              imageHeight={viewerRef.current?.getImageSize?.()?.h}
             />
           )}
         </div>
