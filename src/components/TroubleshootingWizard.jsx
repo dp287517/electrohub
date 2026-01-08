@@ -251,7 +251,7 @@ function PhotoStep({ photos, setPhotos, onNext }) {
 }
 
 // Step 2: Description
-function DescriptionStep({ formData, setFormData, onNext, onBack, isAnalyzing, aiSuggestion, onImproveText, isImproving }) {
+function DescriptionStep({ formData, setFormData, onNext, onBack, isAnalyzing, aiSuggestion, isImproving }) {
   return (
     <div className="space-y-6 animate-slideIn">
       <div className="text-center">
@@ -333,28 +333,6 @@ function DescriptionStep({ formData, setFormData, onNext, onBack, isAnalyzing, a
           />
         </div>
 
-        {/* AI Text Improvement Button */}
-        {(formData.title || formData.description || formData.root_cause || formData.solution) && (
-          <button
-            type="button"
-            onClick={onImproveText}
-            disabled={isImproving}
-            className="w-full p-4 bg-gradient-to-r from-indigo-50 to-blue-50 hover:from-indigo-100 hover:to-blue-100 rounded-xl border border-indigo-200 transition-all flex items-center justify-center gap-3 disabled:opacity-60"
-          >
-            {isImproving ? (
-              <>
-                <Loader2 className="w-5 h-5 text-indigo-500 animate-spin" />
-                <span className="text-indigo-700 font-medium">Correction en cours...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-5 h-5 text-indigo-500" />
-                <span className="text-indigo-700 font-medium">Corriger l'orthographe avec l'IA</span>
-              </>
-            )}
-          </button>
-        )}
-
         {/* Analyse photo */}
         {isAnalyzing ? (
           <div className="p-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border border-purple-200">
@@ -386,11 +364,20 @@ function DescriptionStep({ formData, setFormData, onNext, onBack, isAnalyzing, a
         </button>
         <button
           onClick={onNext}
-          disabled={!formData.title}
+          disabled={!formData.title || isImproving}
           className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:from-purple-600 hover:to-pink-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Continuer
-          <ChevronRight size={18} />
+          {isImproving ? (
+            <>
+              <Loader2 size={18} className="animate-spin" />
+              Correction...
+            </>
+          ) : (
+            <>
+              Continuer
+              <ChevronRight size={18} />
+            </>
+          )}
         </button>
       </div>
     </div>
@@ -817,31 +804,36 @@ export default function TroubleshootingWizard({
     }
   };
 
-  // AI text improvement for spelling and grammar
-  const improveText = async () => {
-    setIsImproving(true);
-    try {
-      const response = await post('/api/ai-assistant/improve-troubleshooting-text', {
-        title: formData.title,
-        description: formData.description,
-        root_cause: formData.root_cause,
-        solution: formData.solution
-      });
+  // Auto-correct text and move to next step
+  const handleDescriptionNext = async () => {
+    // Only improve if there's text to improve
+    if (formData.title || formData.description || formData.root_cause || formData.solution) {
+      setIsImproving(true);
+      try {
+        const response = await post('/api/ai-assistant/improve-troubleshooting-text', {
+          title: formData.title,
+          description: formData.description,
+          root_cause: formData.root_cause,
+          solution: formData.solution
+        });
 
-      if (response?.success && response?.improved) {
-        setFormData(prev => ({
-          ...prev,
-          title: response.improved.title || prev.title,
-          description: response.improved.description || prev.description,
-          root_cause: response.improved.root_cause || prev.root_cause,
-          solution: response.improved.solution || prev.solution
-        }));
+        if (response?.success && response?.improved) {
+          setFormData(prev => ({
+            ...prev,
+            title: response.improved.title || prev.title,
+            description: response.improved.description || prev.description,
+            root_cause: response.improved.root_cause || prev.root_cause,
+            solution: response.improved.solution || prev.solution
+          }));
+        }
+      } catch (e) {
+        console.error('Text improvement error:', e);
+      } finally {
+        setIsImproving(false);
       }
-    } catch (e) {
-      console.error('Text improvement error:', e);
-    } finally {
-      setIsImproving(false);
     }
+    // Move to next step
+    setStep(3);
   };
 
   const handleSubmit = async () => {
@@ -977,11 +969,10 @@ export default function TroubleshootingWizard({
                 <DescriptionStep
                   formData={formData}
                   setFormData={setFormData}
-                  onNext={() => setStep(3)}
+                  onNext={handleDescriptionNext}
                   onBack={() => setStep(1)}
                   isAnalyzing={isAnalyzing}
                   aiSuggestion={aiSuggestion}
-                  onImproveText={improveText}
                   isImproving={isImproving}
                 />
               )}
