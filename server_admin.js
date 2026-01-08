@@ -2485,34 +2485,39 @@ const AGENT_NAMES = {
   infrastructure: 'Atlas (Infrastructure)'
 };
 
-// GET /api/admin/settings/ai-agents/list - Get all agent types and their video status
+// GET /api/admin/settings/ai-agents/list - Get all agent types and their video/image status
 router.get("/settings/ai-agents/list", async (req, res) => {
   try {
     await ensureAppSettingsTable();
 
-    // Get all agent videos from database
+    // Get all agent videos AND images from database
     const result = await pool.query(`
       SELECT key, mime_type, updated_at, LENGTH(binary_data) as size
       FROM app_settings
-      WHERE key LIKE 'ai_video_%'
+      WHERE key LIKE 'ai_video_%' OR key LIKE 'ai_image_%'
     `);
 
-    // Build agent list with video status
+    // Build agent list with video and image status
     const agents = VALID_AGENT_TYPES.map(agentType => {
       const idleKey = agentType === 'main' ? 'ai_video_idle' : `ai_video_${agentType}_idle`;
       const speakingKey = agentType === 'main' ? 'ai_video_speaking' : `ai_video_${agentType}_speaking`;
+      const imageKey = `ai_image_${agentType}`;
 
       const idleRow = result.rows.find(r => r.key === idleKey);
       const speakingRow = result.rows.find(r => r.key === speakingKey);
+      const imageRow = result.rows.find(r => r.key === imageKey);
 
       return {
         type: agentType,
         name: AGENT_NAMES[agentType],
         hasIdleVideo: !!idleRow,
         hasSpeakingVideo: !!speakingRow,
+        hasImage: !!imageRow,
         idleSize: idleRow?.size || 0,
         speakingSize: speakingRow?.size || 0,
-        updatedAt: idleRow?.updated_at || speakingRow?.updated_at || null
+        imageSize: imageRow?.size || 0,
+        imageMimeType: imageRow?.mime_type || null,
+        updatedAt: imageRow?.updated_at || idleRow?.updated_at || speakingRow?.updated_at || null
       };
     });
 
@@ -2523,7 +2528,7 @@ router.get("/settings/ai-agents/list", async (req, res) => {
   }
 });
 
-// GET /api/admin/settings/ai-agents/:agentType/info - Get video info for specific agent
+// GET /api/admin/settings/ai-agents/:agentType/info - Get video and image info for specific agent
 router.get("/settings/ai-agents/:agentType/info", async (req, res) => {
   try {
     const { agentType } = req.params;
@@ -2536,32 +2541,39 @@ router.get("/settings/ai-agents/:agentType/info", async (req, res) => {
 
     const idleKey = agentType === 'main' ? 'ai_video_idle' : `ai_video_${agentType}_idle`;
     const speakingKey = agentType === 'main' ? 'ai_video_speaking' : `ai_video_${agentType}_speaking`;
+    const imageKey = `ai_image_${agentType}`;
 
     const result = await pool.query(`
       SELECT key, mime_type, updated_at, LENGTH(binary_data) as size
       FROM app_settings
-      WHERE key IN ($1, $2)
-    `, [idleKey, speakingKey]);
+      WHERE key IN ($1, $2, $3)
+    `, [idleKey, speakingKey, imageKey]);
 
-    const videos = {};
+    const media = {};
     result.rows.forEach(row => {
       if (row.key === idleKey) {
-        videos.hasIdleVideo = true;
-        videos.idleMimeType = row.mime_type;
-        videos.idleSize = row.size;
+        media.hasIdleVideo = true;
+        media.idleMimeType = row.mime_type;
+        media.idleSize = row.size;
       } else if (row.key === speakingKey) {
-        videos.hasSpeakingVideo = true;
-        videos.speakingMimeType = row.mime_type;
-        videos.speakingSize = row.size;
+        media.hasSpeakingVideo = true;
+        media.speakingMimeType = row.mime_type;
+        media.speakingSize = row.size;
+      } else if (row.key === imageKey) {
+        media.hasImage = true;
+        media.imageMimeType = row.mime_type;
+        media.imageSize = row.size;
+        media.imageUpdatedAt = row.updated_at;
       }
     });
 
     res.json({
       agentType,
       name: AGENT_NAMES[agentType],
-      hasIdleVideo: videos.hasIdleVideo || false,
-      hasSpeakingVideo: videos.hasSpeakingVideo || false,
-      ...videos
+      hasIdleVideo: media.hasIdleVideo || false,
+      hasSpeakingVideo: media.hasSpeakingVideo || false,
+      hasImage: media.hasImage || false,
+      ...media
     });
   } catch (err) {
     console.error("[settings/ai-agents/:agentType/info GET] Error:", err);
@@ -2738,6 +2750,107 @@ router.delete("/settings/ai-agents/:agentType", adminOnly, async (req, res) => {
     res.json({ ok: true, message: `Videos removed for ${AGENT_NAMES[agentType]}` });
   } catch (err) {
     console.error("[settings/ai-agents/:agentType DELETE] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// AGENT IMAGE ENDPOINTS (for email reports)
+// ============================================================================
+
+// GET /api/admin/settings/ai-agents/:agentType/image - Get image for agent
+router.get("/settings/ai-agents/:agentType/image", async (req, res) => {
+  try {
+    const { agentType } = req.params;
+
+    if (!VALID_AGENT_TYPES.includes(agentType)) {
+      return res.status(400).json({ error: "Invalid agent type" });
+    }
+
+    await ensureAppSettingsTable();
+
+    const key = `ai_image_${agentType}`;
+
+    const result = await pool.query(
+      `SELECT binary_data, mime_type FROM app_settings WHERE key = $1`,
+      [key]
+    );
+
+    if (result.rows.length === 0 || !result.rows[0].binary_data) {
+      return res.status(404).json({ error: "No image found for this agent" });
+    }
+
+    const { binary_data, mime_type } = result.rows[0];
+    res.set('Content-Type', mime_type || 'image/png');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(binary_data);
+  } catch (err) {
+    console.error("[settings/ai-agents/:agentType/image GET] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/settings/ai-agents/:agentType/image - Upload image for agent
+router.post("/settings/ai-agents/:agentType/image", adminOnly, uploadMemory.single('image'), async (req, res) => {
+  try {
+    const { agentType } = req.params;
+
+    if (!VALID_AGENT_TYPES.includes(agentType)) {
+      return res.status(400).json({ error: "Invalid agent type" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: "No image file provided" });
+    }
+
+    const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+    if (!validTypes.includes(req.file.mimetype)) {
+      return res.status(400).json({ error: "Invalid image format. Use PNG, JPG, GIF or WebP." });
+    }
+
+    if (req.file.size > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: "Image too large. Maximum 5MB." });
+    }
+
+    await ensureAppSettingsTable();
+
+    const key = `ai_image_${agentType}`;
+    const { buffer, mimetype } = req.file;
+
+    await pool.query(`
+      INSERT INTO app_settings (key, binary_data, mime_type, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (key) DO UPDATE SET
+        binary_data = EXCLUDED.binary_data,
+        mime_type = EXCLUDED.mime_type,
+        updated_at = NOW()
+    `, [key, buffer, mimetype]);
+
+    res.json({ ok: true, message: `Image uploaded for ${AGENT_NAMES[agentType]}` });
+  } catch (err) {
+    console.error("[settings/ai-agents/:agentType/image POST] Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/settings/ai-agents/:agentType/image - Remove image for specific agent
+router.delete("/settings/ai-agents/:agentType/image", adminOnly, async (req, res) => {
+  try {
+    const { agentType } = req.params;
+
+    if (!VALID_AGENT_TYPES.includes(agentType)) {
+      return res.status(400).json({ error: "Invalid agent type" });
+    }
+
+    await ensureAppSettingsTable();
+
+    const key = `ai_image_${agentType}`;
+
+    await pool.query(`DELETE FROM app_settings WHERE key = $1`, [key]);
+
+    res.json({ ok: true, message: `Image removed for ${AGENT_NAMES[agentType]}` });
+  } catch (err) {
+    console.error("[settings/ai-agents/:agentType/image DELETE] Error:", err);
     res.status(500).json({ error: err.message });
   }
 });
