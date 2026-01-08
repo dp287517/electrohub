@@ -86,7 +86,7 @@ const getEquipmentDisplay = (item) => {
       type: 'meca',
       icon: <Icon size={16} className={color} />,
       link: `/app/meca?meca=${item.meca_equipment_id}`,
-      mapLink: `/app/meca/map?meca=${item.meca_equipment_id}`,
+      mapLink: `/app/switchboard-controls/map?type=meca&id=${item.meca_equipment_id}`,
       category: item.meca_category || item.category || ''
     };
   }
@@ -97,7 +97,7 @@ const getEquipmentDisplay = (item) => {
       type: 'vsd',
       icon: <Icon size={16} className={color} />,
       link: `/app/vsd?vsd=${item.vsd_equipment_id}`,
-      mapLink: `/app/vsd/map?vsd=${item.vsd_equipment_id}`,
+      mapLink: `/app/switchboard-controls/map?type=vsd&id=${item.vsd_equipment_id}`,
       category: ''
     };
   }
@@ -108,7 +108,7 @@ const getEquipmentDisplay = (item) => {
       type: 'hv',
       icon: <Icon size={16} className={color} />,
       link: `/app/hv?equipment=${item.hv_equipment_id}`,
-      mapLink: `/app/hv/map?hv=${item.hv_equipment_id}`,
+      mapLink: `/app/switchboard-controls/map?type=hv&id=${item.hv_equipment_id}`,
       category: item.hv_regime_neutral || ''
     };
   }
@@ -119,7 +119,7 @@ const getEquipmentDisplay = (item) => {
       type: 'mobile',
       icon: <Icon size={16} className={color} />,
       link: `/app/mobile-equipments?equipment=${item.mobile_equipment_id}`,
-      mapLink: `/app/mobile-equipments/map?mobile=${item.mobile_equipment_id}`,
+      mapLink: `/app/switchboard-controls/map?type=mobile&id=${item.mobile_equipment_id}`,
       category: item.mobile_category || item.category || ''
     };
   }
@@ -130,7 +130,7 @@ const getEquipmentDisplay = (item) => {
       type: 'glo',
       icon: <Icon size={16} className={color} />,
       link: `/app/glo?glo=${item.glo_equipment_id}`,
-      mapLink: `/app/glo/map?glo=${item.glo_equipment_id}`,
+      mapLink: `/app/switchboard-controls/map?type=glo&id=${item.glo_equipment_id}`,
       category: item.glo_category || item.category || ''
     };
   }
@@ -141,7 +141,7 @@ const getEquipmentDisplay = (item) => {
       type: 'datahub',
       icon: <Icon size={16} className={color} />,
       link: `/app/datahub?item=${item.datahub_equipment_id}`,
-      mapLink: `/app/datahub/map?datahub=${item.datahub_equipment_id}`,
+      mapLink: `/app/switchboard-controls/map?type=datahub&id=${item.datahub_equipment_id}`,
       category: item.datahub_category_name || ''
     };
   }
@@ -157,7 +157,7 @@ const getEquipmentDisplay = (item) => {
       type: 'device',
       icon: <Icon size={16} className={color} />,
       link: switchboardId ? `/app/switchboards?board=${switchboardId}` : null,
-      mapLink: switchboardId ? `/app/switchboard-map?highlight=${switchboardId}` : null,
+      mapLink: switchboardId ? `/app/switchboard-controls/map?type=switchboard&id=${switchboardId}` : null,
       category: ''
     };
   }
@@ -168,7 +168,7 @@ const getEquipmentDisplay = (item) => {
       type: 'switchboard',
       icon: <Icon size={16} className={color} />,
       link: `/app/switchboards?board=${item.switchboard_id}`,
-      mapLink: `/app/switchboard-map?highlight=${item.switchboard_id}`,
+      mapLink: `/app/switchboard-controls/map?type=switchboard&id=${item.switchboard_id}`,
       category: ''
     };
   }
