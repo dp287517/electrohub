@@ -543,7 +543,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats) {
                   ${outage.downtime_minutes ? `<br><span style="font-size: 11px; color: #DC2626;">⏱️ ${outage.downtime_minutes} min arrêt</span>` : ''}
                 </td>
                 <td>
-                  <a href="${APP_URL}/troubleshooting/${outage.id}" style="color: #3B82F6; text-decoration: none; font-weight: 500;">Voir →</a>
+                  <a href="${APP_URL}/app/troubleshooting/${outage.id}" style="color: #3B82F6; text-decoration: none; font-weight: 500;">Voir →</a>
                 </td>
               </tr>
               `).join('')}

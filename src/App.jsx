@@ -48,6 +48,7 @@ import Procedures from './pages/Procedures.jsx';
 import FireControl from './pages/FireControl.jsx';
 import FireControlMap from './pages/FireControl_map.jsx';
 import TroubleshootingDashboard from './pages/TroubleshootingDashboard.jsx';
+import TroubleshootingDetail from './pages/TroubleshootingDetail.jsx';
 // FloatingAssistant removed from global - now only in Dashboard for mobile
 
 // Component to redirect authenticated users to dashboard
@@ -128,6 +129,7 @@ export default function App() {
           <Route path="/app/fire-control" element={<ProtectedRoute><FireControl /></ProtectedRoute>} />
           <Route path="/app/fire-control/map" element={<ProtectedRoute><FireControlMap /></ProtectedRoute>} />
           <Route path="/app/troubleshooting" element={<ProtectedRoute><TroubleshootingDashboard /></ProtectedRoute>} />
+          <Route path="/app/troubleshooting/:id" element={<ProtectedRoute><TroubleshootingDetail /></ProtectedRoute>} />
           <Route path="/app/infrastructure" element={<ProtectedRoute><Infrastructure /></ProtectedRoute>} />
           <Route path="/app/infrastructure/map" element={<ProtectedRoute><InfrastructureMap /></ProtectedRoute>} />
 
