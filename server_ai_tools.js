@@ -119,6 +119,10 @@ WORKFLOW:
           current_equipment_id: {
             type: "string",
             description: "ID de l'équipement actuel à EXCLURE des résultats (car l'utilisateur est dessus)"
+          },
+          source_equipment_name: {
+            type: "string",
+            description: "Nom de l'équipement SOURCE (où l'utilisateur se trouve) - pour chercher le dernier dépannage de CET équipement, pas le dernier global"
           }
         },
         required: ["target_equipment_name"]
@@ -1260,20 +1264,30 @@ function createToolHandlers(pool, site) {
     // TRANSFERT DE DÉPANNAGE (Version intelligente)
     // -----------------------------------------------------------------------
     propose_troubleshooting_transfer: async (params) => {
-      const { troubleshooting_id, target_equipment_name, target_equipment_type, target_building, current_equipment_id } = params;
+      const { troubleshooting_id, target_equipment_name, target_equipment_type, target_building, current_equipment_id, source_equipment_name } = params;
 
       try {
-        // 1. Récupérer le dépannage à transférer (le plus récent si pas d'ID)
+        // 1. Récupérer le dépannage à transférer
+        // Si on a un ID, chercher ce dépannage précis
+        // Sinon, chercher le plus récent de l'équipement source (si spécifié) ou le plus récent global
         let troubleQuery = `
           SELECT id, title, description, equipment_id, equipment_type, equipment_name, building_code, started_at
           FROM troubleshooting_records
           WHERE site = $1
         `;
         const troubleParams = [site];
+        let paramIdx = 2;
 
         if (troubleshooting_id) {
-          troubleQuery += ` AND id = $2`;
+          troubleQuery += ` AND id = $${paramIdx}`;
           troubleParams.push(troubleshooting_id);
+          paramIdx++;
+        } else if (source_equipment_name) {
+          // Filtrer par l'équipement source (celui où l'utilisateur se trouve)
+          troubleQuery += ` AND LOWER(equipment_name) LIKE $${paramIdx}`;
+          troubleParams.push(`%${source_equipment_name.toLowerCase()}%`);
+          paramIdx++;
+          troubleQuery += ` ORDER BY started_at DESC LIMIT 1`;
         } else {
           troubleQuery += ` ORDER BY started_at DESC LIMIT 1`;
         }
@@ -4931,19 +4945,34 @@ Si l'utilisateur dit "c'est pas le bon équipement" ou "mauvais équipement" SAN
 → **DEMANDE D'ABORD**: "Vers quel équipement voulez-vous transférer ce dépannage ?"
 → Attends que l'utilisateur précise la destination
 
-**UNIQUEMENT** quand l'utilisateur a CLAIREMENT indiqué l'équipement CIBLE (ex: "transfère vers Otrivin 3"):
-1. Si tu es un agent spécialisé, **PRIORISE ton type d'équipement**
-2. **PASSE current_equipment_id** si l'utilisateur est sur une fiche équipement (pour ne pas proposer le même équipement !)
-3. Si l'équipement n'est pas trouvé dans ton type, la recherche s'étendra automatiquement aux autres types
+**PARAMÈTRES OBLIGATOIRES selon le contexte:**
+1. **source_equipment_name**: Si l'utilisateur est sur une fiche équipement, PASSE TOUJOURS le nom de cet équipement !
+   → Cela permet de chercher le dernier dépannage de CET équipement, pas le dernier global
+2. **current_equipment_id**: Pour EXCLURE l'équipement actuel des résultats cibles
+3. **target_equipment_type**: Priorise ton type d'équipement si tu es un agent spécialisé
 
 **EXEMPLES CORRECTS**:
-- User: "transfère vers Otrivin 3" → propose_troubleshooting_transfer(target_equipment_name="Otrivin 3", target_equipment_type="datahub", current_equipment_id="123")
-- User: "transfère vers TGBT" → propose_troubleshooting_transfer(target_equipment_name="TGBT", target_equipment_type="switchboard")
+- User sur "Microdoseur Autonome": "transfère vers 24-001 quai déchet"
+  → propose_troubleshooting_transfer(
+      target_equipment_name="24-001 quai déchet",
+      source_equipment_name="Microdoseur Autonome",  ← IMPORTANT !
+      current_equipment_id="123"
+    )
+- User sans contexte équipement: "transfère le dernier dépannage vers TGBT"
+  → propose_troubleshooting_transfer(target_equipment_name="TGBT")
 
 **EXEMPLES INCORRECTS** (à NE PAS faire):
-- User: "c'est pas le bon équipement" → ❌ NE PAS appeler propose_troubleshooting_transfer
-- User: "mauvais équipement" → ❌ NE PAS appeler propose_troubleshooting_transfer
-→ Réponds plutôt: "Vers quel équipement voulez-vous transférer ce dépannage ?"
+- User sur une fiche équipement: "mauvais équipement" → ❌ NE PAS appeler sans demander la destination
+- Oublier source_equipment_name quand l'utilisateur est sur un équipement → ❌ Cherchera le mauvais dépannage !
+
+**⚠️ FORMAT DE RÉPONSE POUR LES TRANSFERTS:**
+Quand propose_troubleshooting_transfer retourne ready_for_transfer=true:
+- **NE JAMAIS** écrire "[Bouton: ...]" ou des pseudo-boutons en texte !
+- **NE JAMAIS** écrire "Confirmez-vous ce transfert ?" - le frontend affiche les boutons automatiquement
+- Écris SEULEMENT un résumé court comme:
+  "📋 **Dépannage à transférer:** [titre]
+   📍 **De:** [source] → **Vers:** [cible]"
+- Les boutons de confirmation s'affichent AUTOMATIQUEMENT en dessous
 
 ## ⚠️ SÉLECTION DE CANDIDATS (TRÈS IMPORTANT)
 Quand **propose_troubleshooting_transfer** retourne plusieurs candidats numérotés:
