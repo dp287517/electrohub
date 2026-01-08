@@ -528,6 +528,9 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
     setInputValue('');
     setIsSending(true);
 
+    // Get current active agent info
+    const currentAgent = agents.find(a => a.type === activeAgent);
+
     // Add user message
     setMessages(prev => [...prev, {
       id: Date.now(),
@@ -536,17 +539,25 @@ export default function BriefingBoard({ userName, userEmail, onClose }) {
     }]);
 
     try {
-      // Call AI chat API (using aiAssistant for proper V2 integration)
+      // Call AI chat API with active agent context
       const result = await aiAssistant.chatV2(userMessage, {
         conversationHistory: messages.map(m => ({
           role: m.role,
           content: m.content
-        }))
+        })),
+        // Tell the AI which agent the user is talking to
+        previousAgentType: activeAgent,
+        context: {
+          briefingMode: true,
+          activeAgent: activeAgent,
+          activeAgentName: currentAgent?.customName || currentAgent?.name,
+          activeAgentRole: currentAgent?.role
+        }
       });
 
-      // Determine which agent responds
-      const respondingAgent = result.agentType || 'main';
-      setActiveAgent(respondingAgent);
+      // Use the active agent to respond (not what AI says)
+      // The user clicked on an agent, so that agent should respond
+      const respondingAgent = activeAgent || result.agentType || 'main';
       setSpeakingAgent(respondingAgent);
 
       // Add agent response
