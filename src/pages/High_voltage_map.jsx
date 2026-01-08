@@ -10,7 +10,7 @@ import React, {
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getOptimalImageFormat } from "../config/mobile-optimization.js";
-import { setupMobileDrag, getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
+import { getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 import {
   ArrowLeft,
   ArrowUp,
@@ -661,7 +661,6 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
 
       // 📱 Mobile: activer le drag par long-press uniquement
       if (wantsDraggable) {
-        setupMobileDrag(mk);
       }
 
       // Long press for mobile

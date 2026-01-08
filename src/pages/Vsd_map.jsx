@@ -22,7 +22,7 @@ import "../styles/atex-map.css"; // Styles de netteté pour les plans
 
 // Mobile optimization
 import { getOptimalImageFormat } from "../config/mobile-optimization.js";
-import { setupMobileDrag, getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
+import { getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 
 // Icons
 import {
@@ -659,7 +659,6 @@ const VsdLeafletViewer = forwardRef(({
 
       // 📱 Mobile: activer le drag par long-press uniquement
       if (wantsDraggable) {
-        setupMobileDrag(mk);
       }
 
       // Long press for mobile
