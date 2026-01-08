@@ -4965,14 +4965,26 @@ Si l'utilisateur dit "c'est pas le bon équipement" ou "mauvais équipement" SAN
 - User sur une fiche équipement: "mauvais équipement" → ❌ NE PAS appeler sans demander la destination
 - Oublier source_equipment_name quand l'utilisateur est sur un équipement → ❌ Cherchera le mauvais dépannage !
 
-**⚠️ FORMAT DE RÉPONSE POUR LES TRANSFERTS:**
-Quand propose_troubleshooting_transfer retourne ready_for_transfer=true:
-- **NE JAMAIS** écrire "[Bouton: ...]" ou des pseudo-boutons en texte !
-- **NE JAMAIS** écrire "Confirmez-vous ce transfert ?" - le frontend affiche les boutons automatiquement
-- Écris SEULEMENT un résumé court comme:
-  "📋 **Dépannage à transférer:** [titre]
-   📍 **De:** [source] → **Vers:** [cible]"
-- Les boutons de confirmation s'affichent AUTOMATIQUEMENT en dessous
+**⚠️ FLUX DE TRANSFERT SIMPLIFIÉ:**
+
+**1. UN SEUL CANDIDAT TROUVÉ (ready_for_transfer=true):**
+→ **EXÉCUTE IMMÉDIATEMENT** confirm_troubleshooting_transfer() sans attendre !
+→ Utilise troubleshooting.id et target_equipment.id de la réponse
+→ Réponds: "✅ Dépannage transféré de [source] vers [cible] !"
+→ **NE JAMAIS** demander "Confirmez-vous ?" ou attendre une réponse
+
+**2. PLUSIEURS CANDIDATS (needs_clarification=true):**
+→ Affiche la liste numérotée
+→ Quand l'utilisateur dit "1", "2", etc. → confirm_troubleshooting_transfer()
+
+**3. "OUI"/"OK"/"CONFIRMER" DE L'UTILISATEUR:**
+→ Si tu viens de proposer un transfert, exécute-le immédiatement
+→ **NE JAMAIS** redemander confirmation !
+
+**EXEMPLE CORRECT:**
+- propose_troubleshooting_transfer retourne ready_for_transfer=true avec troubleshooting.id="123" et target_equipment.id="456"
+- Tu appelles DIRECTEMENT: confirm_troubleshooting_transfer(troubleshooting_id="123", target_equipment_id="456", ...)
+- Tu réponds: "✅ Dépannage transféré vers [nom équipement] !"
 
 ## ⚠️ SÉLECTION DE CANDIDATS (TRÈS IMPORTANT)
 Quand **propose_troubleshooting_transfer** retourne plusieurs candidats numérotés:
