@@ -22,6 +22,7 @@ import "../styles/atex-map.css"; // Styles de netteté pour les plans
 
 // Mobile optimization
 import { getOptimalImageFormat } from "../config/mobile-optimization.js";
+import { setupMobileDrag, getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 
 // Icons
 import {
@@ -757,7 +758,8 @@ const LeafletViewer = forwardRef(({
         iconAnchor: [16, 16],
       });
 
-      const marker = L.marker([lat, lng], { icon, draggable: !disabled });
+      const wantsDraggable = !disabled;
+      const marker = L.marker([lat, lng], { icon, draggable: getMarkerDraggableOption(wantsDraggable) });
 
       marker.on("click", (e) => {
         L.DomEvent.stopPropagation(e);
@@ -787,6 +789,11 @@ const LeafletViewer = forwardRef(({
 
       marker.addTo(layer);
       markersMapRef.current.set(pt.equipment_id, marker);
+
+      // 📱 Mobile: activer le drag par long-press uniquement
+      if (wantsDraggable) {
+        setupMobileDrag(marker);
+      }
     });
   }, [initialPoints, selectedId, controlStatuses, imgSize, disabled, onClickPoint, onMovePoint, onContextMenu]);
 

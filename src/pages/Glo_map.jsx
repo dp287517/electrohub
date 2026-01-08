@@ -22,6 +22,7 @@ import "../styles/atex-map.css"; // Styles de netteté pour les plans
 
 // Mobile optimization
 import { getOptimalImageFormat } from "../config/mobile-optimization.js";
+import { setupMobileDrag, getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 
 // Icons
 import {
@@ -588,9 +589,10 @@ const GloLeafletViewer = forwardRef(({
       const isSelected = p.equipment_id === selectedIdRef.current;
       const icon = makeGloIcon(isSelected, p.equipment_id);
 
+      const wantsDraggable = !disabled && !placementActiveRef.current;
       const mk = L.marker(latlng, {
         icon,
-        draggable: !disabled && !placementActiveRef.current,
+        draggable: getMarkerDraggableOption(wantsDraggable),
         autoPan: true,
         bubblingMouseEvents: false,
         keyboard: false,
@@ -644,6 +646,11 @@ const GloLeafletViewer = forwardRef(({
       mk.addTo(g);
       // Store with String key for consistent lookup (URL params are always strings)
       markersMapRef.current.set(String(p.equipment_id), mk);
+
+      // 📱 Mobile: activer le drag par long-press uniquement
+      if (wantsDraggable) {
+        setupMobileDrag(mk);
+      }
 
       setTimeout(() => {
         const el = mk.getElement();

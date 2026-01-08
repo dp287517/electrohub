@@ -7,6 +7,7 @@ import "leaflet/dist/leaflet.css";
 import "../styles/atex-map.css";
 import { api } from "../lib/api.js";
 import { isMobileDevice, getPDFConfig, getNetworkQuality, getPlanCacheKey, getCachedPlan, cachePlan } from "../config/mobile-optimization.js";
+import { setupMobileDrag, getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 import CableGlandBasket from "../components/CableGlandBasket.jsx";
 // --- PDF.js worker + logs discrets
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
@@ -1154,7 +1155,7 @@ export default function AtexMap({
         iconAnchor: [size / 2, (size + 8) / 2]
       });
 
-      const marker = L.marker(latlng, { icon, draggable: true });
+      const marker = L.marker(latlng, { icon, draggable: getMarkerDraggableOption(true) });
 
       marker.on("click", () => {
         setPeBasketModal({ open: true, position: null, basketId: basket.id });
@@ -1187,6 +1188,8 @@ export default function AtexMap({
       });
 
       peMarkersLayerRef.current.addLayer(marker);
+      // 📱 Mobile: activer le drag par long-press uniquement
+      setupMobileDrag(marker);
     }
   }
 
@@ -1346,7 +1349,7 @@ export default function AtexMap({
           const icon = makeEquipIcon(p.status, unsavedIds.has(p.id), isSelected, p.compliance_state, isDuplicate);
           const mk = L.marker(latlng, {
             icon,
-            draggable: true,
+            draggable: getMarkerDraggableOption(true),
             autoPan: true,
             bubblingMouseEvents: false,
             keyboard: false,
@@ -1440,6 +1443,8 @@ export default function AtexMap({
           });
         });
         mk.addTo(layer);
+        // 📱 Mobile: activer le drag par long-press uniquement
+        setupMobileDrag(mk);
         } catch (markerErr) {
           console.error('[ATEX] Marker render error for equipment:', p?.id, markerErr);
         }

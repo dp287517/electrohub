@@ -22,6 +22,7 @@ import "../styles/atex-map.css"; // Styles de netteté pour les plans
 
 // Mobile optimization
 import { getOptimalImageFormat } from "../config/mobile-optimization.js";
+import { setupMobileDrag, getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 
 // icons
 import {
@@ -911,9 +912,10 @@ const SwitchboardLeafletViewer = forwardRef(
           const isSelected = p.switchboard_id === selectedIdRef.current;
           const icon = makeSwitchboardIcon(!!p.is_principal, isSelected, p.switchboard_id);
 
+          const wantsDraggable = !disabled && !placementActiveRef.current;
           const mk = L.marker(latlng, {
             icon,
-            draggable: !disabled && !placementActiveRef.current,
+            draggable: getMarkerDraggableOption(wantsDraggable),
             autoPan: true,
             bubblingMouseEvents: false,
             keyboard: false,
@@ -991,6 +993,11 @@ const SwitchboardLeafletViewer = forwardRef(
           const markerKey = String(p.switchboard_id);
           markersMapRef.current.set(markerKey, mk);
           console.log('[MARKERS] Registered marker with key:', markerKey, 'type:', typeof markerKey);
+
+          // 📱 Mobile: activer le drag par long-press uniquement
+          if (wantsDraggable) {
+            setupMobileDrag(mk);
+          }
 
           // Setup long press after marker is added
           setTimeout(() => {

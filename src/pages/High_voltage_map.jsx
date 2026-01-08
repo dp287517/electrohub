@@ -10,6 +10,7 @@ import React, {
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { getOptimalImageFormat } from "../config/mobile-optimization.js";
+import { setupMobileDrag, getMarkerDraggableOption } from "../utils/mobile-marker-drag.js";
 import {
   ArrowLeft,
   ArrowUp,
@@ -616,7 +617,8 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
       const isSelected = p.equipment_id === selectedIdRef.current;
       const icon = makeHvIcon(isSelected, p.equipment_id);
 
-      const mk = L.marker([lat, lng], { icon, draggable: !disabled });
+      const wantsDraggable = !disabled;
+      const mk = L.marker([lat, lng], { icon, draggable: getMarkerDraggableOption(wantsDraggable) });
       mk.__meta = { ...p, equipment_id: p.equipment_id };
 
       mk.on("click", (e) => {
@@ -654,6 +656,11 @@ const HvLeafletViewer = forwardRef(function HvLeafletViewer(
 
       mk.addTo(g);
       markersMapRef.current.set(p.equipment_id, mk);
+
+      // 📱 Mobile: activer le drag par long-press uniquement
+      if (wantsDraggable) {
+        setupMobileDrag(mk);
+      }
 
       // Long press for mobile
       setTimeout(() => {
