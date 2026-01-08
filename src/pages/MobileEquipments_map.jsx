@@ -777,6 +777,8 @@ const LeafletViewer = forwardRef(({
       marker.on("contextmenu", (e) => {
         L.DomEvent.stopPropagation(e);
         L.DomEvent.preventDefault(e);
+        // Ne pas afficher le menu si le drag mobile est actif
+        if (marker._mobileDragActive) return;
         onContextMenu?.(pt, e.containerPoint);
       });
 
