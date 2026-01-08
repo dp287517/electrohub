@@ -2263,7 +2263,7 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
     }
   };
 
-  // Calculate smart distribution dates - grouped by building/floor, spread across 12 months
+  // Calculate smart distribution dates - evenly distributed across 12 months
   const calculateSmartDistribution = () => {
     if ((targetType !== 'switchboard' && !isMecaCategory) || !useSmartDistribution) return null;
 
@@ -2273,65 +2273,51 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
 
     if (total === 0) return null;
 
-    // Step 1: Group equipment by building+floor (to keep same location together)
-    const locationGroups = {};
-    selectedEquipment.forEach(eq => {
-      const building = eq.building || eq.building_code || 'Sans bâtiment';
-      const floor = eq.floor || '';
-      const key = `${building}|${floor}`;
-      if (!locationGroups[key]) {
-        locationGroups[key] = { building, floor, items: [] };
-      }
-      locationGroups[key].items.push(eq);
+    // Sort equipment by building then floor for logical ordering
+    const sortedEquipment = [...selectedEquipment].sort((a, b) => {
+      const buildingA = a.building || a.building_code || '';
+      const buildingB = b.building || b.building_code || '';
+      if (buildingA !== buildingB) return buildingA.localeCompare(buildingB);
+      const floorA = a.floor || '';
+      const floorB = b.floor || '';
+      return floorA.localeCompare(floorB);
     });
 
-    // Step 2: Sort groups by building then floor
-    const sortedGroups = Object.values(locationGroups).sort((a, b) => {
-      if (a.building !== b.building) return a.building.localeCompare(b.building);
-      return (a.floor || '').localeCompare(b.floor || '');
-    });
-
-    // Step 3: Calculate items per month to spread across 12 months
+    // Calculate items per month - divide by 12 for even distribution
     const itemsPerMonth = Math.ceil(total / 12);
     const [year, month] = startMonth.split('-').map(Number);
     const dateMapping = {};
-    const monthGroups = []; // For preview display
 
-    let currentMonthOffset = 0;
-    let itemsInCurrentMonth = 0;
+    // Track items per month for preview
+    const monthData = {}; // { monthKey: { monthName, count } }
 
-    // Step 4: Distribute groups across months, keeping groups together
-    sortedGroups.forEach(group => {
-      // If adding this group exceeds monthly target, move to next month
-      if (itemsInCurrentMonth > 0 && itemsInCurrentMonth + group.items.length > itemsPerMonth) {
-        currentMonthOffset++;
-        itemsInCurrentMonth = 0;
-      }
-
-      const groupDate = new Date(year, month - 1 + currentMonthOffset, 15);
+    // Distribute items evenly across months
+    sortedEquipment.forEach((eq, index) => {
+      const monthOffset = Math.floor(index / itemsPerMonth);
+      const groupDate = new Date(year, month - 1 + monthOffset, 15);
       const dateStr = groupDate.toISOString().split('T')[0];
+      const monthKey = dateStr.substring(0, 7);
       const monthName = groupDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
 
-      // Assign date to all items in this group
-      group.items.forEach(eq => {
-        dateMapping[eq.id] = dateStr;
-      });
+      dateMapping[eq.id] = dateStr;
 
-      // Track for preview - show building/floor grouping
-      monthGroups.push({
-        building: group.building,
-        floor: group.floor,
-        monthName,
-        items: group.items
-      });
-
-      itemsInCurrentMonth += group.items.length;
+      if (!monthData[monthKey]) {
+        monthData[monthKey] = { monthName, count: 0 };
+      }
+      monthData[monthKey].count++;
     });
+
+    // Convert to array for display
+    const monthGroups = Object.entries(monthData).map(([key, data]) => ({
+      monthKey: key,
+      monthName: data.monthName,
+      count: data.count
+    }));
 
     return {
       dateMapping,
       groups: monthGroups,
-      monthsNeeded: currentMonthOffset + 1,
+      monthsNeeded: monthGroups.length,
       itemsPerMonth,
       totalItems: total
     };
@@ -2801,17 +2787,14 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
                   {/* Distribution Preview */}
                   {distributionPreview && (
                     <div className="bg-white rounded-lg p-3 text-sm">
-                      <p className="font-medium text-amber-800 mb-2">
-                        {distributionPreview.totalItems} équipements sur {distributionPreview.monthsNeeded} mois (~{distributionPreview.itemsPerMonth}/mois)
+                      <p className="font-medium text-amber-800 mb-3">
+                        {distributionPreview.totalItems} équipements sur {distributionPreview.monthsNeeded} mois
                       </p>
-                      <div className="max-h-40 overflow-y-auto space-y-1">
+                      <div className="flex flex-wrap gap-2">
                         {distributionPreview.groups.map((group, idx) => (
-                          <div key={idx} className="flex items-center justify-between text-xs py-1 border-b border-amber-100 last:border-0">
-                            <span className="text-gray-700 truncate flex-1">
-                              {group.building}{group.floor ? ` (${group.floor})` : ''}
-                            </span>
-                            <span className="text-gray-500 mx-2">{group.items.length} éq.</span>
-                            <span className="text-amber-700 font-medium">{group.monthName}</span>
+                          <div key={idx} className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-xs">
+                            <span className="font-medium text-amber-800 capitalize">{group.monthName}</span>
+                            <span className="text-amber-600 ml-1">({group.count})</span>
                           </div>
                         ))}
                       </div>
