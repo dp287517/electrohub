@@ -2414,6 +2414,7 @@ function SettingsTab() {
   const [agentsList, setAgentsList] = useState([]);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [uploadingAgentVideo, setUploadingAgentVideo] = useState(null); // 'agentType-idle' | 'agentType-speaking' | null
+  const [uploadingAgentImage, setUploadingAgentImage] = useState(null); // 'agentType' | null
   const [agentNames, setAgentNames] = useState({});
   const [editingAgentName, setEditingAgentName] = useState(null); // agentType being edited
   const [tempAgentName, setTempAgentName] = useState('');
@@ -2520,6 +2521,60 @@ function SettingsTab() {
       await fetchAgentsList();
     } catch (err) {
       console.error('Error deleting agent videos:', err);
+    }
+  };
+
+  // Upload image for specific agent (for email reports)
+  const handleAgentImageUpload = async (file, agentType) => {
+    if (!file) return;
+
+    setUploadingAgentImage(agentType);
+
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+
+      const token = localStorage.getItem('eh_token');
+      const res = await fetch(`${API_BASE}/settings/ai-agents/${agentType}/image`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Upload failed');
+      }
+
+      await fetchAgentsList();
+    } catch (err) {
+      console.error('Error uploading agent image:', err);
+      alert('Erreur: ' + err.message);
+    } finally {
+      setUploadingAgentImage(null);
+    }
+  };
+
+  // Delete image for specific agent
+  const handleDeleteAgentImage = async (agentType) => {
+    const agent = agentsList.find(a => a.type === agentType);
+    if (!confirm(`Supprimer l'image de ${agent?.name || agentType} ?`)) return;
+
+    try {
+      const token = localStorage.getItem('eh_token');
+      await fetch(`${API_BASE}/settings/ai-agents/${agentType}/image`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      await fetchAgentsList();
+    } catch (err) {
+      console.error('Error deleting agent image:', err);
     }
   };
 
@@ -3035,7 +3090,8 @@ function SettingsTab() {
                 {agentsList.map((agent) => {
                   const isExpanded = selectedAgent === agent.type;
                   const hasVideos = agent.hasIdleVideo || agent.hasSpeakingVideo;
-                  const isUploading = uploadingAgentVideo?.startsWith(agent.type);
+                  const hasMedia = hasVideos || agent.hasImage;
+                  const isUploading = uploadingAgentVideo?.startsWith(agent.type) || uploadingAgentImage === agent.type;
 
                   // Agent-specific colors
                   const agentColors = {
@@ -3087,12 +3143,18 @@ function SettingsTab() {
                             <p className="font-medium text-gray-900">
                               {agentNames[agent.type] || agent.name?.split(' (')[0] || agent.type}
                             </p>
-                            <div className="flex items-center gap-2 text-xs">
+                            <div className="flex items-center gap-2 text-xs flex-wrap">
                               <span className="text-gray-500">{agent.type}</span>
                               {hasVideos && (
                                 <span className="text-green-600 flex items-center gap-1">
                                   <Check size={12} />
                                   {agent.hasIdleVideo && agent.hasSpeakingVideo ? '2 vidéos' : '1 vidéo'}
+                                </span>
+                              )}
+                              {agent.hasImage && (
+                                <span className="text-blue-600 flex items-center gap-1">
+                                  <Check size={12} />
+                                  Image
                                 </span>
                               )}
                             </div>
@@ -3153,7 +3215,7 @@ function SettingsTab() {
                             )}
                           </div>
 
-                          <div className="grid grid-cols-2 gap-3">
+                          <div className="grid grid-cols-3 gap-3">
                             {/* Idle video */}
                             <div className="space-y-2">
                               <p className="text-xs font-medium text-gray-700 flex items-center gap-1">
@@ -3233,18 +3295,66 @@ function SettingsTab() {
                                 </span>
                               </label>
                             </div>
+
+                            {/* Image for email */}
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium text-gray-700 flex items-center gap-1">
+                                📧 Email
+                              </p>
+                              {agent.hasImage ? (
+                                <img
+                                  src={`${API_BASE}/settings/ai-agents/${agent.type}/image?t=${Date.now()}`}
+                                  alt={`${agent.name} avatar`}
+                                  className="w-full h-20 object-cover rounded-lg bg-gray-100"
+                                />
+                              ) : (
+                                <div className="w-full h-20 bg-gray-100 rounded-lg flex items-center justify-center">
+                                  <span className="text-xs text-gray-400">Vide</span>
+                                </div>
+                              )}
+                              <label className="block">
+                                <input
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/jpg,image/gif,image/webp"
+                                  onChange={(e) => handleAgentImageUpload(e.target.files?.[0], agent.type)}
+                                  className="hidden"
+                                />
+                                <span className={`inline-flex items-center justify-center gap-1 w-full px-2 py-1.5 text-xs font-medium rounded-lg cursor-pointer transition-colors ${
+                                  uploadingAgentImage === agent.type
+                                    ? 'bg-gray-100 text-gray-400 cursor-wait'
+                                    : 'bg-blue-500 text-white hover:opacity-90'
+                                }`}>
+                                  {uploadingAgentImage === agent.type ? (
+                                    <><Loader2 size={12} className="animate-spin" /> Upload...</>
+                                  ) : (
+                                    <><Upload size={12} /> {agent.hasImage ? 'Remplacer' : 'Uploader'}</>
+                                  )}
+                                </span>
+                              </label>
+                            </div>
                           </div>
 
-                          {/* Delete button */}
-                          {hasVideos && (
-                            <button
-                              onClick={() => handleDeleteAgentVideos(agent.type)}
-                              className="w-full px-3 py-1.5 text-xs text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors flex items-center justify-center gap-1"
-                            >
-                              <Trash2 size={12} />
-                              Supprimer les vidéos
-                            </button>
-                          )}
+                          {/* Delete buttons */}
+                          <div className="flex gap-2">
+                            {hasVideos && (
+                              <button
+                                onClick={() => handleDeleteAgentVideos(agent.type)}
+                                className="flex-1 px-3 py-1.5 text-xs text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors flex items-center justify-center gap-1"
+                              >
+                                <Trash2 size={12} />
+                                Supprimer vidéos
+                              </button>
+                            )}
+                            {agent.hasImage && (
+                              <button
+                                onClick={() => handleDeleteAgentImage(agent.type)}
+                                className="flex-1 px-3 py-1.5 text-xs text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors flex items-center justify-center gap-1"
+                              >
+                                <Trash2 size={12} />
+                                Supprimer image
+                              </button>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -3258,10 +3368,10 @@ function SettingsTab() {
                   <Users size={18} className="text-indigo-500 mt-0.5" />
                   <div className="text-sm">
                     <p className="font-medium text-indigo-800">
-                      {agentsList.filter(a => a.hasIdleVideo || a.hasSpeakingVideo).length} / {agentsList.length} agents configurés
+                      {agentsList.filter(a => a.hasIdleVideo || a.hasSpeakingVideo).length} / {agentsList.length} agents avec vidéos • {agentsList.filter(a => a.hasImage).length} / {agentsList.length} agents avec images
                     </p>
                     <p className="text-indigo-600 mt-1">
-                      Chaque agent spécialisé peut avoir sa propre vidéo avatar. L'agent approprié sera automatiquement sélectionné en fonction du contexte de la question.
+                      Vidéos : utilisées dans l'interface. Images : utilisées dans les emails de rapport quotidien.
                     </p>
                   </div>
                 </div>
