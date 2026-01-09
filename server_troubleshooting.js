@@ -365,12 +365,18 @@ router.get('/list', async (req, res) => {
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const validEquipmentId = equipment_id && uuidRegex.test(equipment_id) ? equipment_id : null;
 
+    // Use subquery to calculate global row_number BEFORE filtering
+    // This ensures report numbers are consistent regardless of filters
     let sql = `
       SELECT tr.*,
-             (SELECT COUNT(*) FROM troubleshooting_photos WHERE troubleshooting_id = tr.id) as photo_count,
-             ROW_NUMBER() OVER (ORDER BY tr.created_at DESC) as row_number
-      FROM troubleshooting_records tr
-      WHERE tr.site = $1
+             (SELECT COUNT(*) FROM troubleshooting_photos WHERE troubleshooting_id = tr.id) as photo_count
+      FROM (
+        SELECT *,
+               ROW_NUMBER() OVER (ORDER BY created_at DESC) as row_number
+        FROM troubleshooting_records
+        WHERE site = $1
+      ) tr
+      WHERE 1=1
     `;
     const params = [site];
     let paramIndex = 2;
@@ -425,14 +431,41 @@ router.get('/list', async (req, res) => {
       paramIndex++;
     }
 
-    sql += ` ORDER BY tr.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+    // Build count query (without LIMIT/OFFSET) - use same filters
+    let countSql = `
+      SELECT COUNT(*) as total
+      FROM troubleshooting_records tr
+      WHERE tr.site = $1
+    `;
+    const countParams = [site];
+    let countParamIndex = 2;
+
+    if (equipment_type) {
+      countSql += ` AND tr.equipment_type = $${countParamIndex++}`;
+      countParams.push(equipment_type);
+    }
+    if (validEquipmentId) {
+      countSql += ` AND tr.equipment_id = $${countParamIndex++}`;
+      countParams.push(validEquipmentId);
+    } else if (equipment_id && !validEquipmentId) {
+      countSql += ` AND tr.equipment_code = $${countParamIndex++}`;
+      countParams.push(equipment_id);
+    }
+    if (building_code) { countSql += ` AND tr.building_code = $${countParamIndex++}`; countParams.push(building_code); }
+    if (floor) { countSql += ` AND tr.floor = $${countParamIndex++}`; countParams.push(floor); }
+    if (zone) { countSql += ` AND tr.zone = $${countParamIndex++}`; countParams.push(zone); }
+    if (category) { countSql += ` AND tr.category = $${countParamIndex++}`; countParams.push(category); }
+    if (severity) { countSql += ` AND tr.severity = $${countParamIndex++}`; countParams.push(severity); }
+    if (fault_type) { countSql += ` AND tr.fault_type = $${countParamIndex++}`; countParams.push(fault_type); }
+    if (date_from) { countSql += ` AND tr.created_at >= $${countParamIndex++}`; countParams.push(date_from); }
+    if (date_to) { countSql += ` AND tr.created_at <= $${countParamIndex++}`; countParams.push(date_to); }
+    if (search) { countSql += ` AND (tr.title ILIKE $${countParamIndex} OR tr.description ILIKE $${countParamIndex} OR tr.equipment_name ILIKE $${countParamIndex} OR tr.technician_name ILIKE $${countParamIndex})`; countParams.push(`%${search}%`); }
+
+    sql += ` ORDER BY tr.row_number ASC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
     params.push(parseInt(limit), parseInt(offset));
 
     const result = await pool.query(sql, params);
-
-    // Get total count
-    const countSql = sql.replace(/SELECT.*FROM/, 'SELECT COUNT(*) as total FROM').replace(/ORDER BY.*$/, '');
-    const countResult = await pool.query(countSql.slice(0, countSql.lastIndexOf('LIMIT')), params.slice(0, -2));
+    const countResult = await pool.query(countSql, countParams);
 
     res.json({
       success: true,
