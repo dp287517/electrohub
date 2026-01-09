@@ -1770,15 +1770,20 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     const whereParamId = categoryId !== undefined ? 12 : 11;
     const whereParamSite = categoryId !== undefined ? 13 : 12;
 
-    // ✅ quickQuery avec retry intégré (timeout 10s, 1 retry)
-    const r = await quickQuery(
-      `UPDATE switchboards SET
+    const sqlQuery = `UPDATE switchboards SET
         name=$1, code=$2, building_code=$3, floor=$4, room=$5,
         regime_neutral=$6, is_principal=$7, modes=$8, quality=$9, diagram_data=$10${categoryClause}
       WHERE id=$${whereParamId} AND site=$${whereParamSite}
       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, category_id,
                 modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo,
-                device_count, complete_count`,
+                device_count, complete_count`;
+
+    console.log(`[UPDATE BOARD] SQL categoryClause:`, categoryClause);
+    console.log(`[UPDATE BOARD] Params [10-end]:`, params.slice(10));
+
+    // ✅ quickQuery avec retry intégré (timeout 10s, 1 retry)
+    const r = await quickQuery(
+      sqlQuery,
       params,
       10000, // 10s timeout SQL
       1      // 1 retry si erreur transitoire
