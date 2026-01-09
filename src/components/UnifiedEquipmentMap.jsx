@@ -913,6 +913,7 @@ export default function UnifiedEquipmentMap({
   showTypeFilters = true,
   showOnlyWithControls = false, // If true, only show equipment that has a planned control
   userEmail, // User email for permission filtering
+  onMarkerClick = null, // Custom handler for marker clicks (overrides default navigation)
 }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1456,6 +1457,12 @@ export default function UnifiedEquipmentMap({
   const handleNavigate = (position) => {
     if (!position) {
       console.warn('Cannot navigate: position is null/undefined');
+      return;
+    }
+
+    // If custom onMarkerClick handler is provided, use it
+    if (onMarkerClick) {
+      onMarkerClick(position, controlStatuses[`${position.equipment_type}_${position.equipment_id}`]);
       return;
     }
 

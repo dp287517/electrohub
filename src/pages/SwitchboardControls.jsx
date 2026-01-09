@@ -3107,9 +3107,13 @@ function ControlModal({ schedule, onClose, onComplete, site, userEmail, userName
         setCompletedRecordId(recordRes?.record?.id);
         // Build equipment data from schedule
         const equipDisplay = getEquipmentDisplay(schedule);
+        // Determine the correct equipment ID (numeric for switchboards, UUID for others)
+        const equipId = schedule.switchboard_id || schedule.device_id || schedule.vsd_equipment_id ||
+              schedule.meca_equipment_id || schedule.mobile_equipment_id || schedule.glo_equipment_id ||
+              schedule.datahub_equipment_id || schedule.hv_equipment_id;
         setEquipmentData({
-          id: schedule.switchboard_id || schedule.device_id || schedule.vsd_equipment_id ||
-              schedule.meca_equipment_id || schedule.mobile_equipment_id || schedule.glo_equipment_id,
+          id: equipId,
+          original_id: equipId, // Store original ID for correct linking
           name: equipDisplay.name,
           code: schedule.equipment_code || '',
           type: schedule.equipment_type,
