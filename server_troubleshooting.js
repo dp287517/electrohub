@@ -1530,6 +1530,18 @@ function expandSearchTerms(query) {
   }
 
   for (const word of words) {
+    // Pattern de bâtiment: b11, b20, bat11, bat20, etc. → "batiment 11", "11"
+    const buildingMatch = word.match(/^(b|bat|batiment|building)(\d+)$/i);
+    if (buildingMatch) {
+      const buildingNum = buildingMatch[2];
+      expandedTerms.add(buildingNum);
+      expandedTerms.add(`batiment ${buildingNum}`);
+      expandedTerms.add(`batiment${buildingNum}`);
+      expandedTerms.add(`bat ${buildingNum}`);
+      expandedTerms.add(`b${buildingNum}`);
+      expandedTerms.add(`building ${buildingNum}`);
+    }
+
     // Recherche exacte dans le dictionnaire équipements
     if (EQUIPMENT_SYNONYMS[word]) {
       EQUIPMENT_SYNONYMS[word].forEach(syn => expandedTerms.add(normalizeString(syn)));
@@ -1628,6 +1640,8 @@ router.get('/equipment/smart-search', async (req, res) => {
           if (config.hasBuildingCode) {
             conditions.push(`LOWER(COALESCE(building_code, '')) LIKE $${paramNum}`);
           }
+          // Always search floor column
+          conditions.push(`LOWER(COALESCE(floor, '')) LIKE $${paramNum}`);
           if (config.extraCols) {
             config.extraCols.forEach(col => {
               conditions.push(`LOWER(COALESCE(${col}, '')) LIKE $${paramNum}`);
@@ -1652,17 +1666,47 @@ router.get('/equipment/smart-search', async (req, res) => {
         for (const row of result.rows) {
           // Calculer un score de pertinence
           const nameNorm = normalizeString(row.name || '');
+          const buildingNorm = normalizeString(row.building || row.building_code || '');
+          const floorNorm = normalizeString(row.floor || '');
+          const codeNorm = normalizeString(row.code || '');
           const queryNorm = normalizeString(q);
+          const originalWords = queryNorm.split(' ').filter(w => w.length > 1);
           let score = 0;
 
           // Match exact = score élevé
           if (nameNorm.includes(queryNorm)) score += 100;
           // Match sur le code
-          if (row.code && normalizeString(row.code).includes(queryNorm)) score += 80;
-          // Match sur les termes étendus
+          if (codeNorm && codeNorm.includes(queryNorm)) score += 80;
+
+          // IMPORTANT: Compter combien de mots originaux matchent
+          let originalWordMatches = 0;
+          for (const word of originalWords) {
+            const wordMatchesName = nameNorm.includes(word);
+            const wordMatchesBuilding = buildingNorm.includes(word);
+            const wordMatchesFloor = floorNorm.includes(word);
+            const wordMatchesCode = codeNorm.includes(word);
+
+            if (wordMatchesName || wordMatchesBuilding || wordMatchesFloor || wordMatchesCode) {
+              originalWordMatches++;
+              // Bonus spécifique par type de match
+              if (wordMatchesName) score += 25;
+              if (wordMatchesBuilding) score += 30; // Building match important
+              if (wordMatchesFloor) score += 30; // Floor match important
+              if (wordMatchesCode) score += 20;
+            }
+          }
+
+          // GROS bonus pour les matchs multiples (AND logic reward)
+          if (originalWordMatches >= 2) score += originalWordMatches * 40;
+          if (originalWordMatches >= 3) score += 100; // Triple match bonus
+
+          // Match sur les termes étendus (synonymes)
           expandedTerms.forEach(term => {
-            if (nameNorm.includes(term)) score += 20;
+            if (nameNorm.includes(term)) score += 10;
+            if (buildingNorm.includes(term)) score += 15;
+            if (floorNorm.includes(term)) score += 15;
           });
+
           // Bonus si le type est suggéré
           if (suggestedTypes.includes(config.type)) score += 30;
 
