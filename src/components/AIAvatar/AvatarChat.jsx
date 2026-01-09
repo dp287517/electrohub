@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
 import { VideoAvatar } from './VideoAvatar';
 import MiniEquipmentPreview from './MiniEquipmentPreview';
+import EquipmentSearchModal from '../EquipmentSearchModal';
 import {
   X, Send, Mic, MicOff, Settings,
   AlertTriangle, Calendar, Search, FileText,
@@ -11,7 +12,7 @@ import {
   Volume2, VolumeX, BarChart3, Play, Loader2,
   ClipboardList, Camera, Image, Upload, FileUp, FileSearch,
   ThumbsUp, ThumbsDown, Brain, AlertCircle, TrendingDown,
-  MapPin, FlaskConical, ArrowRightLeft, Check
+  MapPin, FlaskConical, ArrowRightLeft, Check, Tool
 } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
 import { ProcedureCreator, ProcedureViewer } from '../Procedures';
@@ -133,6 +134,8 @@ export default function AvatarChat({
   const [useV2Mode, setUseV2Mode] = useState(() => {
     return aiAssistant.getUseV2();
   });
+  // Troubleshooting modal state
+  const [showTroubleshootingSearch, setShowTroubleshootingSearch] = useState(false);
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -1411,6 +1414,16 @@ Demande-moi n'importe quoi !`,
               <Upload className="w-5 h-5" />
             </button>
 
+            {/* Troubleshooting Button */}
+            <button
+              onClick={() => setShowTroubleshootingSearch(true)}
+              className="p-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600 transition-all shadow-md hover:shadow-lg"
+              title="Faire un dépannage"
+              disabled={isLoading}
+            >
+              <Wrench className="w-5 h-5" />
+            </button>
+
             {/* Text Input - 16px min to prevent iOS zoom */}
             <input
               ref={inputRef}
@@ -1504,6 +1517,24 @@ Demande-moi n'importe quoi !`,
           />
         </div>
       )}
+
+      {/* Equipment Search Modal for Troubleshooting */}
+      <EquipmentSearchModal
+        isOpen={showTroubleshootingSearch}
+        onClose={() => setShowTroubleshootingSearch(false)}
+        onSuccess={(record) => {
+          setShowTroubleshootingSearch(false);
+          // Add success message to chat
+          const successMessage = {
+            id: Date.now(),
+            role: 'assistant',
+            content: `✅ **Dépannage créé avec succès !**\n\nTon dépannage a été enregistré et lié à ${record.linkedEquipment || 1} équipement(s).`,
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, successMessage]);
+          speak(successMessage.content);
+        }}
+      />
     </div>
   );
 }
