@@ -1,29 +1,31 @@
 // SharedTroubleshootingView.jsx - Public read-only view for shared troubleshooting
+// Structure matches TroubleshootingDetail.jsx for consistency
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import {
-  Wrench, Calendar, Building2, MapPin, AlertTriangle,
-  CheckCircle, Clock, Zap, Image, X, Eye, Share2, Lock
+  Wrench, Calendar, Building2, Users, MapPin, AlertTriangle,
+  CheckCircle, Clock, Zap, Image, FileText, X, Eye, Share2, Lock
 } from 'lucide-react';
 import MiniEquipmentPreview from '../components/AIAvatar/MiniEquipmentPreview';
 
 // ============================================================
-// SEVERITY & STATUS CONFIGS
+// SEVERITY & STATUS CONFIGS (same as TroubleshootingDetail)
 // ============================================================
-const SEVERITY_CONFIG = {
-  critical: { label: 'Critique', bg: 'bg-red-100', text: 'text-red-700' },
-  major: { label: 'Majeur', bg: 'bg-orange-100', text: 'text-orange-700' },
-  minor: { label: 'Mineur', bg: 'bg-yellow-100', text: 'text-yellow-700' },
-  cosmetic: { label: 'Cosmétique', bg: 'bg-gray-100', text: 'text-gray-700' }
-};
+const SEVERITY_OPTIONS = [
+  { value: 'critical', label: 'Critique', bg: 'bg-red-100', text: 'text-red-700' },
+  { value: 'major', label: 'Majeur', bg: 'bg-orange-100', text: 'text-orange-700' },
+  { value: 'minor', label: 'Mineur', bg: 'bg-yellow-100', text: 'text-yellow-700' },
+  { value: 'cosmetic', label: 'Cosmétique', bg: 'bg-gray-100', text: 'text-gray-700' }
+];
 
-const STATUS_CONFIG = {
-  open: { label: 'Ouvert', icon: AlertTriangle, bg: 'bg-red-100', text: 'text-red-700' },
-  in_progress: { label: 'En cours', icon: Clock, bg: 'bg-orange-100', text: 'text-orange-700' },
-  resolved: { label: 'Résolu', icon: CheckCircle, bg: 'bg-green-100', text: 'text-green-700' },
-  completed: { label: 'Résolu', icon: CheckCircle, bg: 'bg-green-100', text: 'text-green-700' },
-  closed: { label: 'Clôturé', icon: Lock, bg: 'bg-gray-100', text: 'text-gray-700' }
-};
+const STATUS_OPTIONS = [
+  { value: 'open', label: 'Ouvert', icon: AlertTriangle, bg: 'bg-red-100', text: 'text-red-700' },
+  { value: 'in_progress', label: 'En cours', icon: Clock, bg: 'bg-orange-100', text: 'text-orange-700' },
+  { value: 'resolved', label: 'Résolu', icon: CheckCircle, bg: 'bg-green-100', text: 'text-green-700' },
+  { value: 'completed', label: 'Résolu', icon: CheckCircle, bg: 'bg-green-100', text: 'text-green-700' },
+  { value: 'closed', label: 'Clôturé', icon: Lock, bg: 'bg-gray-100', text: 'text-gray-700' },
+  { value: 'pending_review', label: 'En attente', icon: Clock, bg: 'bg-gray-100', text: 'text-gray-700' }
+];
 
 const EQUIPMENT_TYPE_CONFIG = {
   switchboard: { label: 'Tableau électrique', icon: Zap, color: 'text-amber-600 bg-amber-50' },
@@ -40,10 +42,10 @@ const EQUIPMENT_TYPE_CONFIG = {
 };
 
 // ============================================================
-// BADGES
+// BADGES (same as TroubleshootingDetail)
 // ============================================================
 function SeverityBadge({ severity }) {
-  const config = SEVERITY_CONFIG[severity] || SEVERITY_CONFIG.cosmetic;
+  const config = SEVERITY_OPTIONS.find(s => s.value === severity) || SEVERITY_OPTIONS[3];
   return (
     <span className={`px-3 py-1 rounded-full text-sm font-medium ${config.bg} ${config.text}`}>
       {config.label}
@@ -52,7 +54,7 @@ function SeverityBadge({ severity }) {
 }
 
 function StatusBadge({ status }) {
-  const config = STATUS_CONFIG[status] || STATUS_CONFIG.in_progress;
+  const config = STATUS_OPTIONS.find(s => s.value === status) || STATUS_OPTIONS[1];
   const Icon = config.icon;
   return (
     <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium ${config.bg} ${config.text}`}>
@@ -74,7 +76,7 @@ function EquipmentTypeBadge({ type }) {
 }
 
 // ============================================================
-// PHOTO GALLERY (READ-ONLY)
+// PHOTO GALLERY (READ-ONLY, same style as TroubleshootingDetail)
 // ============================================================
 function PhotoGallery({ photos }) {
   const [selectedPhoto, setSelectedPhoto] = useState(null);
@@ -85,23 +87,26 @@ function PhotoGallery({ photos }) {
     after: 'Après'
   };
 
-  if (!photos || photos.length === 0) {
-    return (
-      <div className="text-gray-500 text-sm italic py-4 text-center">
-        Aucune photo disponible
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+          <Image size={16} className="text-orange-500" />
+          Photos ({photos.length})
+        </h3>
+      </div>
+
+      {photos.length === 0 && (
+        <p className="text-gray-500 text-sm italic">Aucune photo</p>
+      )}
+
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {photos.map((photo, idx) => (
           <div key={photo.id || idx} className="relative group">
             <img
               src={photo.photo_data}
               alt={photo.caption || `Photo ${idx + 1}`}
-              className="w-full h-32 object-cover rounded-lg border border-gray-200 cursor-pointer hover:border-blue-400 transition-colors"
+              className="w-full h-32 object-cover rounded-lg border border-gray-200 cursor-pointer group-hover:border-orange-400 transition-colors"
               onClick={() => setSelectedPhoto(photo)}
             />
             {photo.photo_type && (
@@ -130,11 +135,6 @@ function PhotoGallery({ photos }) {
             alt={selectedPhoto.caption || 'Photo'}
             className="max-w-full max-h-[90vh] object-contain rounded-lg"
           />
-          {selectedPhoto.caption && (
-            <p className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white bg-black/50 px-4 py-2 rounded-lg">
-              {selectedPhoto.caption}
-            </p>
-          )}
         </div>
       )}
     </div>
@@ -177,25 +177,13 @@ export default function SharedTroubleshootingView() {
     }
   };
 
-  const formatDate = (dateStr) => {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleDateString('fr-FR', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
   // Loading state
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Chargement du dépannage...</p>
+          <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement du dépannage...</p>
         </div>
       </div>
     );
@@ -204,17 +192,23 @@ export default function SharedTroubleshootingView() {
   // Error state
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-lg p-8 max-w-md text-center">
-          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <X className="w-8 h-8 text-red-600" />
+      <div className="min-h-screen bg-gray-50 flex flex-col">
+        <div className="flex-1 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-lg p-8 max-w-md text-center">
+            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <X className="w-8 h-8 text-red-600" />
+            </div>
+            <h1 className="text-xl font-bold text-gray-900 mb-2">Lien invalide</h1>
+            <p className="text-gray-600 mb-6">{error}</p>
+            <p className="text-sm text-gray-500">
+              Ce lien de partage a peut-être expiré ou n'existe plus.
+            </p>
           </div>
-          <h1 className="text-xl font-bold text-gray-900 mb-2">Lien invalide</h1>
-          <p className="text-gray-600 mb-6">{error}</p>
-          <p className="text-sm text-gray-500">
-            Ce lien de partage a peut-être expiré ou n'existe plus.
-          </p>
         </div>
+        {/* Footer */}
+        <footer className="bg-gray-900 text-gray-400 py-6 text-center text-sm">
+          <p>© {new Date().getFullYear()} Haleon-tool - Daniel Palha - Tous droits réservés</p>
+        </footer>
       </div>
     );
   }
@@ -222,145 +216,264 @@ export default function SharedTroubleshootingView() {
   if (!record) return null;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header Banner */}
-      <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white py-4 px-4">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Share2 size={24} />
-            <div>
-              <h1 className="font-semibold">Dépannage partagé</h1>
-              <p className="text-sm text-blue-100">Vue en lecture seule</p>
-            </div>
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* Header - Same style as TroubleshootingDetail */}
+      <div className="bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white">
+        <div className="max-w-6xl mx-auto px-4 py-6">
+          {/* Shared indicator */}
+          <div className="flex items-center gap-2 text-white/80 mb-4">
+            <Share2 size={16} />
+            <span className="text-sm">Dépannage partagé - Vue en lecture seule</span>
+            <span className="ml-auto flex items-center gap-1 text-sm">
+              <Eye size={14} />
+              {shareInfo?.viewCount || 1} vue(s)
+            </span>
           </div>
-          <div className="flex items-center gap-2 text-sm text-blue-100">
-            <Eye size={16} />
-            <span>{shareInfo?.viewCount || 1} vue(s)</span>
-          </div>
-        </div>
-      </div>
 
-      <div className="max-w-4xl mx-auto p-4 space-y-6">
-        {/* Main Info Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          {/* Equipment Header */}
-          <div className="bg-gradient-to-r from-gray-50 to-white p-6 border-b border-gray-100">
-            <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start justify-between">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-white/20 rounded-xl">
+                <Wrench size={28} />
+              </div>
               <div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                  {record.equipment_name || record.equipment_code || 'Équipement'}
-                </h2>
-                <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600">
-                  {record.equipment_type && <EquipmentTypeBadge type={record.equipment_type} />}
-                  {record.building_code && (
+                <h1 className="text-2xl sm:text-3xl font-bold">{record.title}</h1>
+                <div className="flex flex-wrap items-center gap-4 mt-2 text-white/80">
+                  <span className="flex items-center gap-1">
+                    <Calendar size={16} />
+                    {new Date(record.created_at).toLocaleDateString('fr-FR', {
+                      weekday: 'long',
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric'
+                    })}
+                  </span>
+                  {record.technician_name && (
                     <span className="flex items-center gap-1">
-                      <Building2 size={14} />
-                      {record.building_code}
+                      <Users size={16} />
+                      {record.technician_name}
                     </span>
                   )}
-                  {record.floor && <span>• Étage {record.floor}</span>}
-                  {record.zone && <span>• {record.zone}</span>}
                 </div>
-              </div>
-              <div className="flex flex-col items-end gap-2">
-                <SeverityBadge severity={record.severity} />
-                <StatusBadge status={record.status} />
               </div>
             </div>
           </div>
-
-          {/* Details Grid */}
-          <div className="p-6 space-y-6">
-            {/* Title & Description */}
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900 mb-2 flex items-center gap-2">
-                <Wrench size={18} className="text-orange-500" />
-                {record.title || 'Description du problème'}
-              </h3>
-              {record.description && (
-                <p className="text-gray-700 whitespace-pre-wrap">{record.description}</p>
-              )}
-            </div>
-
-            {/* Root Cause */}
-            {record.root_cause && (
-              <div className="bg-amber-50 border-l-4 border-amber-400 p-4 rounded-r-lg">
-                <h4 className="font-semibold text-amber-800 mb-1">Cause identifiée</h4>
-                <p className="text-amber-700">{record.root_cause}</p>
-              </div>
-            )}
-
-            {/* Solution */}
-            {record.solution && (
-              <div className="bg-green-50 border-l-4 border-green-400 p-4 rounded-r-lg">
-                <h4 className="font-semibold text-green-800 mb-1">Solution appliquée</h4>
-                <p className="text-green-700">{record.solution}</p>
-              </div>
-            )}
-
-            {/* Metadata */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t border-gray-100">
-              <div>
-                <span className="text-xs text-gray-500 uppercase">Créé le</span>
-                <p className="text-sm font-medium text-gray-900">{formatDate(record.created_at)}</p>
-              </div>
-              {record.resolved_at && (
-                <div>
-                  <span className="text-xs text-gray-500 uppercase">Résolu le</span>
-                  <p className="text-sm font-medium text-gray-900">{formatDate(record.resolved_at)}</p>
-                </div>
-              )}
-              {record.downtime_minutes > 0 && (
-                <div>
-                  <span className="text-xs text-gray-500 uppercase">Temps d'arrêt</span>
-                  <p className="text-sm font-medium text-red-600">{record.downtime_minutes} min</p>
-                </div>
-              )}
-              {record.duration_minutes > 0 && (
-                <div>
-                  <span className="text-xs text-gray-500 uppercase">Durée intervention</span>
-                  <p className="text-sm font-medium text-gray-900">{record.duration_minutes} min</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Photos */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-          <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Image size={18} className="text-orange-500" />
-            Photos ({photos.length})
-          </h3>
-          <PhotoGallery photos={photos} />
-        </div>
-
-        {/* Mini Map */}
-        {record.equipment_id && (
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-            <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <MapPin size={18} className="text-blue-500" />
-              Localisation sur le plan
-            </h3>
-            <div className="rounded-xl overflow-hidden border border-gray-200">
-              <MiniEquipmentPreview
-                equipmentId={record.equipment_id}
-                equipmentType={record.equipment_type}
-                equipmentCode={record.equipment_code}
-                buildingCode={record.building_code}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Share Info Footer */}
-        <div className="text-center text-sm text-gray-500 py-4">
-          <p>Partagé par <strong>{shareInfo?.createdBy}</strong></p>
-          <p className="mt-1">
-            Ce lien est valide pour consultation uniquement.
-          </p>
         </div>
       </div>
+
+      {/* Content - Same 2-column layout as TroubleshootingDetail */}
+      <div className="flex-1 max-w-6xl mx-auto px-4 py-8 w-full">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Main Content - 2 columns */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Description */}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <FileText size={18} className="text-orange-500" />
+                Description du problème
+              </h2>
+              <p className="text-gray-700 whitespace-pre-wrap">
+                {record.description || <span className="italic text-gray-400">Aucune description</span>}
+              </p>
+
+              {/* Root Cause */}
+              <div className="mt-6 pt-6 border-t">
+                <h3 className="font-medium text-gray-900 mb-2">Cause identifiée</h3>
+                <p className="text-gray-700">
+                  {record.root_cause || <span className="italic text-gray-400">Non renseignée</span>}
+                </p>
+              </div>
+
+              {/* Solution */}
+              <div className="mt-6 pt-6 border-t">
+                <h3 className="font-medium text-gray-900 mb-2 flex items-center gap-2">
+                  <CheckCircle size={16} className="text-green-500" />
+                  Solution appliquée
+                </h3>
+                <p className="text-gray-700">
+                  {record.solution || <span className="italic text-gray-400">Non renseignée</span>}
+                </p>
+              </div>
+
+              {/* Parts replaced */}
+              {record.parts_replaced && (
+                <div className="mt-6 pt-6 border-t">
+                  <h3 className="font-medium text-gray-900 mb-2">Pièces remplacées</h3>
+                  <p className="text-gray-700">{record.parts_replaced}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Photos */}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <PhotoGallery photos={photos} />
+            </div>
+
+            {/* Mini Plan - Only show if equipment has position data */}
+            {record.equipment_type && record.equipment_id && (
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <MapPin size={18} className="text-orange-500" />
+                  Localisation sur plan
+                </h2>
+                <MiniEquipmentPreview
+                  equipment={{
+                    id: record.equipment_id,
+                    name: record.equipment_name,
+                    code: record.equipment_code,
+                    building_code: record.building_code,
+                    floor: record.floor
+                  }}
+                  equipmentType={record.equipment_type}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Sidebar */}
+          <div className="space-y-6">
+            {/* Status & Severity */}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <h3 className="font-semibold text-gray-900 mb-4">Statut</h3>
+              <div className="flex flex-wrap gap-2">
+                <StatusBadge status={record.status} />
+                <SeverityBadge severity={record.severity} />
+              </div>
+              {record.category && (
+                <div className="mt-4 pt-4 border-t">
+                  <span className="text-sm text-gray-500">Catégorie</span>
+                  <p className="font-medium text-gray-900 capitalize">{record.category}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Equipment Info */}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <Zap size={16} className="text-orange-500" />
+                Équipement
+              </h3>
+              <div className="space-y-3">
+                <EquipmentTypeBadge type={record.equipment_type} />
+                {record.equipment_name && (
+                  <div>
+                    <span className="text-sm text-gray-500">Nom</span>
+                    <p className="font-medium text-gray-900">{record.equipment_name}</p>
+                  </div>
+                )}
+                {record.equipment_code && (
+                  <div>
+                    <span className="text-sm text-gray-500">Code</span>
+                    <p className="font-medium text-gray-900 font-mono">{record.equipment_code}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Location */}
+            {(record.building_code || record.floor || record.zone) && (
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <Building2 size={16} className="text-orange-500" />
+                  Localisation
+                </h3>
+                <div className="space-y-3">
+                  {record.building_code && (
+                    <div>
+                      <span className="text-sm text-gray-500">Bâtiment</span>
+                      <p className="font-medium text-gray-900">{record.building_code}</p>
+                    </div>
+                  )}
+                  {record.floor && (
+                    <div>
+                      <span className="text-sm text-gray-500">Étage</span>
+                      <p className="font-medium text-gray-900">{record.floor}</p>
+                    </div>
+                  )}
+                  {record.zone && (
+                    <div>
+                      <span className="text-sm text-gray-500">Zone</span>
+                      <p className="font-medium text-gray-900">{record.zone}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Time Tracking */}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <Clock size={16} className="text-orange-500" />
+                Temps
+              </h3>
+              <div className="space-y-3">
+                {record.started_at && (
+                  <div>
+                    <span className="text-sm text-gray-500">Début</span>
+                    <p className="font-medium text-gray-900">
+                      {new Date(record.started_at).toLocaleString('fr-FR')}
+                    </p>
+                  </div>
+                )}
+                {record.completed_at && (
+                  <div>
+                    <span className="text-sm text-gray-500">Fin</span>
+                    <p className="font-medium text-gray-900">
+                      {new Date(record.completed_at).toLocaleString('fr-FR')}
+                    </p>
+                  </div>
+                )}
+                {record.duration_minutes && (
+                  <div>
+                    <span className="text-sm text-gray-500">Durée intervention</span>
+                    <p className="font-medium text-gray-900">{record.duration_minutes} minutes</p>
+                  </div>
+                )}
+                {record.downtime_minutes && (
+                  <div className="pt-3 border-t">
+                    <span className="text-sm text-red-500">Temps d'arrêt</span>
+                    <p className="font-bold text-red-600 text-lg">{record.downtime_minutes} minutes</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Technician */}
+            {record.technician_name && (
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <Users size={16} className="text-orange-500" />
+                  Technicien
+                </h3>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-orange-400 to-red-500 flex items-center justify-center text-white font-bold">
+                    {record.technician_name?.charAt(0)?.toUpperCase() || '?'}
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">{record.technician_name}</p>
+                    {record.technician_email && (
+                      <p className="text-sm text-gray-500">{record.technician_email}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Share Info */}
+            {shareInfo?.createdBy && (
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-center">
+                <p className="text-sm text-blue-700">
+                  Partagé par <strong>{shareInfo.createdBy}</strong>
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Footer with copyright */}
+      <footer className="bg-gray-900 text-gray-400 py-6 text-center text-sm mt-auto">
+        <p>© {new Date().getFullYear()} Haleon-tool - Daniel Palha - Tous droits réservés</p>
+      </footer>
     </div>
   );
 }
