@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, API_BASE } from "../lib/api.js";
 import { Zap, Cpu, Settings, Truck, Battery, Grid3X3, Package, PlusSquare, Database } from "lucide-react";
+import NCResolutionModal from "../components/NCResolutionModal.jsx";
 
 // ============================================================
 // ANIMATIONS CSS
@@ -239,6 +240,20 @@ export default function SwitchboardControls() {
 
   // Tab state
   const [activeTab, setActiveTab] = useState(searchParams.get("tab") || "dashboard");
+
+  // User info from localStorage
+  const [userInfo] = useState(() => {
+    try {
+      const ehUser = JSON.parse(localStorage.getItem('eh_user') || '{}');
+      return {
+        email: ehUser.email || localStorage.getItem('user.email') || localStorage.getItem('email') || '',
+        name: ehUser.name || localStorage.getItem('user.name') || localStorage.getItem('name') || ''
+      };
+    } catch {
+      return { email: '', name: '' };
+    }
+  });
+  const site = localStorage.getItem('site') || 'default';
 
   // Data states
   const [dashboard, setDashboard] = useState(null);
@@ -1150,6 +1165,9 @@ export default function SwitchboardControls() {
             setShowControlModal(false);
             setSelectedSchedule(null);
           }}
+          site={site}
+          userEmail={userInfo.email}
+          userName={userInfo.name}
         />
       )}
 
@@ -2893,7 +2911,7 @@ function ScheduleModal({ templates, switchboards, datahubCategories = [], mecaCa
 // Photos are saved immediately to Neon DB (no size limit)
 // ============================================================
 
-function ControlModal({ schedule, onClose, onComplete }) {
+function ControlModal({ schedule, onClose, onComplete, site, userEmail, userName }) {
   const [template, setTemplate] = useState(null);
   const [results, setResults] = useState([]);
   const [globalNotes, setGlobalNotes] = useState("");
@@ -2906,6 +2924,11 @@ function ControlModal({ schedule, onClose, onComplete }) {
   const fileInputRef = useRef(null);
   const docInputRef = useRef(null);
   const saveTimeoutRef = useRef(null);
+  // NC Modal state
+  const [showNCModal, setShowNCModal] = useState(false);
+  const [ncItems, setNcItems] = useState([]);
+  const [equipmentData, setEquipmentData] = useState(null);
+  const [completedRecordId, setCompletedRecordId] = useState(null);
 
   // Load template and restore draft from server
   useEffect(() => {
@@ -3064,10 +3087,50 @@ function ControlModal({ schedule, onClose, onComplete }) {
 
       // Clear draft after successful completion
       await clearDraft();
-      await onComplete();
+
+      // Check for non-conforming items
+      const nonConformItems = [];
+      if (template && template.checklist_items) {
+        template.checklist_items.forEach((item, idx) => {
+          if (item.type === 'conform' && results[idx]?.status === 'non_conform') {
+            nonConformItems.push({
+              name: item.label,
+              note: results[idx]?.comment || ''
+            });
+          }
+        });
+      }
+
+      // If there are NC items, show the NC resolution modal
+      if (nonConformItems.length > 0) {
+        setNcItems(nonConformItems);
+        setCompletedRecordId(recordRes?.record?.id);
+        // Build equipment data from schedule
+        const equipDisplay = getEquipmentDisplay(schedule);
+        setEquipmentData({
+          id: schedule.switchboard_id || schedule.device_id || schedule.vsd_equipment_id ||
+              schedule.meca_equipment_id || schedule.mobile_equipment_id || schedule.glo_equipment_id,
+          name: equipDisplay.name,
+          code: schedule.equipment_code || '',
+          type: schedule.equipment_type,
+          building_code: schedule.building_code || equipDisplay.building || '',
+          floor: schedule.floor || '',
+          zone: schedule.zone || '',
+          room: schedule.room || ''
+        });
+        setShowNCModal(true);
+      } else {
+        await onComplete();
+      }
     } finally {
       setSaving(false);
     }
+  };
+
+  // Handle NC modal close
+  const handleNCModalClose = async (createdRecords) => {
+    setShowNCModal(false);
+    await onComplete();
   };
 
   if (!template) {
@@ -3298,6 +3361,19 @@ function ControlModal({ schedule, onClose, onComplete }) {
           </button>
         </div>
       </div>
+
+      {/* NC Resolution Modal */}
+      <NCResolutionModal
+        isOpen={showNCModal}
+        onClose={handleNCModalClose}
+        maintenanceId={completedRecordId}
+        maintenanceName={template?.name}
+        equipmentData={equipmentData}
+        ncItems={ncItems}
+        site={site}
+        userEmail={userEmail}
+        userName={userName}
+      />
     </div>
   );
 }

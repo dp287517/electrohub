@@ -1950,6 +1950,15 @@ function generateTroubleshootingShareEmail(record, photos, shareUrl, agentName, 
             </td>
             ` : ''}
           </tr>
+          ${record.source === 'maintenance_nc' ? `
+          <tr>
+            <td colspan="3" style="padding: 10px 0 0;">
+              <span style="display: inline-block; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 500; background: #FEE2E2; color: #DC2626;">
+                ⚠️ NC Maintenance${record.source_nc_item ? `: ${record.source_nc_item}` : ''}
+              </span>
+            </td>
+          </tr>
+          ` : ''}
         </table>
       </div>
     </div>

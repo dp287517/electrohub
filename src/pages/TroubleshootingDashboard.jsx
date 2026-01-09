@@ -480,11 +480,25 @@ export default function TroubleshootingDashboard() {
     equipment_type: searchParams.get('type') || '',
     building_code: searchParams.get('building') || '',
     severity: searchParams.get('severity') || '',
+    status: searchParams.get('status') || '',
+    source: searchParams.get('source') || '',
     date_from: searchParams.get('from') || '',
     date_to: searchParams.get('to') || '',
     search: searchParams.get('search') || ''
   });
   const [showFilters, setShowFilters] = useState(false);
+
+  // Check URL for special filter presets (e.g., ?filter=open_nc)
+  useEffect(() => {
+    const filterPreset = searchParams.get('filter');
+    if (filterPreset === 'open_nc') {
+      setFilters(prev => ({
+        ...prev,
+        source: 'maintenance_nc',
+        status: 'in_progress'
+      }));
+    }
+  }, [searchParams]);
 
   // Tab state
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'list');
@@ -551,6 +565,8 @@ export default function TroubleshootingDashboard() {
       equipment_type: '',
       building_code: '',
       severity: '',
+      status: '',
+      source: '',
       date_from: '',
       date_to: '',
       search: ''
@@ -729,6 +745,33 @@ export default function TroubleshootingDashboard() {
                   placeholder="Code bâtiment"
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                 />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Statut</label>
+                <select
+                  value={filters.status}
+                  onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                >
+                  <option value="">Tous</option>
+                  <option value="in_progress">En cours</option>
+                  <option value="completed">Résolu</option>
+                  <option value="pending_parts">Attente pièces</option>
+                  <option value="pending_external">Attente externe</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>
+                <select
+                  value={filters.source}
+                  onChange={(e) => setFilters(prev => ({ ...prev, source: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                >
+                  <option value="">Toutes</option>
+                  <option value="manual">Manuel</option>
+                  <option value="maintenance_nc">NC Maintenance</option>
+                  <option value="preventive">Préventif</option>
+                </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Du</label>

@@ -49,8 +49,22 @@ const SEVERITY_OPTIONS = [
 const STATUS_OPTIONS = [
   { value: 'in_progress', label: 'En cours', icon: Clock, bg: 'bg-orange-100', text: 'text-orange-700' },
   { value: 'completed', label: 'Résolu', icon: CheckCircle, bg: 'bg-green-100', text: 'text-green-700' },
-  { value: 'pending_review', label: 'En attente', icon: Clock, bg: 'bg-gray-100', text: 'text-gray-700' }
+  { value: 'pending_review', label: 'En attente', icon: Clock, bg: 'bg-gray-100', text: 'text-gray-700' },
+  { value: 'pending_parts', label: 'En attente pièces', icon: Clock, bg: 'bg-blue-100', text: 'text-blue-700' },
+  { value: 'pending_external', label: 'En attente externe', icon: Clock, bg: 'bg-purple-100', text: 'text-purple-700' }
 ];
+
+const PRIORITY_OPTIONS = [
+  { value: 'high', label: 'Haute', bg: 'bg-red-100', text: 'text-red-700' },
+  { value: 'medium', label: 'Moyenne', bg: 'bg-orange-100', text: 'text-orange-700' },
+  { value: 'low', label: 'Basse', bg: 'bg-green-100', text: 'text-green-700' }
+];
+
+const SOURCE_CONFIG = {
+  manual: { label: 'Manuel', bg: 'bg-gray-100', text: 'text-gray-700' },
+  maintenance_nc: { label: 'NC Maintenance', bg: 'bg-red-100', text: 'text-red-700' },
+  preventive: { label: 'Préventif', bg: 'bg-blue-100', text: 'text-blue-700' }
+};
 
 const CATEGORY_OPTIONS = [
   { value: 'electrical', label: 'Électrique' },
@@ -99,6 +113,30 @@ function EquipmentTypeBadge({ type }) {
     <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${color}`}>
       <Icon size={14} />
       {label}
+    </span>
+  );
+}
+
+function SourceBadge({ source, ncItem }) {
+  const config = SOURCE_CONFIG[source] || SOURCE_CONFIG.manual;
+  return (
+    <div className="flex flex-col gap-1">
+      <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium ${config.bg} ${config.text}`}>
+        {source === 'maintenance_nc' && <AlertTriangle size={14} />}
+        {config.label}
+      </span>
+      {ncItem && (
+        <span className="text-xs text-gray-500 ml-1">Point: {ncItem}</span>
+      )}
+    </div>
+  );
+}
+
+function PriorityBadge({ priority }) {
+  const config = PRIORITY_OPTIONS.find(p => p.value === priority) || PRIORITY_OPTIONS[1];
+  return (
+    <span className={`px-3 py-1 rounded-full text-sm font-medium ${config.bg} ${config.text}`}>
+      Priorité {config.label.toLowerCase()}
     </span>
   );
 }
@@ -841,13 +879,34 @@ export default function TroubleshootingDetail() {
                       ))}
                     </select>
                   </div>
+                  <div>
+                    <label className="text-sm text-gray-500 block mb-1">Priorité</label>
+                    <select
+                      value={editData.priority || 'medium'}
+                      onChange={(e) => updateField('priority', e.target.value)}
+                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
+                    >
+                      {PRIORITY_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               ) : (
                 <>
                   <div className="flex flex-wrap gap-2">
                     <StatusBadge status={record.status} />
                     <SeverityBadge severity={record.severity} />
+                    {record.priority && record.priority !== 'medium' && (
+                      <PriorityBadge priority={record.priority} />
+                    )}
                   </div>
+                  {record.source && record.source !== 'manual' && (
+                    <div className="mt-4 pt-4 border-t">
+                      <span className="text-sm text-gray-500 block mb-2">Source</span>
+                      <SourceBadge source={record.source} ncItem={record.source_nc_item} />
+                    </div>
+                  )}
                   {record.category && (
                     <div className="mt-4 pt-4 border-t">
                       <span className="text-sm text-gray-500">Catégorie</span>
