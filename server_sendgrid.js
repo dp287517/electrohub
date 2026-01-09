@@ -3329,18 +3329,19 @@ router.get('/shared/:token/map-data', async (req, res) => {
     }
 
     // Position table mapping by equipment type
+    // Note: Many equipment types share vsd_plans table for floor plans
     const positionTableMap = {
-      switchboard: { table: 'switchboard_positions', idField: 'switchboard_id', planTable: 'switchboard_plans' },
+      switchboard: { table: 'switchboard_positions', idField: 'switchboard_id', planTable: 'vsd_plans' },
       vsd: { table: 'vsd_positions', idField: 'equipment_id', planTable: 'vsd_plans' },
-      meca: { table: 'meca_positions', idField: 'equipment_id', planTable: 'meca_plans' },
-      glo: { table: 'glo_positions', idField: 'equipment_id', planTable: 'glo_plans' },
+      meca: { table: 'meca_positions', idField: 'equipment_id', planTable: 'vsd_plans' },
+      glo: { table: 'glo_positions', idField: 'equipment_id', planTable: 'vsd_plans' },
       hv: { table: 'hv_positions', idField: 'equipment_id', planTable: 'hv_plans' },
-      mobile: { table: 'me_equipment_positions', idField: 'equipment_id', planTable: 'mobile_equipment_plans' },
+      mobile: { table: 'me_equipment_positions', idField: 'equipment_id', planTable: 'me_plans' },
       atex: { table: 'atex_positions', idField: 'equipment_id', planTable: 'atex_plans' },
-      datahub: { table: 'dh_positions', idField: 'item_id', planTable: 'datahub_plans' },
+      datahub: { table: 'dh_positions', idField: 'item_id', planTable: 'vsd_plans' },
       infrastructure: { table: 'inf_positions', idField: 'item_id', planTable: 'infrastructure_plans' },
-      doors: { table: 'fd_door_positions', idField: 'door_id', planTable: 'doors_plans' },
-      firecontrol: { table: 'fc_map_positions', idField: 'equipment_id', planTable: 'fire_control_plans' }
+      doors: { table: 'fd_door_positions', idField: 'door_id', planTable: 'fd_plans' },
+      firecontrol: { table: 'fc_map_positions', idField: 'equipment_id', planTable: 'fc_building_plans' }
     };
 
     const config = positionTableMap[equipment_type];
@@ -3449,18 +3450,19 @@ router.get('/shared/:token/plan-file', async (req, res) => {
     }
 
     // Position table mapping
+    // Note: Many equipment types share vsd_plans table, binary field is 'content' not 'binary_data'
     const positionTableMap = {
-      switchboard: { table: 'switchboard_positions', idField: 'switchboard_id', planTable: 'switchboard_plans', binaryField: 'binary_data' },
-      vsd: { table: 'vsd_positions', idField: 'equipment_id', planTable: 'vsd_plans', binaryField: 'binary_data' },
-      meca: { table: 'meca_positions', idField: 'equipment_id', planTable: 'meca_plans', binaryField: 'binary_data' },
-      glo: { table: 'glo_positions', idField: 'equipment_id', planTable: 'glo_plans', binaryField: 'binary_data' },
-      hv: { table: 'hv_positions', idField: 'equipment_id', planTable: 'hv_plans', binaryField: 'binary_data' },
-      mobile: { table: 'me_equipment_positions', idField: 'equipment_id', planTable: 'mobile_equipment_plans', binaryField: 'binary_data' },
-      atex: { table: 'atex_positions', idField: 'equipment_id', planTable: 'atex_plans', binaryField: 'binary_data' },
-      datahub: { table: 'dh_positions', idField: 'item_id', planTable: 'datahub_plans', binaryField: 'binary_data' },
-      infrastructure: { table: 'inf_positions', idField: 'item_id', planTable: 'infrastructure_plans', binaryField: 'binary_data' },
-      doors: { table: 'fd_door_positions', idField: 'door_id', planTable: 'doors_plans', binaryField: 'binary_data' },
-      firecontrol: { table: 'fc_map_positions', idField: 'equipment_id', planTable: 'fire_control_plans', binaryField: 'binary_data' }
+      switchboard: { table: 'switchboard_positions', idField: 'switchboard_id', planTable: 'vsd_plans', binaryField: 'content' },
+      vsd: { table: 'vsd_positions', idField: 'equipment_id', planTable: 'vsd_plans', binaryField: 'content' },
+      meca: { table: 'meca_positions', idField: 'equipment_id', planTable: 'vsd_plans', binaryField: 'content' },
+      glo: { table: 'glo_positions', idField: 'equipment_id', planTable: 'vsd_plans', binaryField: 'content' },
+      hv: { table: 'hv_positions', idField: 'equipment_id', planTable: 'hv_plans', binaryField: 'content' },
+      mobile: { table: 'me_equipment_positions', idField: 'equipment_id', planTable: 'me_plans', binaryField: 'content' },
+      atex: { table: 'atex_positions', idField: 'equipment_id', planTable: 'atex_plans', binaryField: 'content' },
+      datahub: { table: 'dh_positions', idField: 'item_id', planTable: 'vsd_plans', binaryField: 'content' },
+      infrastructure: { table: 'inf_positions', idField: 'item_id', planTable: 'infrastructure_plans', binaryField: 'content' },
+      doors: { table: 'fd_door_positions', idField: 'door_id', planTable: 'fd_plans', binaryField: 'content' },
+      firecontrol: { table: 'fc_map_positions', idField: 'equipment_id', planTable: 'fc_building_plans', binaryField: 'content' }
     };
 
     const config = positionTableMap[equipment_type];
@@ -3482,7 +3484,7 @@ router.get('/shared/:token/plan-file', async (req, res) => {
 
     // Get plan binary data
     const planResult = await pool.query(
-      `SELECT ${config.binaryField}, mime_type FROM ${config.planTable} WHERE logical_name = $1 LIMIT 1`,
+      `SELECT ${config.binaryField}, filename FROM ${config.planTable} WHERE logical_name = $1 ORDER BY version DESC LIMIT 1`,
       [logicalName]
     );
 
@@ -3491,7 +3493,9 @@ router.get('/shared/:token/plan-file', async (req, res) => {
     }
 
     const plan = planResult.rows[0];
-    const mimeType = plan.mime_type || 'application/pdf';
+    // Determine mime type from filename extension
+    const filename = plan.filename || '';
+    const mimeType = filename.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream';
 
     res.setHeader('Content-Type', mimeType);
     res.setHeader('Cache-Control', 'public, max-age=3600');
