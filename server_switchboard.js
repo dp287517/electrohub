@@ -1750,19 +1750,36 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     const categoryId = b?.category_id === null || b?.category_id === 0 ? null : (b?.category_id ? Number(b.category_id) : undefined);
     console.log(`[UPDATE BOARD] Computed categoryId:`, categoryId, 'type:', typeof categoryId);
 
+    // Build dynamic SET clause for category_id
+    let categoryClause = '';
+    let params = [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
+       b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {}];
+
+    if (categoryId !== undefined) {
+      // categoryId is explicitly set (either a number or null)
+      categoryClause = ', category_id = $11';
+      params.push(categoryId);
+      params.push(id);  // $12
+      params.push(site); // $13
+    } else {
+      // categoryId not provided, don't update it
+      params.push(id);  // $11
+      params.push(site); // $12
+    }
+
+    const whereParamId = categoryId !== undefined ? 12 : 11;
+    const whereParamSite = categoryId !== undefined ? 13 : 12;
+
     // ✅ quickQuery avec retry intégré (timeout 10s, 1 retry)
     const r = await quickQuery(
       `UPDATE switchboards SET
         name=$1, code=$2, building_code=$3, floor=$4, room=$5,
-        regime_neutral=$6, is_principal=$7, modes=$8, quality=$9, diagram_data=$10,
-        category_id = CASE WHEN $11::int IS NULL AND $13 THEN NULL WHEN $11::int IS NOT NULL THEN $11::int ELSE category_id END
-      WHERE id=$12 AND site=$14
+        regime_neutral=$6, is_principal=$7, modes=$8, quality=$9, diagram_data=$10${categoryClause}
+      WHERE id=$${whereParamId} AND site=$${whereParamSite}
       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, category_id,
                 modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo,
                 device_count, complete_count`,
-      [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
-       b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
-       categoryId !== undefined ? categoryId : null, id, categoryId !== undefined, site],
+      params,
       10000, // 10s timeout SQL
       1      // 1 retry si erreur transitoire
     );
@@ -1772,6 +1789,7 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     }
 
     const sb = r.rows[0];
+    console.log(`[UPDATE BOARD] After UPDATE, category_id in DB:`, sb.category_id);
 
     // 📝 AUDIT: Log modification tableau
     try {
