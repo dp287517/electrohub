@@ -911,6 +911,7 @@ export default function UnifiedEquipmentMap({
   backLink = "/app/switchboard-controls",
   initialVisibleTypes = ["switchboard", "vsd", "meca", "mobile", "hv", "glo"],
   showTypeFilters = true,
+  showOnlyWithControls = false, // If true, only show equipment that has a planned control
   userEmail, // User email for permission filtering
 }) {
   const navigate = useNavigate();
@@ -1387,6 +1388,15 @@ export default function UnifiedEquipmentMap({
       return allowedEquipmentTypes.includes(baseType) || allowedEquipmentTypes.includes(p.equipment_type);
     });
 
+    // Filter to only show equipment with planned controls if option is enabled
+    if (showOnlyWithControls) {
+      filtered = filtered.filter(p => {
+        const status = controlStatuses[getPositionStatusKey(p)];
+        // Only include equipment that has a control status (not "none" or undefined)
+        return status && status !== "none";
+      });
+    }
+
     // Then filter by currently visible types (user selection)
     filtered = filtered.filter(p => visibleTypes.includes(p.equipment_type));
 
@@ -1409,27 +1419,39 @@ export default function UnifiedEquipmentMap({
     }
 
     return filtered;
-  }, [allPositions, visibleTypes, searchQuery, statusFilter, controlStatuses, allowedEquipmentTypes]);
+  }, [allPositions, visibleTypes, searchQuery, statusFilter, controlStatuses, allowedEquipmentTypes, showOnlyWithControls]);
 
-  // Stats
+  // Stats - when showOnlyWithControls is enabled, base stats on equipment with controls only
   const stats = useMemo(() => {
-    const overdueCount = allPositions.filter(p =>
+    // When showing only equipment with controls, use filtered positions for stats
+    const positionsForStats = showOnlyWithControls
+      ? allPositions.filter(p => {
+          const status = controlStatuses[getPositionStatusKey(p)];
+          return status && status !== "none";
+        })
+      : allPositions;
+
+    const overdueCount = positionsForStats.filter(p =>
       controlStatuses[getPositionStatusKey(p)] === "overdue"
     ).length;
-    const upcomingCount = allPositions.filter(p =>
+    const upcomingCount = positionsForStats.filter(p =>
       controlStatuses[getPositionStatusKey(p)] === "upcoming"
+    ).length;
+    const pendingCount = positionsForStats.filter(p =>
+      controlStatuses[getPositionStatusKey(p)] === "pending"
     ).length;
 
     return {
-      total: allPositions.length,
+      total: positionsForStats.length,
       overdue: overdueCount,
       upcoming: upcomingCount,
+      pending: pendingCount,
       byType: Object.keys(equipmentTypes).reduce((acc, type) => {
-        acc[type] = allPositions.filter(p => p.equipment_type === type).length;
+        acc[type] = positionsForStats.filter(p => p.equipment_type === type).length;
         return acc;
       }, {}),
     };
-  }, [allPositions, controlStatuses, equipmentTypes]);
+  }, [allPositions, controlStatuses, equipmentTypes, showOnlyWithControls]);
 
   const handleNavigate = (position) => {
     if (!position) {
@@ -1529,7 +1551,7 @@ export default function UnifiedEquipmentMap({
             <div className="flex items-center gap-1 text-xs">
               <Badge variant="default">Total: {stats.total}</Badge>
               {stats.overdue > 0 && <Badge variant="danger">En retard: {stats.overdue}</Badge>}
-              {stats.upcoming > 0 && <Badge variant="warning">À venir: {stats.upcoming}</Badge>}
+              {stats.pending > 0 && <Badge variant="info">À venir: {stats.pending}</Badge>}
             </div>
 
             {!isMobile && (

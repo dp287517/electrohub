@@ -7,10 +7,11 @@ export default function SwitchboardControlsMap() {
   return (
     <UnifiedEquipmentMap
       title="Plan des Contrôles"
-      subtitle="Vue centralisée des équipements électriques"
+      subtitle="Vue centralisée des équipements avec contrôles planifiés"
       backLink="/app/switchboard-controls"
       initialVisibleTypes={["switchboard", "vsd", "meca", "mobile", "hv", "glo"]}
       showTypeFilters={true}
+      showOnlyWithControls={true}
     />
   );
 }
