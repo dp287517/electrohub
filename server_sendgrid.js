@@ -643,6 +643,39 @@ async function getMaintenanceStats(site, startDate, endDate) {
 }
 
 /**
+ * Get maintenance stats by agent/equipment type
+ */
+async function getMaintenanceStatsByAgent(site, startDate, endDate) {
+  try {
+    const result = await pool.query(`
+      SELECT
+        equipment_type,
+        COUNT(*) as total_controls,
+        COUNT(CASE WHEN status = 'conform' THEN 1 END) as completed,
+        COUNT(CASE WHEN status = 'non_conform' THEN 1 END) as non_conform
+      FROM control_records
+      WHERE site = $1
+        AND DATE(performed_at) BETWEEN $2 AND $3
+      GROUP BY equipment_type
+    `, [site, startDate, endDate]);
+
+    const statsByAgent = {};
+    result.rows.forEach(row => {
+      statsByAgent[row.equipment_type] = {
+        total: parseInt(row.total_controls) || 0,
+        completed: parseInt(row.completed) || 0,
+        non_conform: parseInt(row.non_conform) || 0
+      };
+    });
+
+    return statsByAgent;
+  } catch (error) {
+    console.log('[SendGrid] Maintenance by agent not available:', error.message);
+    return {};
+  }
+}
+
+/**
  * Get overdue controls count
  */
 async function getOverdueControls(site) {
@@ -1159,17 +1192,14 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
 
 /**
  * Generate Weekly KPI Report Email Template
- * Beautiful email with charts, KPIs, risk analysis, and agent summaries
+ * Beautiful email with charts, KPIs, and agent performance table
  */
-function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, maintenanceStats, agentSnapshots, agentImages = {}, agentCustomNames = {}) {
+function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages = {}, agentCustomNames = {}) {
   const { startDate, endDate } = dateRange;
   const formattedRange = formatDateRangeFr(startDate, endDate);
 
-  // Generate chart URLs
+  // Generate simple chart URL for incidents
   const incidentsChartUrl = dailyBreakdown.length > 0 ? generateIncidentsChart(dailyBreakdown) : null;
-  const severityChartUrl = generateSeverityChart(stats);
-  const riskChartUrl = riskData.length > 0 ? generateRiskChart(riskData) : null;
-  const healthChartUrl = dailyBreakdown.length > 0 ? generateHealthTrendChart(dailyBreakdown) : null;
 
   // Calculate KPIs
   const totalOutages = parseInt(stats.total_outages) || 0;
@@ -1179,11 +1209,53 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskD
   const totalDowntime = Math.round(parseInt(stats.total_downtime) || 0);
   const downtimeHours = (totalDowntime / 60).toFixed(1);
 
-  // Maintenance stats
+  // Maintenance totals
   const maintenanceDone = parseInt(maintenanceStats?.completed) || 0;
-  const maintenanceDelayed = parseInt(maintenanceStats?.delayed) || 0;
-  const maintenancePlanned = parseInt(maintenanceStats?.planned) || 0;
-  const maintenanceTotal = maintenanceDone + maintenanceDelayed + maintenancePlanned;
+  const maintenanceTotal = parseInt(maintenanceStats?.total_controls) || 0;
+
+  // Build breakdown by agent type for easy lookup
+  const breakdownByAgent = {};
+  equipmentBreakdown.forEach(eq => {
+    breakdownByAgent[eq.equipment_type] = {
+      incidents: parseInt(eq.incident_count) || 0,
+      critical: parseInt(eq.critical_count) || 0,
+      downtime: parseInt(eq.total_downtime) || 0
+    };
+  });
+
+  // Generate agent table rows
+  const generateAgentTableRows = () => {
+    return Object.entries(AGENT_AVATARS).filter(([key]) => key !== 'main').map(([agentType, agent]) => {
+      const imageData = agentImages[agentType];
+      const imageUrl = imageData?.hasCid ? 'cid:' + imageData.cid : imageData?.httpUrl || null;
+      const agentName = agentCustomNames[agentType] || agent.name;
+      const breakdown = breakdownByAgent[agentType] || { incidents: 0, critical: 0, downtime: 0 };
+      const maintenance = maintenanceByAgent[agentType] || { total: 0, completed: 0, non_conform: 0 };
+
+      return '<tr>' +
+        '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">' +
+          '<div style="display: flex; align-items: center; gap: 12px;">' +
+            (imageUrl ?
+              '<img src="' + imageUrl + '" alt="' + agentName + '" style="width: 45px; height: 45px; border-radius: 8px; object-fit: cover;" />' :
+              '<div style="width: 45px; height: 45px; border-radius: 8px; background: linear-gradient(135deg, ' + agent.color + ', ' + agent.color + 'CC); display: flex; align-items: center; justify-content: center; color: white; font-size: 18px;">' + agent.icon + '</div>'
+            ) +
+            '<strong style="color: #1f2937;">' + agentName + '</strong>' +
+          '</div>' +
+        '</td>' +
+        '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
+          '<span style="font-size: 18px; font-weight: bold; color: #1f2937;">' + breakdown.incidents + '</span>' +
+          (breakdown.critical > 0 ? '<br><span style="font-size: 11px; color: #DC2626;">dont ' + breakdown.critical + ' critiques</span>' : '') +
+        '</td>' +
+        '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
+          '<span style="font-size: 18px; font-weight: bold; color: #22C55E;">' + maintenance.completed + '</span>' +
+          (maintenance.non_conform > 0 ? '<br><span style="font-size: 11px; color: #F97316;">' + maintenance.non_conform + ' non conformes</span>' : '') +
+        '</td>' +
+        '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
+          '<span style="font-size: 14px; color: #6b7280;">' + Math.round(breakdown.downtime) + ' min</span>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+  };
 
   return `
 <!DOCTYPE html>
@@ -1192,225 +1264,70 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskD
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rapport hebdomadaire - ${site}</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f3f4f6; line-height: 1.6; }
-    .container { max-width: 900px; margin: 0 auto; background: white; }
-    .header { background: linear-gradient(135deg, #7c3aed, #a855f7); padding: 35px; text-align: center; color: white; }
-    .header h1 { font-size: 26px; margin-bottom: 8px; }
-    .header p { opacity: 0.9; font-size: 14px; }
-    .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border-bottom: 2px solid #e5e7eb; }
-    .kpi-box { padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; }
-    .kpi-box:last-child { border-right: none; }
-    .kpi-value { font-size: 32px; font-weight: bold; color: #1f2937; }
-    .kpi-label { font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px; }
-    .kpi-trend { font-size: 12px; margin-top: 5px; }
-    .kpi-trend.positive { color: #22C55E; }
-    .kpi-trend.negative { color: #DC2626; }
-    .section { padding: 25px; border-bottom: 1px solid #e5e7eb; }
-    .section-title { font-size: 18px; font-weight: 700; color: #1f2937; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
-    .chart-container { text-align: center; margin: 20px 0; }
-    .chart-container img { max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-    .charts-row { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
-    .charts-row .chart-item { flex: 1; min-width: 280px; max-width: 400px; }
-    .risk-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    .risk-table th, .risk-table td { padding: 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }
-    .risk-table th { background: #f8fafc; font-weight: 600; color: #475569; }
-    .risk-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; color: white; }
-    .risk-high { background: #DC2626; }
-    .risk-medium { background: #F97316; }
-    .risk-low { background: #22C55E; }
-    .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; margin-top: 15px; }
-    .agent-card { background: #f8fafc; border-radius: 12px; padding: 15px; text-align: center; }
-    .agent-avatar { width: 60px; height: 60px; border-radius: 10px; margin: 0 auto 10px; object-fit: cover; }
-    .agent-avatar-fallback { width: 60px; height: 60px; border-radius: 10px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; color: white; font-size: 24px; }
-    .agent-name { font-weight: 600; color: #1f2937; }
-    .agent-stats { font-size: 12px; color: #6b7280; margin-top: 5px; }
-    .agent-health { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; color: white; margin-top: 8px; }
-    .problematic-list { margin-top: 15px; }
-    .problematic-item { display: flex; align-items: center; gap: 15px; padding: 12px; background: #fef2f2; border-left: 4px solid #DC2626; margin-bottom: 10px; border-radius: 0 8px 8px 0; }
-    .problematic-info { flex: 1; }
-    .problematic-name { font-weight: 600; color: #1f2937; }
-    .problematic-details { font-size: 12px; color: #6b7280; }
-    .footer { background: #1f2937; padding: 25px; text-align: center; color: #9ca3af; font-size: 12px; }
-    @media (max-width: 600px) {
-      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
-      .kpi-box { border-bottom: 1px solid #e5e7eb; }
-      .charts-row { flex-direction: column; }
-      .agent-grid { grid-template-columns: 1fr 1fr; }
-    }
-  </style>
 </head>
-<body>
-  <div class="container">
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f3f4f6; line-height: 1.6;">
+  <div style="max-width: 800px; margin: 0 auto; background: white;">
+
     <!-- Header -->
-    <div class="header">
-      <h1>📈 Rapport hebdomadaire</h1>
-      <p>${formattedRange} • Site: ${site}</p>
+    <div style="background: linear-gradient(135deg, #7c3aed, #a855f7); padding: 35px; text-align: center; color: white;">
+      <h1 style="margin: 0; font-size: 26px;">📈 Rapport hebdomadaire</h1>
+      <p style="margin: 8px 0 0; opacity: 0.9; font-size: 14px;">${formattedRange} • Site: ${site}</p>
     </div>
 
     <!-- KPI Summary -->
-    <div class="kpi-grid">
-      <div class="kpi-box">
-        <div class="kpi-value">${totalOutages}</div>
-        <div class="kpi-label">Total interventions</div>
-      </div>
-      <div class="kpi-box">
-        <div class="kpi-value" style="color: ${resolutionRate >= 80 ? '#22C55E' : resolutionRate >= 60 ? '#F97316' : '#DC2626'};">${resolutionRate}%</div>
-        <div class="kpi-label">Taux de résolution</div>
-      </div>
-      <div class="kpi-box">
-        <div class="kpi-value">${avgRepairTime}<span style="font-size: 14px;">min</span></div>
-        <div class="kpi-label">Temps moyen réparation</div>
-      </div>
-      <div class="kpi-box">
-        <div class="kpi-value" style="color: #DC2626;">${downtimeHours}<span style="font-size: 14px;">h</span></div>
-        <div class="kpi-label">Temps d'arrêt total</div>
-      </div>
-    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom: 2px solid #e5e7eb;">
+      <tr>
+        <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
+          <div style="font-size: 32px; font-weight: bold; color: #1f2937;">${totalOutages}</div>
+          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Dépannages</div>
+        </td>
+        <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
+          <div style="font-size: 32px; font-weight: bold; color: ${resolutionRate >= 80 ? '#22C55E' : resolutionRate >= 60 ? '#F97316' : '#DC2626'};">${resolutionRate}%</div>
+          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Résolution</div>
+        </td>
+        <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
+          <div style="font-size: 32px; font-weight: bold; color: #22C55E;">${maintenanceDone}</div>
+          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Maintenances</div>
+        </td>
+        <td style="padding: 25px 15px; text-align: center; width: 25%;">
+          <div style="font-size: 32px; font-weight: bold; color: #DC2626;">${downtimeHours}h</div>
+          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Temps d'arrêt</div>
+        </td>
+      </tr>
+    </table>
 
-    <!-- Charts Section -->
-    ${dailyBreakdown.length > 0 ? `
-    <div class="section">
-      <div class="section-title">📊 Évolution sur 7 jours</div>
-      <div class="charts-row">
-        ${incidentsChartUrl ? `
-        <div class="chart-item">
-          <img src="${incidentsChartUrl}" alt="Incidents par jour" />
-        </div>
-        ` : ''}
-        ${healthChartUrl ? `
-        <div class="chart-item">
-          <img src="${healthChartUrl}" alt="Taux de résolution" />
-        </div>
-        ` : ''}
+    ${incidentsChartUrl ? `
+    <!-- Chart -->
+    <div style="padding: 25px; border-bottom: 1px solid #e5e7eb;">
+      <h2 style="font-size: 18px; font-weight: 700; color: #1f2937; margin: 0 0 20px;">📊 Évolution sur 7 jours</h2>
+      <div style="text-align: center;">
+        <img src="${incidentsChartUrl}" alt="Incidents par jour" style="max-width: 100%; height: auto; border-radius: 8px;" />
       </div>
     </div>
     ` : ''}
 
-    <!-- Maintenance Section -->
-    <div class="section">
-      <div class="section-title">🔧 Maintenance préventive</div>
-      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 15px;">
-        <div style="background: #ECFDF5; border-radius: 12px; padding: 20px; text-align: center;">
-          <div style="font-size: 28px; font-weight: bold; color: #22C55E;">${maintenanceDone}</div>
-          <div style="font-size: 12px; color: #065F46; text-transform: uppercase; margin-top: 5px;">Effectuées</div>
-        </div>
-        <div style="background: #FEF3C7; border-radius: 12px; padding: 20px; text-align: center;">
-          <div style="font-size: 28px; font-weight: bold; color: #F59E0B;">${maintenancePlanned}</div>
-          <div style="font-size: 12px; color: #92400E; text-transform: uppercase; margin-top: 5px;">Prévues</div>
-        </div>
-        <div style="background: #FEE2E2; border-radius: 12px; padding: 20px; text-align: center;">
-          <div style="font-size: 28px; font-weight: bold; color: #DC2626;">${maintenanceDelayed}</div>
-          <div style="font-size: 12px; color: #991B1B; text-transform: uppercase; margin-top: 5px;">En retard</div>
-        </div>
-      </div>
-      ${maintenanceTotal > 0 ? `
-      <div style="margin-top: 15px; padding: 15px; background: #F3F4F6; border-radius: 8px; text-align: center;">
-        <span style="font-weight: 600;">Taux de réalisation:</span>
-        <span style="color: ${maintenanceDone / maintenanceTotal >= 0.8 ? '#22C55E' : maintenanceDone / maintenanceTotal >= 0.5 ? '#F59E0B' : '#DC2626'}; font-weight: bold;">
-          ${Math.round((maintenanceDone / maintenanceTotal) * 100)}%
-        </span>
-      </div>
-      ` : ''}
-    </div>
-
-    <!-- Severity & Risk Analysis -->
-    <div class="section">
-      <div class="section-title">⚠️ Analyse des risques</div>
-      <div class="charts-row">
-        <div class="chart-item">
-          <img src="${severityChartUrl}" alt="Répartition par sévérité" />
-        </div>
-        ${riskChartUrl && riskData.length > 0 ? `
-        <div class="chart-item">
-          <img src="${riskChartUrl}" alt="Risques par domaine" />
-        </div>
-        ` : ''}
-      </div>
-
-      ${riskData.length > 0 ? `
-      <table class="risk-table">
+    <!-- Agent Performance Table -->
+    <div style="padding: 25px; border-bottom: 1px solid #e5e7eb;">
+      <h2 style="font-size: 18px; font-weight: 700; color: #1f2937; margin: 0 0 20px;">🤖 Performance par Agent IA</h2>
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
         <thead>
-          <tr>
-            <th>Domaine</th>
-            <th>Incidents</th>
-            <th>Critiques</th>
-            <th>Temps d'arrêt</th>
-            <th>Risque</th>
+          <tr style="background: #f8fafc;">
+            <th style="padding: 12px; text-align: left; border-bottom: 2px solid #e5e7eb; font-weight: 600; color: #475569;">Agent IA</th>
+            <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb; font-weight: 600; color: #475569;">Dépannages</th>
+            <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb; font-weight: 600; color: #475569;">Maintenances</th>
+            <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb; font-weight: 600; color: #475569;">Temps d'arrêt</th>
           </tr>
         </thead>
         <tbody>
-          ${riskData.slice(0, 6).map(r => `
-          <tr>
-            <td><strong>${AGENT_AVATARS[r.equipment_type]?.name || r.equipment_type}</strong></td>
-            <td>${r.incident_count}</td>
-            <td style="color: #DC2626;">${r.critical_count}</td>
-            <td>${Math.round(r.total_downtime / 60 * 10) / 10}h</td>
-            <td><span class="risk-badge risk-${r.risk_level}">${r.risk_score}%</span></td>
-          </tr>
-          `).join('')}
+          ${generateAgentTableRows()}
         </tbody>
       </table>
-      ` : ''}
-    </div>
-
-    <!-- Problematic Equipment -->
-    ${problematicEquipment.length > 0 ? `
-    <div class="section">
-      <div class="section-title">🔴 Équipements problématiques</div>
-      <div class="problematic-list">
-        ${problematicEquipment.map(eq => `
-        <div class="problematic-item">
-          <div class="problematic-info">
-            <div class="problematic-name">${eq.equipment_name || eq.equipment_code}</div>
-            <div class="problematic-details">
-              ${AGENT_AVATARS[eq.equipment_type]?.name || eq.equipment_type} •
-              ${eq.building_code || '-'} •
-              ${eq.incident_count} incidents •
-              ${eq.critical_count} critiques •
-              ${Math.round(eq.total_downtime)}min d'arrêt
-            </div>
-          </div>
-        </div>
-        `).join('')}
-      </div>
-    </div>
-    ` : ''}
-
-    <!-- Agent Summary -->
-    <div class="section">
-      <div class="section-title">🤖 Nos agents IA</div>
-      <div class="agent-grid">
-        ${Object.entries(AGENT_AVATARS).filter(([key]) => key !== 'main').map(([agentType, agent]) => {
-          const snapshot = agentSnapshots.find(s => s.agent_type === agentType);
-          const avgHealth = snapshot ? Math.round(parseFloat(snapshot.avg_health_score) || 0) : null;
-          const healthColor = avgHealth !== null ? (avgHealth >= 80 ? '#22C55E' : avgHealth >= 60 ? '#FBBF24' : '#DC2626') : '#9CA3AF';
-          const imageData = agentImages[agentType];
-          const imageUrl = imageData?.hasCid ? 'cid:' + imageData.cid : imageData?.httpUrl || null;
-          const agentName = agentCustomNames[agentType] || agent.name;
-
-          return '<div class="agent-card">' +
-            (imageUrl ?
-              '<img src="' + imageUrl + '" alt="' + agentName + '" class="agent-avatar" />' :
-              '<div class="agent-avatar-fallback" style="background: linear-gradient(135deg, ' + agent.color + ', ' + agent.color + 'CC);">' + agent.icon + '</div>'
-            ) +
-            '<div class="agent-name">' + agentName + '</div>' +
-            (snapshot ?
-              '<div class="agent-stats">' + (parseInt(snapshot.total_troubleshooting) || 0) + ' dépannages • ' + (parseInt(snapshot.total_resolved) || 0) + ' résolus</div>' +
-              '<div class="agent-health" style="background: ' + healthColor + ';">Santé: ' + avgHealth + '%</div>'
-              :
-              '<div class="agent-stats" style="color: #9CA3AF;">' + agent.description + '</div>'
-            ) +
-          '</div>';
-        }).join('')}
-      </div>
     </div>
 
     <!-- Footer -->
-    <div class="footer">
-      <p>Ce rapport a été généré automatiquement par Haleon-tool</p>
-      <p style="margin-top: 15px; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Tous droits réservés</p>
+    <div style="background: #1f2937; padding: 25px; text-align: center; color: #9ca3af; font-size: 12px;">
+      <p style="margin: 0;">Ce rapport a été généré automatiquement par Haleon-tool</p>
+      <p style="margin: 15px 0 0; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Tous droits réservés</p>
     </div>
   </div>
 </body>
@@ -1420,15 +1337,14 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskD
 
 /**
  * Generate Monthly KPI Report Email Template
- * Comprehensive monthly analysis with trends and comparisons
+ * Same structure as weekly but for 30 days
  */
-function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, maintenanceStats, agentSnapshots, agentImages = {}, agentCustomNames = {}) {
+function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages = {}, agentCustomNames = {}) {
   const { startDate, endDate, monthName } = dateRange;
+  const formattedRange = formatDateRangeFr(startDate, endDate);
 
-  // Generate chart URLs
+  // Generate chart URL
   const incidentsChartUrl = dailyBreakdown.length > 0 ? generateIncidentsChart(dailyBreakdown, 700, 300) : null;
-  const severityChartUrl = generateSeverityChart(stats);
-  const riskChartUrl = riskData.length > 0 ? generateRiskChart(riskData, 600, 350) : null;
 
   // Calculate KPIs
   const totalOutages = parseInt(stats.total_outages) || 0;
@@ -1437,52 +1353,54 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, risk
   const avgRepairTime = Math.round(parseFloat(stats.avg_repair_time) || 0);
   const totalDowntime = Math.round(parseInt(stats.total_downtime) || 0);
   const downtimeHours = (totalDowntime / 60).toFixed(1);
-  const breakdowns = parseInt(stats.breakdowns) || 0;
-  const preventive = parseInt(stats.preventive_count) || 0;
 
-  // Maintenance KPIs
-  const totalControls = parseInt(maintenanceStats.total_controls) || 0;
-  const controlsCompleted = parseInt(maintenanceStats.completed) || 0;
-  const controlsNonConform = parseInt(maintenanceStats.non_conform) || 0;
+  // Maintenance totals
+  const maintenanceDone = parseInt(maintenanceStats?.completed) || 0;
+  const maintenanceTotal = parseInt(maintenanceStats?.total_controls) || 0;
 
-  // Helper to generate agent cards - shows all agents from AGENT_AVATARS
-  const generateAgentCards = () => {
+  // Build breakdown by agent type
+  const breakdownByAgent = {};
+  equipmentBreakdown.forEach(eq => {
+    breakdownByAgent[eq.equipment_type] = {
+      incidents: parseInt(eq.incident_count) || 0,
+      critical: parseInt(eq.critical_count) || 0,
+      downtime: parseInt(eq.total_downtime) || 0
+    };
+  });
+
+  // Generate agent table rows
+  const generateAgentTableRows = () => {
     return Object.entries(AGENT_AVATARS).filter(([key]) => key !== 'main').map(([agentType, agent]) => {
-      const snapshot = agentSnapshots.find(s => s.agent_type === agentType);
-      const avgHealth = snapshot ? Math.round(parseFloat(snapshot.avg_health_score) || 0) : null;
-      const healthColor = avgHealth !== null ? (avgHealth >= 80 ? '#22C55E' : avgHealth >= 60 ? '#FBBF24' : '#DC2626') : '#9CA3AF';
       const imageData = agentImages[agentType];
       const imageUrl = imageData?.hasCid ? 'cid:' + imageData.cid : imageData?.httpUrl || null;
       const agentName = agentCustomNames[agentType] || agent.name;
+      const breakdown = breakdownByAgent[agentType] || { incidents: 0, critical: 0, downtime: 0 };
+      const maintenance = maintenanceByAgent[agentType] || { total: 0, completed: 0, non_conform: 0 };
 
-      return '<div class="agent-card">' +
-        (imageUrl ?
-          '<img src="' + imageUrl + '" alt="' + agentName + '" class="agent-avatar" />' :
-          '<div class="agent-avatar-fallback" style="background: linear-gradient(135deg, ' + agent.color + ', ' + agent.color + 'CC);">' + agent.icon + '</div>'
-        ) +
-        '<div class="agent-name">' + agentName + '</div>' +
-        (avgHealth !== null ?
-          '<div class="agent-health" style="background: ' + healthColor + ';">' + avgHealth + '%</div>'
-          :
-          '<div class="agent-health" style="background: #9CA3AF;">-</div>'
-        ) +
-      '</div>';
+      return '<tr>' +
+        '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">' +
+          '<div style="display: flex; align-items: center; gap: 12px;">' +
+            (imageUrl ?
+              '<img src="' + imageUrl + '" alt="' + agentName + '" style="width: 45px; height: 45px; border-radius: 8px; object-fit: cover;" />' :
+              '<div style="width: 45px; height: 45px; border-radius: 8px; background: linear-gradient(135deg, ' + agent.color + ', ' + agent.color + 'CC); display: flex; align-items: center; justify-content: center; color: white; font-size: 18px;">' + agent.icon + '</div>'
+            ) +
+            '<strong style="color: #1f2937;">' + agentName + '</strong>' +
+          '</div>' +
+        '</td>' +
+        '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
+          '<span style="font-size: 18px; font-weight: bold; color: #1f2937;">' + breakdown.incidents + '</span>' +
+          (breakdown.critical > 0 ? '<br><span style="font-size: 11px; color: #DC2626;">dont ' + breakdown.critical + ' critiques</span>' : '') +
+        '</td>' +
+        '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
+          '<span style="font-size: 18px; font-weight: bold; color: #22C55E;">' + maintenance.completed + '</span>' +
+          (maintenance.non_conform > 0 ? '<br><span style="font-size: 11px; color: #F97316;">' + maintenance.non_conform + ' non conformes</span>' : '') +
+        '</td>' +
+        '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
+          '<span style="font-size: 14px; color: #6b7280;">' + Math.round(breakdown.downtime) + ' min</span>' +
+        '</td>' +
+      '</tr>';
     }).join('');
   };
-
-  // Helper to generate risk table rows
-  const generateRiskRows = () => {
-    return riskData.slice(0, 8).map(r => {
-      const agentName = AGENT_AVATARS[r.equipment_type]?.name || r.equipment_type;
-      return '<tr><td><strong>' + agentName + '</strong></td>' +
-        '<td>' + r.incident_count + '</td>' +
-        '<td style="color: #DC2626;">' + r.critical_count + '</td>' +
-        '<td>' + (Math.round(r.total_downtime / 60 * 10) / 10) + 'h</td>' +
-        '<td><span class="risk-badge risk-' + r.risk_level + '">' + r.risk_score + '%</span></td></tr>';
-    }).join('');
-  };
-
-  const resolutionColor = resolutionRate >= 80 ? '#22C55E' : resolutionRate >= 60 ? '#F97316' : '#DC2626';
 
   return `
 <!DOCTYPE html>
@@ -1491,180 +1409,64 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, risk
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rapport mensuel - ${site}</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f3f4f6; line-height: 1.6; }
-    .container { max-width: 900px; margin: 0 auto; background: white; }
-    .header { background: linear-gradient(135deg, #0ea5e9, #38bdf8); padding: 40px; text-align: center; color: white; }
-    .header h1 { font-size: 28px; margin-bottom: 8px; }
-    .header p { opacity: 0.9; font-size: 16px; }
-    .summary-banner { background: #f0f9ff; padding: 20px 25px; border-bottom: 2px solid #0ea5e9; }
-    .summary-text { font-size: 15px; color: #0369a1; line-height: 1.8; }
-    .kpi-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; border-bottom: 2px solid #e5e7eb; }
-    .kpi-box { padding: 25px 10px; text-align: center; border-right: 1px solid #e5e7eb; }
-    .kpi-box:last-child { border-right: none; }
-    .kpi-value { font-size: 28px; font-weight: bold; color: #1f2937; }
-    .kpi-label { font-size: 10px; color: #6b7280; text-transform: uppercase; margin-top: 5px; }
-    .section { padding: 25px; border-bottom: 1px solid #e5e7eb; }
-    .section-title { font-size: 18px; font-weight: 700; color: #1f2937; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
-    .chart-container { text-align: center; margin: 20px 0; }
-    .chart-container img { max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-    .charts-row { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
-    .charts-row .chart-item { flex: 1; min-width: 280px; max-width: 450px; }
-    .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 15px; }
-    .stat-card { background: #f8fafc; border-radius: 12px; padding: 20px; text-align: center; }
-    .stat-card-value { font-size: 24px; font-weight: bold; color: #1f2937; }
-    .stat-card-label { font-size: 12px; color: #6b7280; margin-top: 5px; }
-    .risk-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    .risk-table th, .risk-table td { padding: 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }
-    .risk-table th { background: #f8fafc; font-weight: 600; color: #475569; }
-    .risk-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600; color: white; }
-    .risk-high { background: #DC2626; }
-    .risk-medium { background: #F97316; }
-    .risk-low { background: #22C55E; }
-    .agent-row { display: flex; flex-wrap: wrap; gap: 15px; margin-top: 15px; }
-    .agent-card { flex: 1; min-width: 150px; background: #f8fafc; border-radius: 12px; padding: 15px; text-align: center; }
-    .agent-avatar { width: 50px; height: 50px; border-radius: 8px; margin: 0 auto 10px; object-fit: cover; }
-    .agent-avatar-fallback { width: 50px; height: 50px; border-radius: 8px; margin: 0 auto 10px; display: flex; align-items: center; justify-content: center; color: white; font-size: 20px; }
-    .agent-name { font-weight: 600; font-size: 14px; color: #1f2937; }
-    .agent-health { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 600; color: white; margin-top: 5px; }
-    .footer { background: #1f2937; padding: 25px; text-align: center; color: #9ca3af; font-size: 12px; }
-    @media (max-width: 600px) {
-      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
-      .kpi-box { border-bottom: 1px solid #e5e7eb; }
-      .stats-grid { grid-template-columns: 1fr; }
-      .agent-row { justify-content: center; }
-    }
-  </style>
 </head>
-<body>
-  <div class="container">
-    <!-- Header -->
-    <div class="header">
-      <h1>📅 Rapport mensuel</h1>
-      <p>${monthName} • Site: ${site}</p>
-    </div>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f3f4f6; line-height: 1.6;">
+  <div style="max-width: 800px; margin: 0 auto; background: white;">
 
-    <!-- Summary Banner -->
-    <div class="summary-banner">
-      <div class="summary-text">
-        <strong>Résumé du mois:</strong>
-        ${totalOutages} interventions enregistrées dont ${parseInt(stats.critical_count) || 0} critiques et ${parseInt(stats.major_count) || 0} majeures.
-        Taux de résolution de ${resolutionRate}% avec un temps moyen de réparation de ${avgRepairTime} minutes.
-        ${breakdowns > 0 ? breakdowns + ' pannes totales.' : ''}
-        ${preventive > 0 ? preventive + ' maintenances préventives réalisées.' : ''}
-      </div>
+    <!-- Header -->
+    <div style="background: linear-gradient(135deg, #0ea5e9, #38bdf8); padding: 35px; text-align: center; color: white;">
+      <h1 style="margin: 0; font-size: 26px;">📅 Rapport mensuel</h1>
+      <p style="margin: 8px 0 0; opacity: 0.9; font-size: 14px;">${monthName} (${formattedRange}) • Site: ${site}</p>
     </div>
 
     <!-- KPI Summary -->
-    <div class="kpi-grid">
-      <div class="kpi-box">
-        <div class="kpi-value">${totalOutages}</div>
-        <div class="kpi-label">Interventions</div>
-      </div>
-      <div class="kpi-box">
-        <div class="kpi-value" style="color: ${resolutionColor};">${resolutionRate}%</div>
-        <div class="kpi-label">Résolution</div>
-      </div>
-      <div class="kpi-box">
-        <div class="kpi-value">${avgRepairTime}<span style="font-size: 12px;">min</span></div>
-        <div class="kpi-label">MTTR</div>
-      </div>
-      <div class="kpi-box">
-        <div class="kpi-value" style="color: #DC2626;">${downtimeHours}<span style="font-size: 12px;">h</span></div>
-        <div class="kpi-label">Arrêt total</div>
-      </div>
-      <div class="kpi-box">
-        <div class="kpi-value">${parseInt(stats.unique_equipment) || 0}</div>
-        <div class="kpi-label">Équip. touchés</div>
-      </div>
-    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom: 2px solid #e5e7eb;">
+      <tr>
+        <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
+          <div style="font-size: 32px; font-weight: bold; color: #1f2937;">${totalOutages}</div>
+          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Dépannages</div>
+        </td>
+        <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
+          <div style="font-size: 32px; font-weight: bold; color: ${resolutionRate >= 80 ? '#22C55E' : resolutionRate >= 60 ? '#F97316' : '#DC2626'};">${resolutionRate}%</div>
+          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Résolution</div>
+        </td>
+        <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
+          <div style="font-size: 32px; font-weight: bold; color: #22C55E;">${maintenanceDone}</div>
+          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Maintenances</div>
+        </td>
+        <td style="padding: 25px 15px; text-align: center; width: 25%;">
+          <div style="font-size: 32px; font-weight: bold; color: #DC2626;">${downtimeHours}h</div>
+          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Temps d'arrêt</div>
+        </td>
+      </tr>
+    </table>
 
-    <!-- Intervention Types -->
-    <div class="section">
-      <div class="section-title">📊 Répartition des interventions</div>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-card-value" style="color: #DC2626;">${breakdowns}</div>
-          <div class="stat-card-label">Pannes</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-card-value" style="color: #F97316;">${parseInt(stats.corrective_count) || 0}</div>
-          <div class="stat-card-label">Correctives</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-card-value" style="color: #22C55E;">${preventive}</div>
-          <div class="stat-card-label">Préventives</div>
-        </div>
-      </div>
-    </div>
-
-    ${totalControls > 0 ? `
-    <!-- Maintenance/Controls -->
-    <div class="section">
-      <div class="section-title">🔧 Maintenance planifiée</div>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-card-value">${totalControls}</div>
-          <div class="stat-card-label">Contrôles effectués</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-card-value" style="color: #22C55E;">${controlsCompleted}</div>
-          <div class="stat-card-label">Conformes</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-card-value" style="color: #DC2626;">${controlsNonConform}</div>
-          <div class="stat-card-label">Non conformes</div>
-        </div>
+    ${incidentsChartUrl ? `
+    <!-- Chart -->
+    <div style="padding: 25px; border-bottom: 1px solid #e5e7eb;">
+      <h2 style="font-size: 18px; font-weight: 700; color: #1f2937; margin: 0 0 20px;">📊 Évolution sur 30 jours</h2>
+      <div style="text-align: center;">
+        <img src="${incidentsChartUrl}" alt="Incidents par jour" style="max-width: 100%; height: auto; border-radius: 8px;" />
       </div>
     </div>
     ` : ''}
 
-    ${dailyBreakdown.length > 0 ? `
-    <!-- Charts -->
-    <div class="section">
-      <div class="section-title">📈 Évolution mensuelle</div>
-      <div class="chart-container">
-        <img src="${incidentsChartUrl}" alt="Incidents par jour" />
-      </div>
-    </div>
-    ` : ''}
-
-    ${riskData.length > 0 ? `
-    <!-- Risk Analysis -->
-    <div class="section">
-      <div class="section-title">⚠️ Analyse des risques par domaine</div>
-      <div class="charts-row">
-        <div class="chart-item">
-          <img src="${severityChartUrl}" alt="Répartition sévérité" />
-        </div>
-        <div class="chart-item">
-          <img src="${riskChartUrl}" alt="Risques par domaine" />
-        </div>
-      </div>
-      <table class="risk-table">
+    <!-- Agent Performance Table -->
+    <div style="padding: 25px; border-bottom: 1px solid #e5e7eb;">
+      <h2 style="font-size: 18px; font-weight: 700; color: #1f2937; margin: 0 0 20px;">🤖 Performance par Agent IA</h2>
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
         <thead>
-          <tr>
-            <th>Domaine</th>
-            <th>Incidents</th>
-            <th>Critiques</th>
-            <th>Temps d'arrêt</th>
-            <th>Score risque</th>
+          <tr style="background: #f8fafc;">
+            <th style="padding: 12px; text-align: left; border-bottom: 2px solid #e5e7eb; font-weight: 600; color: #475569;">Agent IA</th>
+            <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb; font-weight: 600; color: #475569;">Dépannages</th>
+            <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb; font-weight: 600; color: #475569;">Maintenances</th>
+            <th style="padding: 12px; text-align: center; border-bottom: 2px solid #e5e7eb; font-weight: 600; color: #475569;">Temps d'arrêt</th>
           </tr>
         </thead>
         <tbody>
-          ${generateRiskRows()}
+          ${generateAgentTableRows()}
         </tbody>
       </table>
-    </div>
-    ` : ''}
-
-    <!-- Agent Performance -->
-    <div class="section">
-      <div class="section-title">🤖 Nos agents IA</div>
-      <div class="agent-row">
-        ${generateAgentCards()}
-      </div>
     </div>
 
     <!-- Footer -->
@@ -1887,13 +1689,13 @@ async function sendWeeklyReport(email, site) {
     const { startDate, endDate } = dateRange;
 
     // Fetch all data for the week
-    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, agentSnapshots, agentImagesData, agentCustomNames] = await Promise.all([
+    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, maintenanceByAgent, agentImagesData, agentCustomNames] = await Promise.all([
       getStatsForDateRange(site, startDate, endDate),
       getDailyBreakdown(site, startDate, endDate),
       getEquipmentTypeBreakdown(site, startDate, endDate),
       getProblematicEquipment(site, startDate, endDate),
       getMaintenanceStats(site, startDate, endDate),
-      getAgentSnapshotsForRange(site, startDate, endDate),
+      getMaintenanceStatsByAgent(site, startDate, endDate),
       getAgentImagesData(),
       getAgentCustomNames()
     ]);
@@ -1905,7 +1707,7 @@ async function sendWeeklyReport(email, site) {
     const riskData = calculateRiskScores(equipmentBreakdown, totalIncidents);
 
     // Generate email HTML
-    const htmlContent = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, maintenanceStats, agentSnapshots, agentImages, agentCustomNames);
+    const htmlContent = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames);
 
     // Prepare email
     const msg = {
@@ -1988,13 +1790,13 @@ async function sendMonthlyReport(email, site) {
     const { startDate, endDate, monthName } = dateRange;
 
     // Fetch all data for the month
-    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, agentSnapshots, agentImagesData, agentCustomNames] = await Promise.all([
+    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, maintenanceByAgent, agentImagesData, agentCustomNames] = await Promise.all([
       getStatsForDateRange(site, startDate, endDate),
       getDailyBreakdown(site, startDate, endDate),
       getEquipmentTypeBreakdown(site, startDate, endDate),
       getProblematicEquipment(site, startDate, endDate, 10),
       getMaintenanceStats(site, startDate, endDate),
-      getAgentSnapshotsForRange(site, startDate, endDate),
+      getMaintenanceStatsByAgent(site, startDate, endDate),
       getAgentImagesData(),
       getAgentCustomNames()
     ]);
@@ -2006,7 +1808,7 @@ async function sendMonthlyReport(email, site) {
     const riskData = calculateRiskScores(equipmentBreakdown, totalIncidents);
 
     // Generate email HTML
-    const htmlContent = generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, maintenanceStats, agentSnapshots, agentImages, agentCustomNames);
+    const htmlContent = generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames);
 
     // Prepare email
     const msg = {
@@ -2540,21 +2342,17 @@ router.get('/preview-weekly', async (req, res) => {
     const dateRange = getWeeklyDateRange();
     const { startDate, endDate } = dateRange;
 
-    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, agentSnapshots, agentImages, agentCustomNames] = await Promise.all([
+    const [stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames] = await Promise.all([
       getStatsForDateRange(site, startDate, endDate),
       getDailyBreakdown(site, startDate, endDate),
       getEquipmentTypeBreakdown(site, startDate, endDate),
-      getProblematicEquipment(site, startDate, endDate),
       getMaintenanceStats(site, startDate, endDate),
-      getAgentSnapshotsForRange(site, startDate, endDate),
+      getMaintenanceStatsByAgent(site, startDate, endDate),
       getAgentImagesForPreview(),
       getAgentCustomNames()
     ]);
 
-    const totalIncidents = parseInt(stats.total_outages) || 0;
-    const riskData = calculateRiskScores(equipmentBreakdown, totalIncidents);
-
-    const html = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, maintenanceStats, agentSnapshots, agentImages, agentCustomNames);
+    const html = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames);
 
     res.setHeader('Content-Type', 'text/html');
     res.send(html);
@@ -2575,21 +2373,17 @@ router.get('/preview-monthly', async (req, res) => {
     const dateRange = getMonthlyDateRange();
     const { startDate, endDate } = dateRange;
 
-    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, agentSnapshots, agentImages, agentCustomNames] = await Promise.all([
+    const [stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames] = await Promise.all([
       getStatsForDateRange(site, startDate, endDate),
       getDailyBreakdown(site, startDate, endDate),
       getEquipmentTypeBreakdown(site, startDate, endDate),
-      getProblematicEquipment(site, startDate, endDate, 10),
       getMaintenanceStats(site, startDate, endDate),
-      getAgentSnapshotsForRange(site, startDate, endDate),
+      getMaintenanceStatsByAgent(site, startDate, endDate),
       getAgentImagesForPreview(),
       getAgentCustomNames()
     ]);
 
-    const totalIncidents = parseInt(stats.total_outages) || 0;
-    const riskData = calculateRiskScores(equipmentBreakdown, totalIncidents);
-
-    const html = generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, maintenanceStats, agentSnapshots, agentImages, agentCustomNames);
+    const html = generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames);
 
     res.setHeader('Content-Type', 'text/html');
     res.send(html);
