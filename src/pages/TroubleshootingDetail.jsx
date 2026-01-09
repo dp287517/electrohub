@@ -4,7 +4,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Wrench, Calendar, Building2, Users, MapPin, AlertTriangle,
   CheckCircle, Clock, ArrowLeft, Zap, Image, FileText,
-  Sparkles, Edit, Trash2, Loader2, X, Save, Plus, Camera, Share2, Send, Check
+  Edit, Trash2, Loader2, X, Save, Plus, Camera, Share2, Send, Check
 } from 'lucide-react';
 import { get, API_BASE } from '../lib/api';
 import { getUserPermissions } from '../lib/permissions';
@@ -757,38 +757,6 @@ export default function TroubleshootingDetail() {
               </div>
             </div>
 
-            {/* AI Analysis */}
-            {(record.ai_diagnosis || record.ai_recommendations) && !editMode && (
-              <div className="bg-gradient-to-br from-purple-50 to-blue-50 rounded-xl shadow-sm border border-purple-100 p-6">
-                <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                  <Sparkles size={18} className="text-purple-500" />
-                  Analyse IA
-                </h2>
-                {record.ai_diagnosis && (
-                  <div className="mb-4">
-                    <h3 className="font-medium text-gray-900 mb-2">Diagnostic</h3>
-                    <p className="text-gray-700">{record.ai_diagnosis}</p>
-                  </div>
-                )}
-                {record.ai_recommendations && (
-                  <div>
-                    <h3 className="font-medium text-gray-900 mb-2">Recommandations</h3>
-                    <p className="text-gray-700">{record.ai_recommendations}</p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Photos */}
-            <div className="bg-white rounded-xl shadow-sm border p-6">
-              <PhotoGallery
-                photos={allPhotos}
-                editMode={editMode}
-                onAddPhoto={handleAddPhoto}
-                onDeletePhoto={handleDeletePhoto}
-              />
-            </div>
-
             {/* Mini Plan - use equipment_original_id for non-UUID IDs (e.g. switchboards) */}
             {record.equipment_type && (record.equipment_original_id || record.equipment_id) && !editMode && (
               <div className="bg-white rounded-xl shadow-sm border p-6">
@@ -808,6 +776,16 @@ export default function TroubleshootingDetail() {
                 />
               </div>
             )}
+
+            {/* Photos */}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <PhotoGallery
+                photos={allPhotos}
+                editMode={editMode}
+                onAddPhoto={handleAddPhoto}
+                onDeletePhoto={handleDeletePhoto}
+              />
+            </div>
           </div>
 
           {/* Sidebar */}
