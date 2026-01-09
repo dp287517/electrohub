@@ -1947,20 +1947,49 @@ function scheduleAllReports() {
       }
     };
 
-    // Calculate time until 5:59 AM
-    const now = new Date();
-    let nextRun = new Date(now);
-    nextRun.setHours(5, 59, 0, 0);
+    // Calculate time until 5:59 AM Paris time
+    const getNextParisTime = (hour, minute) => {
+      const now = new Date();
+      // Create a date string for today at the target Paris time
+      const parisNow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
+      const targetParis = new Date(parisNow);
+      targetParis.setHours(hour, minute, 0, 0);
 
-    if (now >= nextRun) {
-      nextRun.setDate(nextRun.getDate() + 1);
+      // If already past target time in Paris, go to tomorrow
+      if (parisNow >= targetParis) {
+        targetParis.setDate(targetParis.getDate() + 1);
+      }
+
+      // Convert back: calculate the offset between Paris target and now
+      const parisTargetStr = targetParis.toLocaleString('en-US', { timeZone: 'Europe/Paris' });
+      const nowStr = now.toLocaleString('en-US', { timeZone: 'Europe/Paris' });
+
+      // Calculate milliseconds until target
+      const msPerDay = 24 * 60 * 60 * 1000;
+      const targetMs = targetParis.getHours() * 3600000 + targetParis.getMinutes() * 60000;
+      const nowMs = parisNow.getHours() * 3600000 + parisNow.getMinutes() * 60000 + parisNow.getSeconds() * 1000;
+
+      let msUntil = targetMs - nowMs;
+      if (msUntil <= 0) {
+        msUntil += msPerDay;
+      }
+
+      return msUntil;
+    };
+
+    let msUntilFirstRun = getNextParisTime(5, 59);
+
+    // Check if next run falls on weekend
+    const nextRunDate = new Date(Date.now() + msUntilFirstRun);
+    const dayOfWeek = new Date(nextRunDate.toLocaleString('en-US', { timeZone: 'Europe/Paris' })).getDay();
+    if (dayOfWeek === 0) { // Sunday
+      msUntilFirstRun += 24 * 60 * 60 * 1000; // Add 1 day
+    } else if (dayOfWeek === 6) { // Saturday
+      msUntilFirstRun += 2 * 24 * 60 * 60 * 1000; // Add 2 days
     }
 
-    // Skip to Monday if it's weekend
-    nextRun = getNextWeekday(nextRun);
-
-    const msUntilFirstRun = nextRun - now;
-    console.log(`[SendGrid] 📅 Next daily report: ${nextRun.toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })}`);
+    const nextRunTime = new Date(Date.now() + msUntilFirstRun);
+    console.log(`[SendGrid] 📅 Next daily report: ${nextRunTime.toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })} (Paris time)`);
 
     setTimeout(() => {
       runDaily();
