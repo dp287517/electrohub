@@ -1,7 +1,8 @@
 // NCResolutionModal - Modal pour gérer les non-conformités après maintenance
 // S'affiche automatiquement quand une maintenance a des points NC
-import { useState } from 'react';
-import { X, AlertTriangle, CheckCircle, Clock, Wrench, ChevronRight } from 'lucide-react';
+// Photo obligatoire pour chaque NC
+import { useState, useRef } from 'react';
+import { X, AlertTriangle, CheckCircle, Clock, Wrench, ChevronRight, Camera, Image, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function NCResolutionModal({
@@ -9,16 +10,25 @@ export default function NCResolutionModal({
   onClose,
   maintenanceId,
   maintenanceName,
-  equipmentData, // { id, name, code, type, building_code, floor, zone, room }
+  equipmentData, // { id, name, code, type, building_code, floor, zone, room, original_id }
   ncItems, // [{ name, checked: false, note: '...' }, ...]
   site,
   userEmail,
   userName
 }) {
   const navigate = useNavigate();
+  const fileInputRefs = useRef({});
+
   const [resolutions, setResolutions] = useState(
     ncItems.reduce((acc, item, index) => {
       acc[index] = null; // null = not decided, 'immediate' = resolved, 'deferred' = to treat
+      return acc;
+    }, {})
+  );
+  // Photos for each NC item (base64)
+  const [photos, setPhotos] = useState(
+    ncItems.reduce((acc, item, index) => {
+      acc[index] = null;
       return acc;
     }, {})
   );
@@ -29,15 +39,37 @@ export default function NCResolutionModal({
   if (!isOpen) return null;
 
   const allDecided = Object.values(resolutions).every(r => r !== null);
+  const allPhotos = Object.values(photos).every(p => p !== null);
+  const canConfirm = allDecided && allPhotos;
   const hasDeferred = Object.values(resolutions).some(r => r === 'deferred');
-  const hasImmediate = Object.values(resolutions).some(r => r === 'immediate');
 
   const handleResolution = (index, resolution) => {
     setResolutions(prev => ({ ...prev, [index]: resolution }));
   };
 
+  const handlePhotoCapture = (index) => {
+    if (fileInputRefs.current[index]) {
+      fileInputRefs.current[index].click();
+    }
+  };
+
+  const handleFileChange = (index, event) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setPhotos(prev => ({ ...prev, [index]: e.target.result }));
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRemovePhoto = (index) => {
+    setPhotos(prev => ({ ...prev, [index]: null }));
+  };
+
   const handleConfirm = async () => {
-    if (!allDecided) return;
+    if (!canConfirm) return;
 
     setProcessing(true);
     setCurrentStep('creating');
@@ -48,11 +80,16 @@ export default function NCResolutionModal({
       for (let i = 0; i < ncItems.length; i++) {
         const item = ncItems[i];
         const resolution = resolutions[i];
+        const photo = photos[i];
+
+        // Determine the correct equipment ID to use
+        // For numeric IDs (switchboards), use original_id; for UUIDs, use id
+        const equipmentId = equipmentData.original_id || equipmentData.id;
 
         const troubleshootingData = {
           site,
           equipment_type: equipmentData.type || 'switchboard',
-          equipment_id: equipmentData.id,
+          equipment_id: equipmentId,
           equipment_name: equipmentData.name,
           equipment_code: equipmentData.code,
           building_code: equipmentData.building_code,
@@ -81,7 +118,9 @@ export default function NCResolutionModal({
           downtime_minutes: 0,
           // Pre-fill solution for immediate resolution
           solution: resolution === 'immediate' ? 'Résolu immédiatement lors de la maintenance' : null,
-          root_cause: resolution === 'immediate' ? 'Détecté lors du contrôle de maintenance' : null
+          root_cause: resolution === 'immediate' ? 'Détecté lors du contrôle de maintenance' : null,
+          // Include photo
+          photos: photo ? [{ data: photo, type: 'before', caption: `NC: ${item.name}` }] : []
         };
 
         const response = await fetch('/api/troubleshooting/create', {
@@ -156,10 +195,10 @@ export default function NCResolutionModal({
           {currentStep === 'choose' ? (
             <>
               <p className="text-sm text-gray-600 mb-4">
-                Pour chaque point non conforme, indiquez s'il a été résolu immédiatement ou s'il nécessite un traitement ultérieur.
+                Pour chaque point NC, prenez une photo et indiquez s'il a été résolu ou s'il nécessite un traitement ultérieur.
               </p>
 
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {ncItems.map((item, index) => (
                   <div
                     key={index}
@@ -181,6 +220,49 @@ export default function NCResolutionModal({
                       </div>
                     </div>
 
+                    {/* Photo capture - OBLIGATOIRE */}
+                    <div className="mb-3">
+                      <input
+                        ref={el => fileInputRefs.current[index] = el}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        onChange={(e) => handleFileChange(index, e)}
+                        className="hidden"
+                      />
+
+                      {photos[index] ? (
+                        <div className="relative">
+                          <img
+                            src={photos[index]}
+                            alt={`Photo NC ${item.name}`}
+                            className="w-full h-32 object-cover rounded-lg"
+                          />
+                          <button
+                            onClick={() => handleRemovePhoto(index)}
+                            className="absolute top-2 right-2 p-1.5 bg-red-500 text-white rounded-full hover:bg-red-600"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                          <div className="absolute bottom-2 left-2 px-2 py-1 bg-green-500 text-white text-xs rounded-full flex items-center gap-1">
+                            <CheckCircle className="w-3 h-3" />
+                            Photo OK
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handlePhotoCapture(index)}
+                          className="w-full py-4 border-2 border-dashed border-red-300 rounded-lg bg-red-50 hover:bg-red-100 transition-colors flex flex-col items-center gap-2"
+                        >
+                          <Camera className="w-8 h-8 text-red-500" />
+                          <span className="text-sm font-medium text-red-600">
+                            📸 Photo obligatoire
+                          </span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Resolution buttons */}
                     <div className="flex gap-2">
                       <button
                         type="button"
@@ -210,6 +292,14 @@ export default function NCResolutionModal({
                   </div>
                 ))}
               </div>
+
+              {/* Validation message */}
+              {!allPhotos && allDecided && (
+                <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
+                  <Camera className="w-4 h-4" />
+                  Veuillez ajouter une photo pour chaque NC
+                </div>
+              )}
             </>
           ) : (
             <div className="text-center py-4">
@@ -271,9 +361,9 @@ export default function NCResolutionModal({
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={!allDecided || processing}
+                disabled={!canConfirm || processing}
                 className={`flex-1 py-2.5 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
-                  allDecided
+                  canConfirm
                     ? 'bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600'
                     : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                 }`}
