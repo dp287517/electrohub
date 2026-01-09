@@ -1638,6 +1638,9 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
       code: sb.code,
       regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal,
+      category_id: sb.category_id,
+      category_name: sb.category_name,
+      category_color: sb.category_color,
       has_photo: sb.has_photo,
       photos_count: parseInt(sb.photos_count, 10) || 0,
       diagram_data: sb.diagram_data || {},
@@ -1743,12 +1746,8 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     if (!name) return res.status(400).json({ error: 'Missing name' });
     if (!code) return res.status(400).json({ error: 'Missing code' });
 
-    console.log(`[UPDATE BOARD] Starting update for id=${id}, site=${site}`);
-    console.log(`[UPDATE BOARD] Received category_id:`, b?.category_id, 'type:', typeof b?.category_id);
-
     // Handle category_id - allow setting to null by passing null or 0
     const categoryId = b?.category_id === null || b?.category_id === 0 ? null : (b?.category_id ? Number(b.category_id) : undefined);
-    console.log(`[UPDATE BOARD] Computed categoryId:`, categoryId, 'type:', typeof categoryId);
 
     // Build dynamic SET clause for category_id
     let categoryClause = '';
@@ -1778,9 +1777,6 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
                 modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo,
                 device_count, complete_count`;
 
-    console.log(`[UPDATE BOARD] SQL categoryClause:`, categoryClause);
-    console.log(`[UPDATE BOARD] Params [10-end]:`, params.slice(10));
-
     // ✅ quickQuery avec retry intégré (timeout 10s, 1 retry)
     const r = await quickQuery(
       sqlQuery,
@@ -1794,7 +1790,6 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     }
 
     const sb = r.rows[0];
-    console.log(`[UPDATE BOARD] After UPDATE, category_id in DB:`, sb.category_id);
 
     // 📝 AUDIT: Log modification tableau
     try {
@@ -2099,11 +2094,6 @@ app.get('/api/switchboard/categories', async (req, res) => {
        WHERE c.site = $1
        ORDER BY c.sort_order, c.name
     `, [site]);
-
-    console.log(`[SWITCHBOARD CATEGORIES] Listing for site=${site}: found ${rows.length} categories`);
-    if (rows.length > 0) {
-      console.log('[SWITCHBOARD CATEGORIES] Categories:', rows.map(r => ({ id: r.id, name: r.name, color: r.color })));
-    }
 
     res.json({ ok: true, categories: rows });
   } catch (e) {

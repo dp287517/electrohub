@@ -460,19 +460,6 @@ app.get("/api/switchboard/maps/positions", async (req, res) => {
         "X-User-Name": req.header("X-User-Name") || "",
       });
 
-      // Debug: log switchboards with categories
-      const withCategories = allSwitchboards.filter(sb => sb.category_id);
-      console.log('[swb-map] Switchboards with categories:', withCategories.length, 'of', allSwitchboards.length);
-      if (withCategories.length > 0) {
-        console.log('[swb-map] Example with category:', {
-          id: withCategories[0].id,
-          name: withCategories[0].name,
-          category_id: withCategories[0].category_id,
-          category_name: withCategories[0].category_name,
-          category_color: withCategories[0].category_color
-        });
-      }
-
       allSwitchboards.forEach(sb => {
         switchboardsMap.set(sb.id, sb);
       });

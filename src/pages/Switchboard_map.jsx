@@ -853,11 +853,6 @@ const SwitchboardLeafletViewer = forwardRef(
     }, [links, selectedId, drawConnections]);
 
     function makeSwitchboardIcon(isPrincipal = false, isSelected = false, switchboardId = null, categoryColor = null) {
-      // Debug: log category color usage
-      if (categoryColor) {
-        console.log('[SB-MAP] Making icon with categoryColor:', switchboardId, categoryColor);
-      }
-
       const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
 
       // Check control status for this switchboard
@@ -1467,17 +1462,6 @@ function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
         const r = await api.switchboardMaps
           .positionsAuto(key, pageIdx)
           .catch(() => ({}));
-        // Debug: log raw API response
-        console.log('[SB-MAP] Raw API response:', {
-          hasPositions: Array.isArray(r?.positions),
-          count: r?.positions?.length || 0,
-          samplePosition: r?.positions?.[0] ? {
-            switchboard_id: r.positions[0].switchboard_id,
-            category_id: r.positions[0].category_id,
-            category_color: r.positions[0].category_color
-          } : null
-        });
-
         const list = Array.isArray(r?.positions)
           ? r.positions.map((item) => {
               return {
