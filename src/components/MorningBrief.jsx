@@ -5,7 +5,8 @@ import {
   Zap, Cog, Battery, Shield, Flame, Activity, RefreshCw, Mic, MicOff,
   ChevronRight, ChevronDown, Sparkles, Building2, Calendar, Target,
   BarChart3, PieChart, Bell, BellOff, ExternalLink, Volume2, Image,
-  LineChart, ArrowUpRight, ArrowDownRight, Minus, Play, ClipboardList
+  LineChart, ArrowUpRight, ArrowDownRight, Minus, Play, ClipboardList,
+  Ticket, UserPlus
 } from 'lucide-react';
 import { Doughnut, Bar, Line } from 'react-chartjs-2';
 import {
@@ -258,6 +259,10 @@ export default function MorningBrief({ userName, onStoryClick, userEmail }) {
   const [drafts, setDrafts] = useState([]);
   const [showPlanning, setShowPlanning] = useState(false);
 
+  // Haleon Tickets state
+  const [ticketStats, setTicketStats] = useState(null);
+  const [showTickets, setShowTickets] = useState(false);
+
   useEffect(() => {
     loadData();
   }, []);
@@ -272,7 +277,7 @@ export default function MorningBrief({ userName, onStoryClick, userEmail }) {
     setIsLoading(true);
     setError(null);
     try {
-      const [briefData, suggestionsData, planningData, procStats, draftsData] = await Promise.all([
+      const [briefData, suggestionsData, planningData, procStats, draftsData, ticketsData] = await Promise.all([
         aiAssistant.getMorningBrief().catch(e => {
           console.error('Morning brief error:', e);
           return null;
@@ -292,6 +297,17 @@ export default function MorningBrief({ userName, onStoryClick, userEmail }) {
         aiAssistant.getProcedureDrafts().catch(e => {
           console.error('Drafts error:', e);
           return { drafts: [] };
+        }),
+        // Fetch Haleon Ticket stats
+        fetch('/api/haleon-tickets/stats', {
+          credentials: 'include',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('eh_token')}`,
+            'Content-Type': 'application/json'
+          }
+        }).then(r => r.ok ? r.json() : null).catch(e => {
+          console.error('Ticket stats error:', e);
+          return null;
         })
       ]);
       setBrief(briefData);
@@ -299,6 +315,7 @@ export default function MorningBrief({ userName, onStoryClick, userEmail }) {
       setPlanning(planningData);
       setProcedureStats(procStats?.stats);
       setDrafts(draftsData?.drafts || []);
+      setTicketStats(ticketsData);
     } catch (err) {
       console.error('Failed to load morning brief:', err);
       setError(err.message);
@@ -807,6 +824,134 @@ export default function MorningBrief({ userName, onStoryClick, userEmail }) {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Haleon Tickets Stats */}
+          {ticketStats && ticketStats.user_teams?.length > 0 && (
+            <div className="px-4 sm:px-6 pb-4 sm:pb-6">
+              <button
+                onClick={() => setShowTickets(!showTickets)}
+                className={`w-full flex items-center justify-between p-3 rounded-xl transition-colors ${
+                  (ticketStats.unassigned > 0 || ticketStats.old_unassigned > 0)
+                    ? 'bg-gradient-to-r from-purple-50 to-pink-50 hover:from-purple-100 hover:to-pink-100 border border-purple-200'
+                    : 'bg-gradient-to-r from-purple-50 to-indigo-50 hover:from-purple-100 hover:to-indigo-100 border border-purple-100'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Ticket size={18} className="text-purple-600" />
+                  <span className="text-purple-700 font-medium">Tickets Haleon Tool</span>
+                  {ticketStats.unassigned > 0 && (
+                    <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-medium rounded-full animate-pulse">
+                      {ticketStats.unassigned} non attribué{ticketStats.unassigned > 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {ticketStats.old_unassigned > 0 && (
+                    <span className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs font-medium rounded-full">
+                      {ticketStats.old_unassigned} +2j
+                    </span>
+                  )}
+                </div>
+                <ChevronDown size={18} className={`text-purple-400 transform transition-transform ${showTickets ? 'rotate-180' : ''}`} />
+              </button>
+
+              {showTickets && (
+                <div className="mt-3 bg-white rounded-xl border border-purple-100 p-4 space-y-4">
+                  {/* Stats grid */}
+                  <div className="grid grid-cols-4 gap-2">
+                    <div className="text-center p-2 bg-purple-50 rounded-lg">
+                      <p className="text-lg font-bold text-purple-700">{ticketStats.total || 0}</p>
+                      <p className="text-[10px] text-purple-600">Ouverts</p>
+                    </div>
+                    <div className={`text-center p-2 rounded-lg ${ticketStats.unassigned > 0 ? 'bg-red-50' : 'bg-slate-50'}`}>
+                      <p className={`text-lg font-bold ${ticketStats.unassigned > 0 ? 'text-red-600' : 'text-slate-400'}`}>
+                        {ticketStats.unassigned || 0}
+                      </p>
+                      <p className="text-[10px] text-slate-500">Non attribués</p>
+                    </div>
+                    <div className="text-center p-2 bg-blue-50 rounded-lg">
+                      <p className="text-lg font-bold text-blue-600">{ticketStats.my_tickets || 0}</p>
+                      <p className="text-[10px] text-slate-500">Mes tickets</p>
+                    </div>
+                    <div className={`text-center p-2 rounded-lg ${ticketStats.urgent > 0 ? 'bg-orange-50' : 'bg-slate-50'}`}>
+                      <p className={`text-lg font-bold ${ticketStats.urgent > 0 ? 'text-orange-600' : 'text-slate-400'}`}>
+                        {ticketStats.urgent || 0}
+                      </p>
+                      <p className="text-[10px] text-slate-500">Urgents</p>
+                    </div>
+                  </div>
+
+                  {/* Alert for old tickets */}
+                  {(ticketStats.old_unassigned > 0 || ticketStats.old_assigned > 0) && (
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                        <div className="text-sm">
+                          {ticketStats.old_unassigned > 0 && (
+                            <p className="text-amber-800">
+                              <strong>{ticketStats.old_unassigned}</strong> ticket{ticketStats.old_unassigned > 1 ? 's' : ''} en attente depuis plus de 2 jours
+                            </p>
+                          )}
+                          {ticketStats.old_assigned > 0 && (
+                            <p className="text-amber-700">
+                              <strong>{ticketStats.old_assigned}</strong> ticket{ticketStats.old_assigned > 1 ? 's' : ''} attribué{ticketStats.old_assigned > 1 ? 's' : ''} depuis plus de 7 jours
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Teams breakdown */}
+                  {ticketStats.by_team?.length > 0 && (
+                    <div className="border-t border-purple-100 pt-3">
+                      <p className="text-xs text-purple-700 font-medium mb-2">Par équipe :</p>
+                      <div className="space-y-1">
+                        {ticketStats.by_team.map((team, i) => (
+                          <div key={i} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg text-sm">
+                            <span className="text-slate-700 font-medium">{team.team_name}</span>
+                            <div className="flex items-center gap-2">
+                              {team.urgent > 0 && (
+                                <span className="px-1.5 py-0.5 bg-orange-100 text-orange-700 text-xs rounded">
+                                  {team.urgent} urgent
+                                </span>
+                              )}
+                              {team.unassigned > 0 && (
+                                <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-xs rounded">
+                                  {team.unassigned} libre{team.unassigned > 1 ? 's' : ''}
+                                </span>
+                              )}
+                              <span className="text-slate-500 text-xs">{team.total} total</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Quick actions */}
+                  <div className="flex gap-2 pt-2">
+                    {ticketStats.unassigned > 0 && (
+                      <button
+                        onClick={() => navigate('/app/troubleshooting?tab=tickets&filter=unassigned')}
+                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 transition-colors"
+                      >
+                        <UserPlus size={14} />
+                        Prendre un ticket
+                      </button>
+                    )}
+                    <button
+                      onClick={() => navigate('/app/troubleshooting?tab=tickets')}
+                      className={`flex items-center justify-center gap-1 px-3 py-2 text-purple-600 rounded-lg text-sm font-medium hover:bg-purple-50 transition-colors ${
+                        ticketStats.unassigned > 0 ? '' : 'flex-1'
+                      }`}
+                    >
+                      Voir tous les tickets
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

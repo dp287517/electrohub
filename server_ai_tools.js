@@ -1173,6 +1173,106 @@ UTILISE CETTE FONCTION QUAND:
         }
       }
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // TICKETS HALEON TOOL
+  // -------------------------------------------------------------------------
+  {
+    type: "function",
+    function: {
+      name: "get_haleon_tickets_stats",
+      description: `Récupère les statistiques des tickets Haleon Tool pour l'utilisateur connecté.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur demande:
+- "combien de tickets", "mes tickets", "tickets en attente"
+- "statistiques tickets", "tickets non attribués", "tickets urgents"
+- "état des tickets", "résumé tickets", "tickets à traiter"
+- "tickets haleon", "tickets maintenance"
+
+Retourne: nombre total, non attribués, mes tickets, urgents, par équipe.`,
+      parameters: {
+        type: "object",
+        properties: {
+          user_email: {
+            type: "string",
+            description: "Email de l'utilisateur (optionnel, utilise l'utilisateur connecté si non spécifié)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_haleon_tickets",
+      description: `Recherche et liste les tickets Haleon Tool accessibles à l'utilisateur.
+
+UTILISE CETTE FONCTION QUAND l'utilisateur demande:
+- "liste les tickets", "montre les tickets", "tickets récents"
+- "tickets non attribués", "tickets à prendre", "tickets ouverts"
+- "mes tickets attribués", "tickets que je dois traiter"
+- "tickets urgents", "tickets critiques"
+- "tickets du bâtiment X", "tickets équipe X"
+
+Retourne: liste des tickets avec code, description, priorité, statut, assignation.`,
+      parameters: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            enum: ["unassigned", "assigned", "quote_pending", "all"],
+            description: "Filtrer par statut (défaut: tous)"
+          },
+          team: {
+            type: "string",
+            description: "Filtrer par nom d'équipe"
+          },
+          assigned_to_me: {
+            type: "boolean",
+            description: "Ne montrer que les tickets attribués à l'utilisateur"
+          },
+          priority: {
+            type: "string",
+            enum: ["safety", "urgent", "high", "medium", "low"],
+            description: "Filtrer par priorité"
+          },
+          building: {
+            type: "string",
+            description: "Filtrer par bâtiment"
+          },
+          limit: {
+            type: "number",
+            description: "Nombre maximum de résultats (défaut: 10, max: 30)"
+          }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "assign_haleon_ticket",
+      description: `Attribue un ticket Haleon Tool à l'utilisateur connecté (self-assignment).
+
+UTILISE CETTE FONCTION QUAND l'utilisateur dit:
+- "je prends ce ticket", "attribue-moi le ticket X"
+- "je m'occupe de ce ticket", "assigne-moi le ticket"
+- "je vais traiter ce ticket", "je prends en charge"
+
+⚠️ DEMANDE TOUJOURS CONFIRMATION avant d'attribuer un ticket !
+Montre d'abord les détails du ticket et demande si l'utilisateur confirme.`,
+      parameters: {
+        type: "object",
+        properties: {
+          ticket_id: {
+            type: "string",
+            description: "ID Bubble du ticket ou code du ticket (ex: TICKET#1234)"
+          }
+        },
+        required: ["ticket_id"]
+      }
+    }
   }
 ];
 
@@ -5449,6 +5549,272 @@ function createToolHandlers(pool, site) {
         };
       } catch (error) {
         console.error('[TOOL] get_my_equipment_dashboard error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // TICKETS HALEON TOOL
+    // -----------------------------------------------------------------------
+
+    get_haleon_tickets_stats: async (params) => {
+      try {
+        const userEmail = (params.user_email || params._user_email || '').toLowerCase();
+
+        if (!userEmail) {
+          return { success: false, error: 'Email utilisateur requis' };
+        }
+
+        // Récupérer les équipes de l'utilisateur
+        const teamsResult = await pool.query(`
+          SELECT t.name
+          FROM haleon_ticket_teams t
+          JOIN haleon_ticket_team_members m ON m.team_id = t.id
+          WHERE m.user_email = $1 AND t.is_active = true
+        `, [userEmail]);
+
+        const userTeams = teamsResult.rows.map(r => r.name);
+
+        if (userTeams.length === 0) {
+          return {
+            success: true,
+            total: 0,
+            unassigned: 0,
+            my_tickets: 0,
+            urgent: 0,
+            user_teams: [],
+            message: "Vous n'êtes membre d'aucune équipe Haleon Tool. Contactez un admin pour être ajouté."
+          };
+        }
+
+        // Stats globales
+        const statsResult = await pool.query(`
+          SELECT
+            COUNT(*) FILTER (WHERE status_normalized IN ('unassigned', 'assigned', 'quote_pending'))::int as total,
+            COUNT(*) FILTER (WHERE status_normalized = 'unassigned')::int as unassigned,
+            COUNT(*) FILTER (WHERE status_normalized IN ('assigned', 'quote_pending'))::int as assigned,
+            COUNT(*) FILTER (WHERE assigned_to_email = $2)::int as my_tickets,
+            COUNT(*) FILTER (WHERE priority_normalized IN ('urgent', 'safety'))::int as urgent,
+            COUNT(*) FILTER (WHERE status_normalized = 'unassigned' AND bubble_created_at < NOW() - INTERVAL '2 days')::int as old_unassigned,
+            COUNT(*) FILTER (WHERE status_normalized = 'assigned' AND date_attribution < NOW() - INTERVAL '7 days')::int as old_assigned
+          FROM haleon_tickets_cache
+          WHERE team_name = ANY($1)
+        `, [userTeams, userEmail]);
+
+        // Stats par équipe
+        const byTeamResult = await pool.query(`
+          SELECT
+            team_name,
+            COUNT(*) FILTER (WHERE status_normalized IN ('unassigned', 'assigned', 'quote_pending'))::int as total,
+            COUNT(*) FILTER (WHERE status_normalized = 'unassigned')::int as unassigned,
+            COUNT(*) FILTER (WHERE priority_normalized IN ('urgent', 'safety'))::int as urgent
+          FROM haleon_tickets_cache
+          WHERE team_name = ANY($1)
+          GROUP BY team_name
+          ORDER BY unassigned DESC, total DESC
+        `, [userTeams]);
+
+        const stats = statsResult.rows[0] || {};
+        const byTeam = byTeamResult.rows;
+
+        // Générer un résumé textuel
+        const summaryParts = [];
+        if (stats.total > 0) summaryParts.push(`${stats.total} ticket(s) ouvert(s)`);
+        if (stats.unassigned > 0) summaryParts.push(`🔴 ${stats.unassigned} non attribué(s)`);
+        if (stats.my_tickets > 0) summaryParts.push(`📋 ${stats.my_tickets} attribué(s) à vous`);
+        if (stats.urgent > 0) summaryParts.push(`⚠️ ${stats.urgent} urgent(s)`);
+        if (stats.old_unassigned > 0) summaryParts.push(`⏰ ${stats.old_unassigned} en attente depuis +2j`);
+        if (stats.old_assigned > 0) summaryParts.push(`⏰ ${stats.old_assigned} attribué(s) depuis +7j`);
+
+        return {
+          success: true,
+          ...stats,
+          by_team: byTeam,
+          user_teams: userTeams,
+          text_summary: summaryParts.length > 0
+            ? `📊 **Tickets Haleon Tool** (équipes: ${userTeams.join(', ')})\n${summaryParts.join('\n')}`
+            : `✅ Aucun ticket ouvert pour vos équipes (${userTeams.join(', ')})`
+        };
+      } catch (error) {
+        console.error('[TOOL] get_haleon_tickets_stats error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    search_haleon_tickets: async (params) => {
+      try {
+        const userEmail = (params._user_email || '').toLowerCase();
+        const { status, team, assigned_to_me, priority, building, limit = 10 } = params;
+
+        if (!userEmail) {
+          return { success: false, error: 'Email utilisateur requis' };
+        }
+
+        // Récupérer les équipes de l'utilisateur
+        const teamsResult = await pool.query(`
+          SELECT t.name
+          FROM haleon_ticket_teams t
+          JOIN haleon_ticket_team_members m ON m.team_id = t.id
+          WHERE m.user_email = $1 AND t.is_active = true
+        `, [userEmail]);
+
+        const userTeams = teamsResult.rows.map(r => r.name);
+
+        if (userTeams.length === 0) {
+          return {
+            success: true,
+            tickets: [],
+            message: "Vous n'êtes membre d'aucune équipe Haleon Tool."
+          };
+        }
+
+        // Construire la requête
+        let query = `
+          SELECT ticket_code, description, status_normalized, priority_normalized,
+                 team_name, building, zone, assigned_to_email, assigned_to_name,
+                 bubble_ticket_id, bubble_created_at, date_attribution
+          FROM haleon_tickets_cache
+          WHERE team_name = ANY($1)
+          AND status_normalized IN ('unassigned', 'assigned', 'quote_pending')
+        `;
+        const queryParams = [userTeams];
+        let paramIndex = 2;
+
+        if (status && status !== 'all') {
+          query += ` AND status_normalized = $${paramIndex}`;
+          queryParams.push(status);
+          paramIndex++;
+        }
+
+        if (team) {
+          query += ` AND team_name ILIKE $${paramIndex}`;
+          queryParams.push(`%${team}%`);
+          paramIndex++;
+        }
+
+        if (assigned_to_me) {
+          query += ` AND assigned_to_email = $${paramIndex}`;
+          queryParams.push(userEmail);
+          paramIndex++;
+        }
+
+        if (priority) {
+          query += ` AND priority_normalized = $${paramIndex}`;
+          queryParams.push(priority);
+          paramIndex++;
+        }
+
+        if (building) {
+          query += ` AND building ILIKE $${paramIndex}`;
+          queryParams.push(`%${building}%`);
+          paramIndex++;
+        }
+
+        query += ` ORDER BY
+          CASE priority_normalized
+            WHEN 'safety' THEN 1
+            WHEN 'urgent' THEN 2
+            WHEN 'high' THEN 3
+            WHEN 'medium' THEN 4
+            ELSE 5
+          END,
+          bubble_created_at DESC
+          LIMIT $${paramIndex}`;
+        queryParams.push(Math.min(parseInt(limit) || 10, 30));
+
+        const result = await pool.query(query, queryParams);
+        const tickets = result.rows;
+
+        // Formater les tickets pour l'affichage
+        const priorityEmoji = { safety: '🚨', urgent: '🔴', high: '🟠', medium: '🟡', low: '🟢' };
+        const statusLabel = { unassigned: 'Non attribué', assigned: 'Attribué', quote_pending: 'Devis en attente' };
+
+        const formattedTickets = tickets.map((t, i) => {
+          const emoji = priorityEmoji[t.priority_normalized] || '⚪';
+          const daysOld = Math.floor((Date.now() - new Date(t.bubble_created_at).getTime()) / (1000 * 60 * 60 * 24));
+          return `${i + 1}. ${emoji} **${t.ticket_code}** - ${statusLabel[t.status_normalized] || t.status_normalized}
+   ${t.description ? t.description.substring(0, 100) + (t.description.length > 100 ? '...' : '') : 'Sans description'}
+   📍 ${t.building || '-'} ${t.zone ? `/ ${t.zone}` : ''} | Équipe: ${t.team_name} | ${daysOld}j
+   ${t.assigned_to_name ? `👤 Attribué à: ${t.assigned_to_name}` : ''}`;
+        });
+
+        return {
+          success: true,
+          count: tickets.length,
+          tickets: tickets,
+          text_summary: tickets.length > 0
+            ? `🎫 **${tickets.length} ticket(s) trouvé(s)**\n\n${formattedTickets.join('\n\n')}`
+            : `✅ Aucun ticket correspondant aux critères.`
+        };
+      } catch (error) {
+        console.error('[TOOL] search_haleon_tickets error:', error.message);
+        return { success: false, error: error.message };
+      }
+    },
+
+    assign_haleon_ticket: async (params) => {
+      try {
+        const userEmail = (params._user_email || '').toLowerCase();
+        const userName = params._user_name || userEmail.split('@')[0];
+        const { ticket_id } = params;
+
+        if (!userEmail) {
+          return { success: false, error: 'Email utilisateur requis' };
+        }
+
+        if (!ticket_id) {
+          return { success: false, error: 'ID du ticket requis' };
+        }
+
+        // Vérifier que l'utilisateur a accès à ce ticket et peut l'attribuer
+        const ticketResult = await pool.query(`
+          SELECT tc.* FROM haleon_tickets_cache tc
+          JOIN haleon_ticket_teams t ON t.name = tc.team_name
+          JOIN haleon_ticket_team_members m ON m.team_id = t.id AND m.user_email = $2
+          WHERE (tc.bubble_ticket_id = $1 OR tc.ticket_code ILIKE $1)
+            AND m.can_assign = true
+        `, [ticket_id, userEmail]);
+
+        if (ticketResult.rows.length === 0) {
+          return {
+            success: false,
+            error: "Ticket non trouvé ou vous n'avez pas les permissions pour l'attribuer."
+          };
+        }
+
+        const ticket = ticketResult.rows[0];
+
+        if (ticket.status_normalized !== 'unassigned') {
+          return {
+            success: false,
+            error: `Ce ticket est déjà ${ticket.assigned_to_name ? `attribué à ${ticket.assigned_to_name}` : 'en cours de traitement'}.`
+          };
+        }
+
+        // Logger l'action
+        await pool.query(`
+          INSERT INTO haleon_ticket_actions (bubble_ticket_id, ticket_code, action_type, performed_by_email, performed_by_name, action_data, sync_status)
+          VALUES ($1, $2, 'assign', $3, $4, $5, 'pending')
+        `, [ticket.bubble_ticket_id, ticket.ticket_code, userEmail, userName, JSON.stringify({ assigned_to: userEmail })]);
+
+        // Mettre à jour le cache local
+        await pool.query(`
+          UPDATE haleon_tickets_cache
+          SET assigned_to_email = $2,
+              assigned_to_name = $3,
+              status = 'Ouvert (Attribué)',
+              status_normalized = 'assigned',
+              date_attribution = NOW()
+          WHERE bubble_ticket_id = $1
+        `, [ticket.bubble_ticket_id, userEmail, userName]);
+
+        return {
+          success: true,
+          ticket_code: ticket.ticket_code,
+          text_summary: `✅ **Ticket ${ticket.ticket_code} attribué à ${userName}**\n\n📋 ${ticket.description || 'Sans description'}\n📍 ${ticket.building || '-'} ${ticket.zone ? `/ ${ticket.zone}` : ''}\n\n⚠️ La synchronisation avec Haleon Tool sera effectuée prochainement.`
+        };
+      } catch (error) {
+        console.error('[TOOL] assign_haleon_ticket error:', error.message);
         return { success: false, error: error.message };
       }
     }

@@ -941,6 +941,160 @@ function calculateRiskScores(equipmentBreakdown, totalIncidents) {
   });
 }
 
+/**
+ * Get Haleon Tickets stats for a user (for email reports)
+ * Returns ticket statistics for the user's teams
+ */
+async function getHaleonTicketStatsForUser(email) {
+  if (!email) return null;
+
+  try {
+    const userEmail = email.toLowerCase();
+
+    // Get user's teams
+    const teamsResult = await pool.query(`
+      SELECT t.name
+      FROM haleon_ticket_teams t
+      JOIN haleon_ticket_team_members m ON m.team_id = t.id
+      WHERE m.user_email = $1 AND t.is_active = true
+    `, [userEmail]);
+
+    const userTeams = teamsResult.rows.map(r => r.name);
+
+    if (userTeams.length === 0) {
+      return null; // User has no teams, don't show ticket section
+    }
+
+    // Get stats
+    const statsResult = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE status_normalized IN ('unassigned', 'assigned', 'quote_pending'))::int as total,
+        COUNT(*) FILTER (WHERE status_normalized = 'unassigned')::int as unassigned,
+        COUNT(*) FILTER (WHERE assigned_to_email = $2)::int as my_tickets,
+        COUNT(*) FILTER (WHERE priority_normalized IN ('urgent', 'safety'))::int as urgent,
+        COUNT(*) FILTER (WHERE status_normalized = 'unassigned' AND bubble_created_at < NOW() - INTERVAL '2 days')::int as old_unassigned,
+        COUNT(*) FILTER (WHERE status_normalized = 'assigned' AND date_attribution < NOW() - INTERVAL '7 days')::int as old_assigned
+      FROM haleon_tickets_cache
+      WHERE team_name = ANY($1)
+    `, [userTeams, userEmail]);
+
+    // Get breakdown by team
+    const byTeamResult = await pool.query(`
+      SELECT
+        team_name,
+        COUNT(*) FILTER (WHERE status_normalized IN ('unassigned', 'assigned', 'quote_pending'))::int as total,
+        COUNT(*) FILTER (WHERE status_normalized = 'unassigned')::int as unassigned,
+        COUNT(*) FILTER (WHERE priority_normalized IN ('urgent', 'safety'))::int as urgent
+      FROM haleon_tickets_cache
+      WHERE team_name = ANY($1)
+      GROUP BY team_name
+      ORDER BY unassigned DESC, total DESC
+    `, [userTeams]);
+
+    const stats = statsResult.rows[0] || {};
+
+    return {
+      total: stats.total || 0,
+      unassigned: stats.unassigned || 0,
+      my_tickets: stats.my_tickets || 0,
+      urgent: stats.urgent || 0,
+      old_unassigned: stats.old_unassigned || 0,
+      old_assigned: stats.old_assigned || 0,
+      by_team: byTeamResult.rows,
+      user_teams: userTeams
+    };
+  } catch (error) {
+    console.error('[SendGrid] Error fetching Haleon ticket stats:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Generate HTML section for Haleon Tickets in email reports
+ */
+function generateHaleonTicketsEmailSection(ticketStats) {
+  if (!ticketStats || ticketStats.user_teams.length === 0) return '';
+
+  const hasAlerts = ticketStats.old_unassigned > 0 || ticketStats.old_assigned > 0;
+  const alertColor = hasAlerts ? '#fef3c7' : '#f5f3ff';
+  const borderColor = hasAlerts ? '#f59e0b' : '#8b5cf6';
+
+  let html = `
+    <div style="background: ${alertColor}; border-left: 4px solid ${borderColor}; border-radius: 8px; padding: 16px; margin: 20px 0;">
+      <h3 style="color: #1f2937; font-size: 16px; margin: 0 0 12px 0; display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 20px;">🎫</span> Tickets Haleon Tool
+        <span style="font-size: 12px; color: #6b7280; font-weight: normal;">(${ticketStats.user_teams.join(', ')})</span>
+      </h3>
+
+      <!-- Stats grid -->
+      <table style="width: 100%; margin-bottom: 12px;" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="text-align: center; padding: 8px; background: white; border-radius: 6px; width: 25%;">
+            <div style="font-size: 24px; font-weight: bold; color: #8b5cf6;">${ticketStats.total}</div>
+            <div style="font-size: 11px; color: #6b7280;">Ouverts</div>
+          </td>
+          <td style="width: 4px;"></td>
+          <td style="text-align: center; padding: 8px; background: ${ticketStats.unassigned > 0 ? '#fee2e2' : 'white'}; border-radius: 6px; width: 25%;">
+            <div style="font-size: 24px; font-weight: bold; color: ${ticketStats.unassigned > 0 ? '#dc2626' : '#9ca3af'};">${ticketStats.unassigned}</div>
+            <div style="font-size: 11px; color: #6b7280;">Non attribués</div>
+          </td>
+          <td style="width: 4px;"></td>
+          <td style="text-align: center; padding: 8px; background: white; border-radius: 6px; width: 25%;">
+            <div style="font-size: 24px; font-weight: bold; color: #3b82f6;">${ticketStats.my_tickets}</div>
+            <div style="font-size: 11px; color: #6b7280;">Mes tickets</div>
+          </td>
+          <td style="width: 4px;"></td>
+          <td style="text-align: center; padding: 8px; background: ${ticketStats.urgent > 0 ? '#ffedd5' : 'white'}; border-radius: 6px; width: 25%;">
+            <div style="font-size: 24px; font-weight: bold; color: ${ticketStats.urgent > 0 ? '#f97316' : '#9ca3af'};">${ticketStats.urgent}</div>
+            <div style="font-size: 11px; color: #6b7280;">Urgents</div>
+          </td>
+        </tr>
+      </table>`;
+
+  // Alert for old tickets
+  if (hasAlerts) {
+    html += `
+      <div style="background: #fffbeb; border: 1px solid #fbbf24; border-radius: 6px; padding: 10px; margin-bottom: 12px;">
+        <div style="display: flex; align-items: flex-start; gap: 8px;">
+          <span style="font-size: 16px;">⚠️</span>
+          <div style="font-size: 13px; color: #92400e;">`;
+
+    if (ticketStats.old_unassigned > 0) {
+      html += `<strong>${ticketStats.old_unassigned}</strong> ticket${ticketStats.old_unassigned > 1 ? 's' : ''} en attente depuis plus de 2 jours<br>`;
+    }
+    if (ticketStats.old_assigned > 0) {
+      html += `<strong>${ticketStats.old_assigned}</strong> ticket${ticketStats.old_assigned > 1 ? 's' : ''} attribué${ticketStats.old_assigned > 1 ? 's' : ''} depuis plus de 7 jours`;
+    }
+
+    html += `
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // Teams breakdown if multiple teams
+  if (ticketStats.by_team.length > 1) {
+    html += `
+      <div style="font-size: 12px; color: #6b7280; margin-top: 8px;">
+        <strong>Par équipe:</strong>
+        ${ticketStats.by_team.map(t =>
+          `${t.team_name}: ${t.total} (${t.unassigned > 0 ? `<span style="color: #dc2626;">${t.unassigned} libres</span>` : '0 libre'})`
+        ).join(' • ')}
+      </div>`;
+  }
+
+  // Link to tickets page
+  html += `
+      <div style="margin-top: 12px; text-align: center;">
+        <a href="${APP_URL}/app/troubleshooting?tab=tickets" style="display: inline-block; background: #8b5cf6; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 500;">
+          Voir les tickets →
+        </a>
+      </div>
+    </div>`;
+
+  return html;
+}
+
 // ============================================================
 // CHART GENERATION FOR EMAILS
 // ============================================================
@@ -1406,7 +1560,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
  * Generate Weekly KPI Report Email Template
  * Beautiful email with charts, KPIs, and agent performance table
  */
-function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages = {}, agentCustomNames = {}, allowedEquipmentTypes = null) {
+function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages = {}, agentCustomNames = {}, allowedEquipmentTypes = null, ticketsHtmlSection = '') {
   const { startDate, endDate } = dateRange;
   const formattedRange = formatDateRangeFr(startDate, endDate);
 
@@ -1573,6 +1727,9 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equip
       </table>
     </div>
 
+    <!-- Haleon Tickets Section (if user has access) -->
+    ${ticketsHtmlSection ? `<div style="padding: 0 25px;">${ticketsHtmlSection}</div>` : ''}
+
     <!-- Quick Access Links -->
     <div style="padding: 25px; border-bottom: 1px solid #e5e7eb; text-align: center;">
       <h2 style="font-size: 16px; font-weight: 700; color: #1f2937; margin: 0 0 20px;">🔗 Accès rapide</h2>
@@ -1603,7 +1760,7 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equip
  * Generate Monthly KPI Report Email Template
  * Same structure as weekly but for 30 days
  */
-function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages = {}, agentCustomNames = {}, allowedEquipmentTypes = null) {
+function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages = {}, agentCustomNames = {}, allowedEquipmentTypes = null, ticketsHtmlSection = '') {
   const { startDate, endDate, monthName } = dateRange;
   const formattedRange = formatDateRangeFr(startDate, endDate);
 
@@ -1769,6 +1926,9 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equi
         </tbody>
       </table>
     </div>
+
+    <!-- Haleon Tickets Section (if user has access) -->
+    ${ticketsHtmlSection ? `<div style="padding: 0 25px;">${ticketsHtmlSection}</div>` : ''}
 
     <!-- Quick Access Links -->
     <div style="padding: 25px; border-bottom: 1px solid #e5e7eb; text-align: center;">
@@ -2403,7 +2563,7 @@ async function sendWeeklyReport(email, site) {
     }
 
     // Fetch all data for the week
-    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, maintenanceByAgent, agentImagesData, agentCustomNames] = await Promise.all([
+    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, maintenanceByAgent, agentImagesData, agentCustomNames, ticketStats] = await Promise.all([
       getStatsForDateRange(site, startDate, endDate),
       getDailyBreakdown(site, startDate, endDate),
       getEquipmentTypeBreakdown(site, startDate, endDate),
@@ -2411,7 +2571,8 @@ async function sendWeeklyReport(email, site) {
       getMaintenanceStats(site, startDate, endDate),
       getMaintenanceStatsByAgent(site, startDate, endDate),
       getAgentImagesData(),
-      getAgentCustomNames()
+      getAgentCustomNames(),
+      getHaleonTicketStatsForUser(email) // Fetch user's ticket stats
     ]);
 
     const { agentImages, attachments } = agentImagesData;
@@ -2420,8 +2581,11 @@ async function sendWeeklyReport(email, site) {
     const totalIncidents = parseInt(stats.total_outages) || 0;
     const riskData = calculateRiskScores(equipmentBreakdown, totalIncidents);
 
+    // Generate Haleon tickets section if user has ticket access
+    const ticketsHtmlSection = generateHaleonTicketsEmailSection(ticketStats);
+
     // Generate email HTML with permission filtering
-    const htmlContent = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames, allowedEquipmentTypes.length > 0 ? allowedEquipmentTypes : null);
+    const htmlContent = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames, allowedEquipmentTypes.length > 0 ? allowedEquipmentTypes : null, ticketsHtmlSection);
 
     // Prepare email
     const msg = {
@@ -2514,7 +2678,7 @@ async function sendMonthlyReport(email, site) {
     }
 
     // Fetch all data for the month
-    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, maintenanceByAgent, agentImagesData, agentCustomNames] = await Promise.all([
+    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, maintenanceByAgent, agentImagesData, agentCustomNames, ticketStats] = await Promise.all([
       getStatsForDateRange(site, startDate, endDate),
       getDailyBreakdown(site, startDate, endDate),
       getEquipmentTypeBreakdown(site, startDate, endDate),
@@ -2522,7 +2686,8 @@ async function sendMonthlyReport(email, site) {
       getMaintenanceStats(site, startDate, endDate),
       getMaintenanceStatsByAgent(site, startDate, endDate),
       getAgentImagesData(),
-      getAgentCustomNames()
+      getAgentCustomNames(),
+      getHaleonTicketStatsForUser(email) // Fetch user's ticket stats
     ]);
 
     const { agentImages, attachments } = agentImagesData;
@@ -2531,8 +2696,11 @@ async function sendMonthlyReport(email, site) {
     const totalIncidents = parseInt(stats.total_outages) || 0;
     const riskData = calculateRiskScores(equipmentBreakdown, totalIncidents);
 
+    // Generate Haleon tickets section if user has ticket access
+    const ticketsHtmlSection = generateHaleonTicketsEmailSection(ticketStats);
+
     // Generate email HTML with permission filtering
-    const htmlContent = generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames, allowedEquipmentTypes.length > 0 ? allowedEquipmentTypes : null);
+    const htmlContent = generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames, allowedEquipmentTypes.length > 0 ? allowedEquipmentTypes : null, ticketsHtmlSection);
 
     // Prepare email
     const msg = {
