@@ -1369,6 +1369,19 @@ app.get("/api/meca/maps/positions", async (req, res) => {
       [planKey, Number(page_index)]
     );
 
+    // Debug: log category info for positions
+    if (rows.length > 0) {
+      console.log('[MECA-MAP] Positions with categories:', rows.filter(r => r.category_id).length, 'of', rows.length);
+      const sample = rows[0];
+      console.log('[MECA-MAP] Sample position:', {
+        equipment_id: sample.equipment_id,
+        name: sample.name,
+        category_id: sample.category_id,
+        category_color: sample.category_color,
+        category_icon: sample.category_icon
+      });
+    }
+
     res.json({ ok: true, positions: rows });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
