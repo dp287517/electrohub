@@ -361,6 +361,10 @@ router.get('/list', async (req, res) => {
       limit = 50, offset = 0
     } = req.query;
 
+    // Validate equipment_id is a valid UUID (some equipment types use numeric IDs)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const validEquipmentId = equipment_id && uuidRegex.test(equipment_id) ? equipment_id : null;
+
     let sql = `
       SELECT tr.*,
              (SELECT COUNT(*) FROM troubleshooting_photos WHERE troubleshooting_id = tr.id) as photo_count,
@@ -375,8 +379,12 @@ router.get('/list', async (req, res) => {
       sql += ` AND tr.equipment_type = $${paramIndex++}`;
       params.push(equipment_type);
     }
-    if (equipment_id) {
+    if (validEquipmentId) {
       sql += ` AND tr.equipment_id = $${paramIndex++}`;
+      params.push(validEquipmentId);
+    } else if (equipment_id && !validEquipmentId) {
+      // Non-UUID equipment_id provided - search by equipment_code instead
+      sql += ` AND tr.equipment_code = $${paramIndex++}`;
       params.push(equipment_id);
     }
     if (building_code) {
