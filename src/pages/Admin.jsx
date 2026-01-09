@@ -1044,23 +1044,159 @@ function CompaniesTab({ companies, onRefresh, loading }) {
         </div>
       )}
 
-      {showCreate && <CompanyModal saving={saving} onClose={() => setShowCreate(false)} onSave={(c) => handleSave(c, true)} />}
-      {editingId && <CompanyModal company={companies.find(c => c.id === editingId)} saving={saving} onClose={() => setEditingId(null)} onSave={handleSave} />}
+      {showCreate && <CompanyModal saving={saving} onClose={() => setShowCreate(false)} onSave={(c) => handleSave(c, true)} onRefresh={onRefresh} />}
+      {editingId && <CompanyModal company={companies.find(c => c.id === editingId)} saving={saving} onClose={() => setEditingId(null)} onSave={handleSave} onRefresh={onRefresh} />}
     </div>
   );
 }
 
-function CompanyModal({ company, saving, onClose, onSave }) {
+function CompanyModal({ company, saving, onClose, onSave, onRefresh }) {
   const [name, setName] = useState(company?.name || '');
   const [country, setCountry] = useState(company?.country || 'Switzerland');
   const [city, setCity] = useState(company?.city || 'Nyon');
   const [isInternal, setIsInternal] = useState(company?.is_internal || false);
+  const [logoPreview, setLogoPreview] = useState(null);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const fileInputRef = useRef(null);
+
+  // Load existing logo preview for editing
+  useEffect(() => {
+    if (company?.id) {
+      const token = localStorage.getItem('eh_token');
+      fetch(`/api/companies/${company.id}/logo`, {
+        credentials: 'include',
+        headers: { 'Authorization': token ? `Bearer ${token}` : '' }
+      })
+        .then(res => res.ok ? res.blob() : null)
+        .then(blob => {
+          if (blob && blob.size > 0) {
+            setLogoPreview(URL.createObjectURL(blob));
+          }
+        })
+        .catch(() => {});
+    }
+  }, [company?.id]);
+
+  const handleLogoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !company?.id) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert('File size must be less than 5MB');
+      return;
+    }
+
+    setUploadingLogo(true);
+    try {
+      const formData = new FormData();
+      formData.append('logo', file);
+
+      const token = localStorage.getItem('eh_token');
+      const res = await fetch(`${API_BASE}/companies/${company.id}/logo`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Authorization': token ? `Bearer ${token}` : '' },
+        body: formData
+      });
+
+      if (res.ok) {
+        setLogoPreview(URL.createObjectURL(file));
+        if (onRefresh) onRefresh();
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || 'Upload failed');
+      }
+    } catch (err) {
+      alert('Error uploading logo: ' + err.message);
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    if (!company?.id || !confirm('Remove company logo?')) return;
+
+    setUploadingLogo(true);
+    try {
+      const token = localStorage.getItem('eh_token');
+      const res = await fetch(`${API_BASE}/companies/${company.id}/logo`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: { 'Authorization': token ? `Bearer ${token}` : '' }
+      });
+
+      if (res.ok) {
+        setLogoPreview(null);
+        if (onRefresh) onRefresh();
+      } else {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to remove logo');
+      }
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
 
   return (
     <Modal title={company ? 'Edit Company' : 'New Company'} icon={Building2} onClose={onClose}>
       <form onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; onSave({ name, country, city, is_internal: isInternal }); }} className="space-y-4">
         <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Company Name *</label>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none" required /></div>
+
+        {/* Logo Upload - Only show for existing companies */}
+        {company?.id && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2">
+              <Image size={14} />Company Logo
+            </label>
+            <div className="flex items-center gap-4">
+              {logoPreview ? (
+                <div className="relative">
+                  <img src={logoPreview} alt="Company logo" className="h-16 w-auto max-w-[160px] object-contain rounded-lg border border-gray-200" />
+                  <button
+                    type="button"
+                    onClick={handleRemoveLogo}
+                    disabled={uploadingLogo}
+                    className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 disabled:opacity-50"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <div className="h-16 w-32 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400">
+                  <Image size={24} />
+                </div>
+              )}
+              <div className="flex-1">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleLogoUpload}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingLogo}
+                  className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+                >
+                  {uploadingLogo ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                  {logoPreview ? 'Change Logo' : 'Upload Logo'}
+                </button>
+                <p className="text-xs text-gray-500 mt-1">PNG, JPG up to 5MB</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-4">
           <div><label className="block text-sm font-medium text-gray-700 mb-1.5 flex items-center gap-2"><Globe size={14} />Country</label>
             <select value={country} onChange={(e) => { setCountry(e.target.value); setCity(COUNTRIES[e.target.value]?.[0] || ''); }} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none">{Object.keys(COUNTRIES).map(c => <option key={c} value={c}>{c}</option>)}</select></div>
@@ -1071,6 +1207,12 @@ function CompanyModal({ company, saving, onClose, onSave }) {
           <input type="checkbox" id="is_internal" checked={isInternal} onChange={(e) => setIsInternal(e.target.checked)} className="w-4 h-4 rounded border-gray-300" />
           <label htmlFor="is_internal" className="text-sm text-gray-700">Internal company (like Haleon)</label>
         </div>
+        {!company && (
+          <p className="text-xs text-amber-600 bg-amber-50 p-2 rounded-lg flex items-center gap-2">
+            <Image size={14} />
+            You can upload a logo after creating the company
+          </p>
+        )}
         <div className="flex gap-3 pt-4">
           <button type="button" onClick={onClose} className="flex-1 px-4 py-3 border border-gray-200 rounded-xl hover:bg-gray-50" disabled={saving}>Cancel</button>
           <button type="submit" className="flex-1 px-4 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 flex items-center justify-center gap-2" disabled={saving}>

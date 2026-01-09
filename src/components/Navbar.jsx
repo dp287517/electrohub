@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, LogOut, LayoutDashboard, Zap, Shield, Sparkles, Bell } from 'lucide-react';
+import { Menu, X, LogOut, LayoutDashboard, Cpu, Shield, Sparkles, Bell } from 'lucide-react';
 import { ADMIN_EMAILS } from '../lib/permissions';
 import { VideoAvatar } from './AIAvatar/VideoAvatar';
 import { AVATAR_STYLES } from './AIAvatar/AnimatedAvatar';
@@ -8,6 +8,8 @@ import AvatarChat from './AIAvatar/AvatarChat';
 import AvatarSelector from './AIAvatar/AvatarSelector';
 import { useNotifications } from './Notifications/NotificationProvider';
 import NotificationPreferences from './Notifications/NotificationPreferences';
+
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 export default function Navbar() {
   const { pathname } = useLocation();
@@ -18,6 +20,7 @@ export default function Navbar() {
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [companyLogo, setCompanyLogo] = useState(null);
 
   // AI Avatar states
   const [avatarStyle, setAvatarStyle] = useState(() => {
@@ -50,6 +53,23 @@ export default function Navbar() {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Fetch company logo for current user
+  useEffect(() => {
+    if (token && user?.company_id) {
+      fetch(`${API_BASE}/api/companies/${user.company_id}/logo`, {
+        credentials: 'include',
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+        .then(res => res.ok ? res.blob() : null)
+        .then(blob => {
+          if (blob && blob.size > 0) {
+            setCompanyLogo(URL.createObjectURL(blob));
+          }
+        })
+        .catch(() => {});
+    }
+  }, [token, user?.company_id]);
 
   // Sauvegarder les préférences d'avatar
   useEffect(() => {
@@ -103,11 +123,19 @@ export default function Navbar() {
               to={token ? "/dashboard" : "/"}
               className="flex items-center gap-2.5 group"
             >
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-lg shadow-brand-500/25 group-hover:shadow-brand-500/40 transition-shadow">
-                <Zap size={20} className="text-white" />
-              </div>
+              {companyLogo ? (
+                <img
+                  src={companyLogo}
+                  alt="Company Logo"
+                  className="h-9 w-auto max-w-[120px] object-contain"
+                />
+              ) : (
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center shadow-lg shadow-brand-500/25 group-hover:shadow-brand-500/40 transition-shadow">
+                  <Cpu size={20} className="text-white" />
+                </div>
+              )}
               <span className="font-bold text-xl tracking-tight bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-transparent">
-                ElectroHub
+                AI GMAO
               </span>
             </Link>
 

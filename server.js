@@ -10385,6 +10385,30 @@ app.get("/api/sites", async (req, res) => {
 app.use("/api/admin", adminRouter);
 
 /* ================================================================
+   🏢 Company Logo API - Public endpoint to get company logo
+   ================================================================ */
+app.get("/api/companies/:id/logo", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(`
+      SELECT logo, logo_mime FROM companies WHERE id = $1
+    `, [id]);
+
+    if (result.rows.length === 0 || !result.rows[0].logo) {
+      return res.status(404).json({ error: "Logo not found" });
+    }
+
+    const { logo, logo_mime } = result.rows[0];
+    res.set('Content-Type', logo_mime || 'image/png');
+    res.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+    res.send(logo);
+  } catch (err) {
+    console.error('[Company Logo] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ================================================================
    🔔 Push Notifications API Routes
    ================================================================ */
 console.log('[Push] Mounting push router at /api/push');
