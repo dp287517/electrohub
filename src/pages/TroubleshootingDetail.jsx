@@ -610,8 +610,8 @@ export default function TroubleshootingDetail() {
               />
             </div>
 
-            {/* Mini Plan */}
-            {record.equipment_type && record.equipment_id && !editMode && (
+            {/* Mini Plan - use equipment_original_id for non-UUID IDs (e.g. switchboards) */}
+            {record.equipment_type && (record.equipment_original_id || record.equipment_id) && !editMode && (
               <div className="bg-white rounded-xl shadow-sm border p-6">
                 <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <MapPin size={18} className="text-orange-500" />
@@ -619,7 +619,7 @@ export default function TroubleshootingDetail() {
                 </h2>
                 <MiniEquipmentPreview
                   equipment={{
-                    id: record.equipment_id,
+                    id: record.equipment_original_id || record.equipment_id,
                     name: record.equipment_name,
                     code: record.equipment_code,
                     building_code: record.building_code,
