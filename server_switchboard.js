@@ -7318,29 +7318,10 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       GROUP BY equipment_type
     `, [site]);
 
-    // === MOBILE EQUIPMENT CONTROLS (me_checks) ===
-    // Note: me_equipments table doesn't have site column - counts are global
-    const mobileOverdue = await quickQuery(`
-      SELECT COUNT(*) as count FROM me_checks c
-      WHERE c.due_date < CURRENT_DATE AND c.closed_at IS NULL
-    `, []).catch(() => ({ rows: [{ count: 0 }] }));
-
-    const mobilePending = await quickQuery(`
-      SELECT COUNT(*) as count FROM me_checks c
-      WHERE c.due_date >= CURRENT_DATE AND c.closed_at IS NULL
-    `, []).catch(() => ({ rows: [{ count: 0 }] }));
-
-    // === FIRE DOOR CONTROLS (fd_checks) ===
-    // Note: fd_doors table doesn't have site column - counts are global
-    const doorsOverdue = await quickQuery(`
-      SELECT COUNT(*) as count FROM fd_checks c
-      WHERE c.due_date < CURRENT_DATE AND c.closed_at IS NULL
-    `, []).catch(() => ({ rows: [{ count: 0 }] }));
-
-    const doorsPending = await quickQuery(`
-      SELECT COUNT(*) as count FROM fd_checks c
-      WHERE c.due_date >= CURRENT_DATE AND c.closed_at IS NULL
-    `, []).catch(() => ({ rows: [{ count: 0 }] }));
+    // Note: me_checks and fd_checks are NOT included in dashboard stats anymore
+    // because they don't have site filtering and were causing incorrect counts.
+    // Mobile equipment and door controls are now managed via control_schedules
+    // with mobile_equipment_id and their counts are included in pendingByType/overdueByType.
 
     // Recent completions (last 30 days) - from control_records
     const recent = await quickQuery(`
@@ -7402,7 +7383,7 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       LIMIT 20
     `, [site]);
 
-    // Build stats by equipment type
+    // Build stats by equipment type from control_schedules only
     const overdueByEquipment = {};
     const pendingByEquipment = {};
     for (const row of overdueByType.rows) {
@@ -7412,21 +7393,9 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       pendingByEquipment[row.equipment_type || 'switchboard'] = Number(row.count);
     }
 
-    // Add mobile equipment controls
-    const mobileOverdueCount = Number(mobileOverdue.rows[0]?.count || 0);
-    const mobilePendingCount = Number(mobilePending.rows[0]?.count || 0);
-    if (mobileOverdueCount > 0) overdueByEquipment['mobile_equipment'] = mobileOverdueCount;
-    if (mobilePendingCount > 0) pendingByEquipment['mobile_equipment'] = mobilePendingCount;
-
-    // Add fire door controls
-    const doorsOverdueCount = Number(doorsOverdue.rows[0]?.count || 0);
-    const doorsPendingCount = Number(doorsPending.rows[0]?.count || 0);
-    if (doorsOverdueCount > 0) overdueByEquipment['doors'] = doorsOverdueCount;
-    if (doorsPendingCount > 0) pendingByEquipment['doors'] = doorsPendingCount;
-
-    // Calculate totals including all sources
-    const totalOverdue = Number(overdue.rows[0]?.count || 0) + mobileOverdueCount + doorsOverdueCount;
-    const totalPending = Number(pending.rows[0]?.count || 0) + mobilePendingCount + doorsPendingCount;
+    // Calculate totals from control_schedules only (properly filtered by site)
+    const totalOverdue = Number(overdue.rows[0]?.count || 0);
+    const totalPending = Number(pending.rows[0]?.count || 0);
 
     res.json({
       stats: {
