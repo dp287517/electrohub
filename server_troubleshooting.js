@@ -102,6 +102,10 @@ export async function initTroubleshootingTables(poolInstance) {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_troubleshooting_status ON troubleshooting_records(status)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_troubleshooting_photos_record ON troubleshooting_photos(troubleshooting_id)`);
 
+    // Migration: Add equipment_original_id column for non-UUID equipment IDs (e.g. switchboard numeric IDs)
+    await pool.query(`ALTER TABLE troubleshooting_records ADD COLUMN IF NOT EXISTS equipment_original_id TEXT`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_troubleshooting_original_id ON troubleshooting_records(equipment_type, equipment_original_id)`);
+
     // Multi-equipment support table - links troubleshooting to multiple equipment
     await pool.query(`
       CREATE TABLE IF NOT EXISTS troubleshooting_equipment_links (
@@ -145,16 +149,20 @@ const POSITION_TABLE_MAP = {
 };
 
 // Get equipment position and plan data for mini plan
+// equipmentId can be a UUID or a numeric ID (stored as string in equipment_original_id)
 async function getEquipmentPlanData(equipmentType, equipmentId) {
   const config = POSITION_TABLE_MAP[equipmentType];
   if (!config || !equipmentId) {
     return null;
   }
 
+  // For numeric IDs (like switchboards), convert to integer for the query
+  const idForQuery = /^\d+$/.test(String(equipmentId)) ? parseInt(equipmentId, 10) : equipmentId;
+
   try {
     // Get position
     const posQuery = `SELECT ${config.planCol} as plan_key, page_index, x_frac, y_frac FROM ${config.table} WHERE ${config.idCol} = $1 LIMIT 1`;
-    const posResult = await pool.query(posQuery, [equipmentId]);
+    const posResult = await pool.query(posQuery, [idForQuery]);
 
     if (posResult.rows.length === 0) {
       return null;
@@ -282,10 +290,10 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
       return res.status(400).json({ error: 'Le titre est requis' });
     }
 
-    // Insert main record
+    // Insert main record (equipment_original_id stores the original ID for position lookups)
     const result = await pool.query(`
       INSERT INTO troubleshooting_records (
-        site, equipment_type, equipment_id, equipment_name, equipment_code,
+        site, equipment_type, equipment_id, equipment_original_id, equipment_name, equipment_code,
         building_code, floor, zone, room,
         title, description, root_cause, solution, parts_replaced,
         category, severity, fault_type,
@@ -293,10 +301,10 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
         technician_name, technician_email,
         ai_diagnosis, ai_recommendations,
         status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, 'completed')
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, 'completed')
       RETURNING *
     `, [
-      site, finalEquipmentType, finalEquipmentId, equipment_name, equipment_code,
+      site, finalEquipmentType, finalEquipmentId, equipment_id || null, equipment_name, equipment_code,
       building_code, floor, zone, room,
       finalTitle, description || '', root_cause, solution, parts_replaced,
       category, severity || 'minor', fault_type,
@@ -995,9 +1003,11 @@ router.get('/:id/pdf', async (req, res) => {
     // Mini plan section (if equipment has a position on a plan)
     y = 210;
     let miniPlanRendered = false;
-    if (record.equipment_id && record.equipment_type) {
+    // Use equipment_original_id for position lookup (works with both UUID and numeric IDs)
+    const equipmentIdForPlan = record.equipment_original_id || record.equipment_id;
+    if (equipmentIdForPlan && record.equipment_type) {
       try {
-        const planData = await getEquipmentPlanData(record.equipment_type, record.equipment_id);
+        const planData = await getEquipmentPlanData(record.equipment_type, equipmentIdForPlan);
         if (planData?.thumbnail) {
           const miniPlanImage = await generateMiniPlanImage(planData);
           if (miniPlanImage) {
