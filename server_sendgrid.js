@@ -31,6 +31,16 @@ if (SENDGRID_API_KEY) {
   console.warn('[SendGrid] ⚠️ SENDGRID_API_KEY not configured. Email sending disabled.');
 }
 
+// Format duration in minutes to human-readable format (e.g., "1h 30min" or "45 min")
+function formatDuration(minutes) {
+  if (!minutes || minutes <= 0) return '0 min';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}min`;
+}
+
 // ============================================================
 // AI AGENT CONFIGURATION WITH AVATARS
 // ============================================================
@@ -1262,7 +1272,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
         <div class="stat-label">Résolus</div>
       </div>
       <div class="stat-box">
-        <div class="stat-value">${Math.round(filteredStats.total_downtime || 0)}<span style="font-size: 14px;">min</span></div>
+        <div class="stat-value">${formatDuration(Math.round(filteredStats.total_downtime || 0))}</div>
         <div class="stat-label">Temps d'arrêt</div>
       </div>
     </div>
@@ -1356,8 +1366,8 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
                   </span>
                 </td>
                 <td>
-                  ${outage.duration_minutes ? `${outage.duration_minutes} min` : '-'}
-                  ${outage.downtime_minutes ? `<br><span style="font-size: 11px; color: #DC2626;">⏱️ ${outage.downtime_minutes}min</span>` : ''}
+                  ${outage.duration_minutes ? formatDuration(outage.duration_minutes) : '-'}
+                  ${outage.downtime_minutes ? `<br><span style="font-size: 11px; color: #DC2626;">⏱️ ${formatDuration(outage.downtime_minutes)}</span>` : ''}
                 </td>
                 <td>
                   <a href="${APP_URL}/app/troubleshooting/${outage.id}" style="color: #3B82F6; text-decoration: none; font-weight: 500;">Voir →</a>
@@ -1488,7 +1498,7 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equip
           (maintenance.non_conform > 0 ? '<br><span style="font-size: 11px; color: #F97316;">' + maintenance.non_conform + ' NC</span>' : '') +
         '</td>' +
         '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
-          '<span style="font-size: 14px; color: #6b7280;">' + Math.round(breakdown.downtime) + ' min</span>' +
+          '<span style="font-size: 14px; color: #6b7280;">' + formatDuration(Math.round(breakdown.downtime)) + '</span>' +
         '</td>' +
       '</tr>';
     }).join('');
@@ -1685,7 +1695,7 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equi
           (maintenance.non_conform > 0 ? '<br><span style="font-size: 11px; color: #F97316;">' + maintenance.non_conform + ' NC</span>' : '') +
         '</td>' +
         '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
-          '<span style="font-size: 14px; color: #6b7280;">' + Math.round(breakdown.downtime) + ' min</span>' +
+          '<span style="font-size: 14px; color: #6b7280;">' + formatDuration(Math.round(breakdown.downtime)) + '</span>' +
         '</td>' +
       '</tr>';
     }).join('');
@@ -1936,7 +1946,7 @@ function generateTroubleshootingShareEmail(record, photos, shareUrl, agentName, 
             ${record.downtime_minutes ? `
             <td style="padding: 8px 0;">
               <span style="font-size: 12px; color: #6b7280;">Temps d'arrêt</span><br>
-              <span style="font-size: 14px; font-weight: 600; color: #DC2626;">${record.downtime_minutes} min</span>
+              <span style="font-size: 14px; font-weight: 600; color: #DC2626;">${formatDuration(record.downtime_minutes)}</span>
             </td>
             ` : ''}
           </tr>

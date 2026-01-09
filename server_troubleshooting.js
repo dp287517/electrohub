@@ -16,6 +16,16 @@ function isAdmin(email) {
   return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
 }
 
+// Format duration in minutes to human-readable format (e.g., "1h 30min" or "45 min")
+function formatDuration(minutes) {
+  if (!minutes || minutes <= 0) return '0 min';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}min`;
+}
+
 // Get database pool from main server
 let pool;
 export function setPool(p) {
@@ -1119,10 +1129,10 @@ router.get('/:id/pdf', async (req, res) => {
 
     // Right column
     doc.font('Helvetica-Bold').text('Durée intervention:', 320, y + 12);
-    doc.font('Helvetica').text(`${record.duration_minutes || 0} min`, 430, y + 12);
+    doc.font('Helvetica').text(formatDuration(record.duration_minutes), 430, y + 12);
 
     doc.font('Helvetica-Bold').text('Temps d\'arrêt:', 320, y + 28);
-    doc.font('Helvetica').text(`${record.downtime_minutes || 0} min`, 430, y + 28);
+    doc.font('Helvetica').text(formatDuration(record.downtime_minutes), 430, y + 28);
 
     doc.font('Helvetica-Bold').text('Catégorie:', 320, y + 44);
     doc.font('Helvetica').text(record.category || 'N/A', 430, y + 44);
@@ -1462,8 +1472,8 @@ router.get('/report/pdf', async (req, res) => {
       // Severity dot
       doc.circle(410, y + 11, 5).fill(severityColors[record.severity] || '#6b7280');
 
-      doc.text(`${record.duration_minutes || 0}m`, 445, y + 7, { width: 40 });
-      doc.text(`${record.downtime_minutes || 0}m`, 490, y + 7, { width: 50 });
+      doc.text(formatDuration(record.duration_minutes), 440, y + 7, { width: 50 });
+      doc.text(formatDuration(record.downtime_minutes), 490, y + 7, { width: 55 });
 
       y += 22;
     });
