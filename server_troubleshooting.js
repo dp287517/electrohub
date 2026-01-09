@@ -317,23 +317,26 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
       }
     }
 
-    // Insert primary equipment link
-    if (equipment_id) {
+    // Insert primary equipment link (only if we have a valid UUID)
+    if (finalEquipmentId) {
       await pool.query(`
         INSERT INTO troubleshooting_equipment_links
         (troubleshooting_id, equipment_id, equipment_type, equipment_name, equipment_code, building_code, is_primary)
         VALUES ($1, $2, $3, $4, $5, $6, TRUE)
-      `, [record.id, equipment_id, finalEquipmentType, equipment_name, equipment_code, building_code]);
+      `, [record.id, finalEquipmentId, finalEquipmentType, equipment_name, equipment_code, building_code]);
     }
 
-    // Insert additional equipment links
+    // Insert additional equipment links (validate UUIDs)
     if (additional_equipment && additional_equipment.length > 0) {
       for (const eq of additional_equipment) {
-        await pool.query(`
-          INSERT INTO troubleshooting_equipment_links
-          (troubleshooting_id, equipment_id, equipment_type, equipment_name, equipment_code, building_code, is_primary)
-          VALUES ($1, $2, $3, $4, $5, $6, FALSE)
-        `, [record.id, eq.equipment_id, eq.equipment_type, eq.equipment_name, eq.equipment_code, eq.building_code]);
+        const eqId = eq.equipment_id && uuidRegex.test(eq.equipment_id) ? eq.equipment_id : null;
+        if (eqId) {
+          await pool.query(`
+            INSERT INTO troubleshooting_equipment_links
+            (troubleshooting_id, equipment_id, equipment_type, equipment_name, equipment_code, building_code, is_primary)
+            VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+          `, [record.id, eqId, eq.equipment_type, eq.equipment_name, eq.equipment_code, eq.building_code]);
+        }
       }
     }
 
