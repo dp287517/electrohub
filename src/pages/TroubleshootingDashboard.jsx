@@ -350,8 +350,8 @@ function TroubleshootingDetailModal({ record, onClose, onDelete, onRefresh }) {
 
             {/* Colonne droite - Mini plan et photos */}
             <div className="space-y-6">
-              {/* Mini plan de localisation */}
-              {record.equipment_id && record.equipment_type && (
+              {/* Mini plan de localisation - use equipment_original_id for non-UUID IDs (e.g. switchboards) */}
+              {(record.equipment_original_id || record.equipment_id) && record.equipment_type && (
                 <div>
                   <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
                     <MapPin size={16} className="text-blue-500" />
@@ -359,7 +359,7 @@ function TroubleshootingDetailModal({ record, onClose, onDelete, onRefresh }) {
                   </h3>
                   <MiniEquipmentPreview
                     equipment={{
-                      id: record.equipment_id,
+                      id: record.equipment_original_id || record.equipment_id,
                       name: record.equipment_name,
                       code: record.equipment_code,
                       building_code: record.building_code,
