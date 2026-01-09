@@ -621,6 +621,17 @@ export default function AtexMap({
   const [peBaskets, setPeBaskets] = useState([]);
   const peMarkersLayerRef = useRef(null);
 
+  // 🔍 PDF Text Search states
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [pdfTextItems, setPdfTextItems] = useState([]); // Extracted text items with positions
+  const [searchResults, setSearchResults] = useState([]); // Matching results
+  const [currentResultIndex, setCurrentResultIndex] = useState(0);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchHighlightLayerRef = useRef(null);
+  const pdfPageRef = useRef(null); // Store PDF page for text extraction
+  const pdfViewportRef = useRef(null); // Store viewport for coordinate conversion
+
   const fileUrl = useMemo(() => {
     if (!plan) return null;
     if (api?.atexMaps?.planFileUrlAuto) return api.atexMaps.planFileUrlAuto(plan, { bust: true });
@@ -1216,6 +1227,212 @@ export default function AtexMap({
       basketId: null
     });
   }
+
+  // 🔍 PDF Text Search Functions
+  async function extractPdfText() {
+    if (!fileUrl) return [];
+    if (pdfTextItems.length > 0) return pdfTextItems; // Already extracted
+
+    setSearchLoading(true);
+    try {
+      const loadingTask = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
+      const pdf = await loadingTask.promise;
+      const page = await pdf.getPage(Number(pageIndex) + 1);
+      const viewport = page.getViewport({ scale: 1 });
+      const textContent = await page.getTextContent();
+
+      // Store viewport dimensions for coordinate conversion
+      pdfViewportRef.current = { width: viewport.width, height: viewport.height };
+
+      // Extract text items with their positions
+      const items = textContent.items
+        .filter(item => item.str && item.str.trim())
+        .map(item => ({
+          str: item.str,
+          // PDF coordinates: origin at bottom-left, we need to flip Y
+          x: item.transform[4],
+          y: viewport.height - item.transform[5], // Flip Y for Leaflet (origin at top-left)
+          width: item.width || (item.str.length * 6), // Estimate width if not provided
+          height: item.height || 12, // Estimate height
+          transform: item.transform,
+        }));
+
+      setPdfTextItems(items);
+      await pdf.cleanup?.();
+      log("PDF text extracted", { itemCount: items.length });
+      return items;
+    } catch (err) {
+      console.error("[ATEX] extractPdfText error:", err);
+      return [];
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
+  async function performSearch(query) {
+    if (!query || query.trim().length < 2) {
+      setSearchResults([]);
+      setCurrentResultIndex(0);
+      clearSearchHighlight();
+      return;
+    }
+
+    const items = await extractPdfText();
+    if (items.length === 0) return;
+
+    const q = query.toLowerCase().trim();
+    const results = [];
+
+    // Search through all text items
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const text = item.str.toLowerCase();
+      let startIndex = 0;
+      let matchIndex;
+
+      // Find all occurrences in this item
+      while ((matchIndex = text.indexOf(q, startIndex)) !== -1) {
+        results.push({
+          itemIndex: i,
+          matchIndex,
+          text: item.str,
+          x: item.x,
+          y: item.y,
+          width: item.width,
+          height: item.height,
+        });
+        startIndex = matchIndex + 1;
+      }
+    }
+
+    setSearchResults(results);
+    setCurrentResultIndex(0);
+
+    if (results.length > 0) {
+      highlightSearchResult(results[0]);
+    } else {
+      clearSearchHighlight();
+    }
+
+    log("PDF search completed", { query, resultCount: results.length });
+  }
+
+  function highlightSearchResult(result) {
+    const m = mapRef.current;
+    const base = baseLayerRef.current;
+    if (!m || !base || !result || !pdfViewportRef.current) return;
+
+    // Get plan dimensions
+    const dims = getPlanDims(base);
+    if (!dims) return;
+
+    const { W: planW, H: planH, bounds } = dims;
+    const pdfVp = pdfViewportRef.current;
+
+    // Convert PDF coordinates to Leaflet coordinates
+    // PDF viewport size -> Plan canvas size (which is used as Leaflet bounds)
+    const scaleX = planW / pdfVp.width;
+    const scaleY = planH / pdfVp.height;
+
+    // Calculate rectangle bounds in Leaflet coordinates
+    const x1 = bounds.getWest() + (result.x * scaleX);
+    const y1 = bounds.getNorth() - (result.y * scaleY); // Leaflet Y is inverted
+    const x2 = x1 + (result.width * scaleX);
+    const y2 = y1 - (result.height * scaleY);
+
+    // Clear previous highlight
+    clearSearchHighlight();
+
+    // Create highlight layer if not exists
+    if (!searchHighlightLayerRef.current) {
+      searchHighlightLayerRef.current = L.layerGroup().addTo(m);
+    }
+
+    // Draw highlight rectangle with animation
+    const rectBounds = L.latLngBounds([[y2, x1], [y1, x2]]);
+    const highlightRect = L.rectangle(rectBounds, {
+      color: '#f59e0b',
+      weight: 3,
+      fillColor: '#fbbf24',
+      fillOpacity: 0.4,
+      className: 'search-highlight-rect',
+    });
+
+    // Add a larger outer glow rectangle
+    const glowRect = L.rectangle(rectBounds.pad(0.5), {
+      color: '#f59e0b',
+      weight: 2,
+      fillColor: '#fbbf24',
+      fillOpacity: 0.15,
+      dashArray: '5, 5',
+      className: 'search-highlight-glow',
+    });
+
+    searchHighlightLayerRef.current.addLayer(glowRect);
+    searchHighlightLayerRef.current.addLayer(highlightRect);
+
+    // Zoom and pan to the result with padding
+    m.fitBounds(rectBounds.pad(2), {
+      maxZoom: m.getZoom() + 2,
+      animate: true,
+      duration: 0.5,
+    });
+  }
+
+  function clearSearchHighlight() {
+    if (searchHighlightLayerRef.current) {
+      searchHighlightLayerRef.current.clearLayers();
+    }
+  }
+
+  function navigateSearchResult(direction) {
+    if (searchResults.length === 0) return;
+
+    let newIndex = currentResultIndex + direction;
+    if (newIndex < 0) newIndex = searchResults.length - 1;
+    if (newIndex >= searchResults.length) newIndex = 0;
+
+    setCurrentResultIndex(newIndex);
+    highlightSearchResult(searchResults[newIndex]);
+  }
+
+  function closeSearch() {
+    setSearchOpen(false);
+    setSearchQuery("");
+    setSearchResults([]);
+    setCurrentResultIndex(0);
+    clearSearchHighlight();
+  }
+
+  // Keyboard shortcut for search (Ctrl+F)
+  useEffect(() => {
+    if (!open) return;
+
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+      if (e.key === 'Escape' && searchOpen) {
+        closeSearch();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [open, searchOpen]);
+
+  // Reset search when plan or page changes
+  useEffect(() => {
+    setPdfTextItems([]);
+    setSearchResults([]);
+    setSearchQuery("");
+    setCurrentResultIndex(0);
+    setSearchOpen(false);
+    clearSearchHighlight();
+    pdfViewportRef.current = null;
+  }, [fileUrl, pageIndex]);
+
   async function updateEquipmentMacroAndSub(equipmentId, subareaId, subareaNameDirect = null) {
     try {
       const subName =
@@ -2361,6 +2578,14 @@ function setupHandleDrag(map, onMoveCallback) {
             💾
           </button>
         )}
+        {/* 🔍 Bouton recherche texte PDF */}
+        <button
+          className="btn-search"
+          title="Rechercher du texte sur le plan (Ctrl+F)"
+          onClick={() => setSearchOpen(true)}
+        >
+          🔍
+        </button>
         {/* Légende - 🆕 Bouton distinct et plus visible */}
         <button
           className="btn-legend"
@@ -2373,7 +2598,66 @@ function setupHandleDrag(map, onMoveCallback) {
       {/* Overlay aide polygone */}
       {drawing === DRAW_POLY && (
         <div className="absolute left-3 top-3 z-[5000] px-2 py-1 text-[11px] rounded bg-blue-50 border border-blue-200 text-blue-800 shadow">
-          Mode polygone : cliquez pour ajouter des sommets, puis “Terminer polygone”.
+          Mode polygone : cliquez pour ajouter des sommets, puis "Terminer polygone".
+        </div>
+      )}
+      {/* 🔍 Barre de recherche texte PDF */}
+      {searchOpen && (
+        <div className="atex-search-bar">
+          <div className="search-input-wrapper">
+            <span className="search-icon">🔍</span>
+            <input
+              type="text"
+              className="search-input"
+              placeholder="Rechercher sur le plan..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  performSearch(searchQuery);
+                } else if (e.key === 'Escape') {
+                  closeSearch();
+                }
+              }}
+              autoFocus
+            />
+            {searchLoading && (
+              <span className="search-loading">⏳</span>
+            )}
+          </div>
+          {searchResults.length > 0 && (
+            <div className="search-nav">
+              <span className="search-count">
+                {currentResultIndex + 1} / {searchResults.length}
+              </span>
+              <button
+                className="search-nav-btn"
+                onClick={() => navigateSearchResult(-1)}
+                title="Résultat précédent"
+              >
+                ◀
+              </button>
+              <button
+                className="search-nav-btn"
+                onClick={() => navigateSearchResult(1)}
+                title="Résultat suivant"
+              >
+                ▶
+              </button>
+            </div>
+          )}
+          {searchQuery.length >= 2 && searchResults.length === 0 && !searchLoading && (
+            <div className="search-no-results">
+              Aucun résultat
+            </div>
+          )}
+          <button
+            className="search-close-btn"
+            onClick={closeSearch}
+            title="Fermer la recherche"
+          >
+            ✕
+          </button>
         </div>
       )}
     </div>
