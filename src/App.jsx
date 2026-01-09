@@ -49,6 +49,7 @@ import FireControl from './pages/FireControl.jsx';
 import FireControlMap from './pages/FireControl_map.jsx';
 import TroubleshootingDashboard from './pages/TroubleshootingDashboard.jsx';
 import TroubleshootingDetail from './pages/TroubleshootingDetail.jsx';
+import SharedTroubleshootingView from './pages/SharedTroubleshootingView.jsx';
 // FloatingAssistant removed from global - now only in Dashboard for mobile
 
 // Component to redirect authenticated users to dashboard
@@ -71,6 +72,9 @@ export default function App() {
           <Route path="/signin" element={<AuthRedirect><SignIn /></AuthRedirect>} />
           <Route path="/signup" element={<AuthRedirect><SignUp /></AuthRedirect>} />
           <Route path="/lost-password" element={<LostPassword />} />
+
+          {/* Public - Shared Troubleshooting View (no auth required) */}
+          <Route path="/shared/troubleshooting/:token" element={<SharedTroubleshootingView />} />
 
           {/* Dashboard */}
           <Route
