@@ -9160,6 +9160,8 @@ app.use("/api/infra", mkProxy(infraTarget, { withRestream: true }));
 /* =================================================================
    Body parser APRES les proxys (pour nos routes locales uniquement)
    ================================================================= */
+// Special higher limit for troubleshooting create (photos in base64)
+app.use("/api/troubleshooting/create", express.json({ limit: "50mb" }));
 app.use(express.json({ limit: "25mb" }));
 
 // -------- API de base ----------
