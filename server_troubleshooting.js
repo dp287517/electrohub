@@ -1685,11 +1685,23 @@ router.get('/equipment/smart-search', async (req, res) => {
           let nameMatches = 0; // Track name-specific matches
           let locationMatches = 0; // Track building/floor matches
 
+          // Helper: pour les chiffres, utiliser word boundary pour éviter "5" matchant "35"
+          const wordMatches = (text, word) => {
+            if (!text || !word) return false;
+            // Pour les chiffres purs, utiliser word boundary
+            if (/^\d+$/.test(word)) {
+              const regex = new RegExp(`(^|[^0-9])${word}([^0-9]|$)`);
+              return regex.test(text);
+            }
+            // Pour les mots normaux, simple includes
+            return text.includes(word);
+          };
+
           for (const word of originalWords) {
-            const wordMatchesName = nameNorm.includes(word);
-            const wordMatchesBuilding = buildingNorm.includes(word);
-            const wordMatchesFloor = floorNorm.includes(word);
-            const wordMatchesCode = codeNorm.includes(word);
+            const wordMatchesName = wordMatches(nameNorm, word);
+            const wordMatchesBuilding = wordMatches(buildingNorm, word);
+            const wordMatchesFloor = wordMatches(floorNorm, word);
+            const wordMatchesCode = wordMatches(codeNorm, word);
 
             if (wordMatchesName || wordMatchesBuilding || wordMatchesFloor || wordMatchesCode) {
               originalWordMatches++;
@@ -1718,12 +1730,12 @@ router.get('/equipment/smart-search', async (req, res) => {
           });
           const primaryWord = mainWords[0];
           const primaryWordMatchesName = primaryWord && (
-            nameNorm.includes(primaryWord) ||
+            wordMatches(nameNorm, primaryWord) ||
             expandedTerms.some(term => {
               // Check if this expanded term comes from the primary word and matches name
               const termFromPrimary = EQUIPMENT_SYNONYMS[primaryWord]?.includes(term) ||
                                        normalizeString(primaryWord) === term;
-              return termFromPrimary && nameNorm.includes(term);
+              return termFromPrimary && wordMatches(nameNorm, term);
             })
           );
 
@@ -1769,51 +1781,51 @@ router.get('/equipment/smart-search', async (req, res) => {
       }
     }
 
-    // Filtrer les résultats peu pertinents
-    // STRICT: Le mot principal (type d'équipement) doit matcher le nom
-    const queryWords = normalizeString(q).split(' ').filter(w => w.length > 1);
+    // ===============================================================
+    // FILTRAGE STRICT - Tous les mots importants doivent matcher
+    // ===============================================================
+    const queryWords = normalizeString(q).split(' ').filter(w => w.length > 0);
     const queryWordCount = queryWords.length;
 
-    // Identifier le mot principal (premier mot non-numérique, non-étage)
+    // Identifier les mots principaux (non-numériques, non-étage)
+    const floorTerms = ['rdc', 'rez', 'ss', 'sous', 'sol', '1er', '2eme', '3eme', '4eme', '5eme'];
     const mainQueryWords = queryWords.filter(w => {
       const isNumber = /^\d+$/.test(w);
-      const isFloorTerm = ['rdc', 'rez', 'ss', 'sous', 'sol', '1er', '2eme', '3eme', '4eme', '5eme'].includes(w);
+      const isFloorTerm = floorTerms.includes(w);
       return !isNumber && !isFloorTerm;
     });
     const hasPrimaryWord = mainQueryWords.length > 0;
+    const primaryWord = mainQueryWords[0];
 
     let filteredResults = results;
 
-    if (hasPrimaryWord && queryWordCount >= 2) {
-      // STRICT: Le mot principal DOIT matcher le nom
-      // Exemple: "porte 22 rez" → "porte" doit être dans le nom
-      const primaryMatches = results.filter(r => r.primaryWordMatch);
+    // RÈGLE STRICTE : Pour 2+ mots, TOUS les mots importants doivent matcher quelque part
+    if (queryWordCount >= 2) {
+      // Filtrer : le mot principal DOIT matcher le nom
+      // ET au moins un autre terme doit matcher (building, floor, code, ou autre dans le nom)
+      if (hasPrimaryWord) {
+        // Ex: "convoyeur 5" → "convoyeur" DOIT être dans le nom ET "5" doit matcher quelque chose
+        const strictMatches = results.filter(r => {
+          // Le mot principal doit être dans le nom
+          if (!r.primaryWordMatch) return false;
+          // Au moins 2 mots de la requête doivent matcher
+          return r.matchCount >= 2;
+        });
 
-      if (primaryMatches.length > 0) {
-        // On a des matchs sur le mot principal - les garder
-        filteredResults = primaryMatches;
-
-        // En plus, pour 3+ mots, exiger 2+ matchs au total
-        if (queryWordCount >= 3) {
-          const strictMatches = primaryMatches.filter(r => r.matchCount >= 2);
-          if (strictMatches.length > 0) {
-            filteredResults = strictMatches;
-          }
+        if (strictMatches.length > 0) {
+          filteredResults = strictMatches;
+        } else {
+          // Pas de match strict → AUCUN RÉSULTAT
+          // "convoyeur 5" sans convoyeur 5 = pas de résultat
+          filteredResults = [];
         }
       } else {
-        // Pas de match sur le mot principal - fallback aux matchs multiples
+        // Requête sans mot principal (ex: "22 rdc") → les 2 doivent matcher
         const multiMatches = results.filter(r => r.matchCount >= 2);
-        if (multiMatches.length > 0) {
-          filteredResults = multiMatches;
-        }
-      }
-    } else if (queryWordCount >= 2) {
-      // Requête sans mot principal clair (ex: "22 rdc") - garder matchs multiples
-      const multiMatches = results.filter(r => r.matchCount >= 2);
-      if (multiMatches.length > 0) {
-        filteredResults = multiMatches;
+        filteredResults = multiMatches; // Peut être vide
       }
     }
+    // Pour 1 seul mot, garder tous les résultats triés par score
 
     // Trier par score décroissant
     filteredResults.sort((a, b) => b.score - a.score);
