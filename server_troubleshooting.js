@@ -106,6 +106,69 @@ export async function initTroubleshootingTables(poolInstance) {
     await pool.query(`ALTER TABLE troubleshooting_records ADD COLUMN IF NOT EXISTS equipment_original_id TEXT`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_troubleshooting_original_id ON troubleshooting_records(equipment_type, equipment_original_id)`);
 
+    // Migration: Backfill equipment_original_id for existing records that don't have it
+    // This finds the equipment ID by matching equipment_name and equipment_type
+    console.log('[TROUBLESHOOTING] 🔄 Checking for records needing equipment_original_id backfill...');
+    const recordsToFix = await pool.query(`
+      SELECT id, equipment_type, equipment_name, equipment_id, site
+      FROM troubleshooting_records
+      WHERE equipment_original_id IS NULL
+        AND equipment_name IS NOT NULL
+        AND equipment_type IS NOT NULL
+    `);
+
+    if (recordsToFix.rows.length > 0) {
+      console.log(`[TROUBLESHOOTING] 🔧 Backfilling ${recordsToFix.rows.length} records...`);
+      for (const record of recordsToFix.rows) {
+        try {
+          let foundId = null;
+          const { equipment_type, equipment_name, equipment_id, site } = record;
+
+          // If equipment_id is already set (UUID), use it as original_id
+          if (equipment_id) {
+            foundId = equipment_id;
+          } else {
+            // Look up ID from source table by name
+            const tableMap = {
+              switchboard: { table: 'switchboards', nameCol: 'name', siteCol: 'site' },
+              vsd: { table: 'vsd_equipments', nameCol: 'name', siteCol: 'site' },
+              meca: { table: 'meca_equipments', nameCol: 'name', siteCol: null },
+              mobile: { table: 'me_equipments', nameCol: 'name', siteCol: null },
+              hv: { table: 'hv_equipments', nameCol: 'name', siteCol: 'site' },
+              glo: { table: 'glo_equipments', nameCol: 'name', siteCol: null },
+              datahub: { table: 'dh_items', nameCol: 'name', siteCol: null }
+            };
+
+            const config = tableMap[equipment_type];
+            if (config) {
+              let query, params;
+              if (config.siteCol) {
+                query = `SELECT id FROM ${config.table} WHERE ${config.nameCol} = $1 AND ${config.siteCol} = $2 LIMIT 1`;
+                params = [equipment_name, site];
+              } else {
+                query = `SELECT id FROM ${config.table} WHERE ${config.nameCol} = $1 LIMIT 1`;
+                params = [equipment_name];
+              }
+              const result = await pool.query(query, params);
+              if (result.rows.length > 0) {
+                foundId = String(result.rows[0].id);
+              }
+            }
+          }
+
+          if (foundId) {
+            await pool.query(
+              'UPDATE troubleshooting_records SET equipment_original_id = $1 WHERE id = $2',
+              [foundId, record.id]
+            );
+            console.log(`[TROUBLESHOOTING] ✅ Backfilled record ${record.id} with equipment_original_id=${foundId}`);
+          }
+        } catch (err) {
+          console.warn(`[TROUBLESHOOTING] ⚠️ Could not backfill record ${record.id}:`, err.message);
+        }
+      }
+    }
+
     // Multi-equipment support table - links troubleshooting to multiple equipment
     await pool.query(`
       CREATE TABLE IF NOT EXISTS troubleshooting_equipment_links (
