@@ -288,19 +288,22 @@ function getWeeklyDateRange() {
 }
 
 /**
- * Get date range for last month
+ * Get date range for last 30 days
  */
 function getMonthlyDateRange() {
   const parisTime = getParisTime();
 
-  // Last month's first and last day
-  const lastMonth = new Date(parisTime.getFullYear(), parisTime.getMonth() - 1, 1);
-  const lastDayOfLastMonth = new Date(parisTime.getFullYear(), parisTime.getMonth(), 0);
+  // Last 30 days ending yesterday
+  const endDate = new Date(parisTime);
+  endDate.setDate(endDate.getDate() - 1); // Yesterday
+
+  const startDate = new Date(endDate);
+  startDate.setDate(startDate.getDate() - 29); // 30 days total
 
   return {
-    startDate: lastMonth.toISOString().split('T')[0],
-    endDate: lastDayOfLastMonth.toISOString().split('T')[0],
-    monthName: lastMonth.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'Europe/Paris' })
+    startDate: startDate.toISOString().split('T')[0],
+    endDate: endDate.toISOString().split('T')[0],
+    monthName: 'Les 30 derniers jours'
   };
 }
 
@@ -801,7 +804,7 @@ function generateRiskChart(riskData, width = 500, height = 300) {
   };
 
   const config = {
-    type: 'horizontalBar',
+    type: 'bar',
     data: {
       labels: topRisks.map(r => agentNames[r.equipment_type] || r.equipment_type),
       datasets: [{
@@ -1158,7 +1161,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
  * Generate Weekly KPI Report Email Template
  * Beautiful email with charts, KPIs, risk analysis, and agent summaries
  */
-function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, agentSnapshots, agentImages = {}, agentCustomNames = {}) {
+function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, maintenanceStats, agentSnapshots, agentImages = {}, agentCustomNames = {}) {
   const { startDate, endDate } = dateRange;
   const formattedRange = formatDateRangeFr(startDate, endDate);
 
@@ -1175,6 +1178,12 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskD
   const avgRepairTime = Math.round(parseFloat(stats.avg_repair_time) || 0);
   const totalDowntime = Math.round(parseInt(stats.total_downtime) || 0);
   const downtimeHours = (totalDowntime / 60).toFixed(1);
+
+  // Maintenance stats
+  const maintenanceDone = parseInt(maintenanceStats?.completed) || 0;
+  const maintenanceDelayed = parseInt(maintenanceStats?.delayed) || 0;
+  const maintenancePlanned = parseInt(maintenanceStats?.planned) || 0;
+  const maintenanceTotal = maintenanceDone + maintenanceDelayed + maintenancePlanned;
 
   return `
 <!DOCTYPE html>
@@ -1279,6 +1288,33 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskD
     </div>
     ` : ''}
 
+    <!-- Maintenance Section -->
+    <div class="section">
+      <div class="section-title">🔧 Maintenance préventive</div>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 15px;">
+        <div style="background: #ECFDF5; border-radius: 12px; padding: 20px; text-align: center;">
+          <div style="font-size: 28px; font-weight: bold; color: #22C55E;">${maintenanceDone}</div>
+          <div style="font-size: 12px; color: #065F46; text-transform: uppercase; margin-top: 5px;">Effectuées</div>
+        </div>
+        <div style="background: #FEF3C7; border-radius: 12px; padding: 20px; text-align: center;">
+          <div style="font-size: 28px; font-weight: bold; color: #F59E0B;">${maintenancePlanned}</div>
+          <div style="font-size: 12px; color: #92400E; text-transform: uppercase; margin-top: 5px;">Prévues</div>
+        </div>
+        <div style="background: #FEE2E2; border-radius: 12px; padding: 20px; text-align: center;">
+          <div style="font-size: 28px; font-weight: bold; color: #DC2626;">${maintenanceDelayed}</div>
+          <div style="font-size: 12px; color: #991B1B; text-transform: uppercase; margin-top: 5px;">En retard</div>
+        </div>
+      </div>
+      ${maintenanceTotal > 0 ? `
+      <div style="margin-top: 15px; padding: 15px; background: #F3F4F6; border-radius: 8px; text-align: center;">
+        <span style="font-weight: 600;">Taux de réalisation:</span>
+        <span style="color: ${maintenanceDone / maintenanceTotal >= 0.8 ? '#22C55E' : maintenanceDone / maintenanceTotal >= 0.5 ? '#F59E0B' : '#DC2626'}; font-weight: bold;">
+          ${Math.round((maintenanceDone / maintenanceTotal) * 100)}%
+        </span>
+      </div>
+      ` : ''}
+    </div>
+
     <!-- Severity & Risk Analysis -->
     <div class="section">
       <div class="section-title">⚠️ Analyse des risques</div>
@@ -1343,17 +1379,16 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskD
     ` : ''}
 
     <!-- Agent Summary -->
-    ${agentSnapshots.length > 0 ? `
     <div class="section">
-      <div class="section-title">🤖 Performance des agents IA</div>
+      <div class="section-title">🤖 Nos agents IA</div>
       <div class="agent-grid">
-        ${agentSnapshots.filter(s => s.agent_type !== 'main').map(snapshot => {
-          const agent = AGENT_AVATARS[snapshot.agent_type] || AGENT_AVATARS.main;
-          const avgHealth = Math.round(parseFloat(snapshot.avg_health_score) || 0);
-          const healthColor = avgHealth >= 80 ? '#22C55E' : avgHealth >= 60 ? '#FBBF24' : '#DC2626';
-          const imageData = agentImages[snapshot.agent_type];
+        ${Object.entries(AGENT_AVATARS).filter(([key]) => key !== 'main').map(([agentType, agent]) => {
+          const snapshot = agentSnapshots.find(s => s.agent_type === agentType);
+          const avgHealth = snapshot ? Math.round(parseFloat(snapshot.avg_health_score) || 0) : null;
+          const healthColor = avgHealth !== null ? (avgHealth >= 80 ? '#22C55E' : avgHealth >= 60 ? '#FBBF24' : '#DC2626') : '#9CA3AF';
+          const imageData = agentImages[agentType];
           const imageUrl = imageData?.hasCid ? 'cid:' + imageData.cid : imageData?.httpUrl || null;
-          const agentName = agentCustomNames[snapshot.agent_type] || agent.name;
+          const agentName = agentCustomNames[agentType] || agent.name;
 
           return '<div class="agent-card">' +
             (imageUrl ?
@@ -1361,13 +1396,16 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskD
               '<div class="agent-avatar-fallback" style="background: linear-gradient(135deg, ' + agent.color + ', ' + agent.color + 'CC);">' + agent.icon + '</div>'
             ) +
             '<div class="agent-name">' + agentName + '</div>' +
-            '<div class="agent-stats">' + (parseInt(snapshot.total_troubleshooting) || 0) + ' dépannages • ' + (parseInt(snapshot.total_resolved) || 0) + ' résolus</div>' +
-            '<div class="agent-health" style="background: ' + healthColor + ';">Santé: ' + avgHealth + '%</div>' +
+            (snapshot ?
+              '<div class="agent-stats">' + (parseInt(snapshot.total_troubleshooting) || 0) + ' dépannages • ' + (parseInt(snapshot.total_resolved) || 0) + ' résolus</div>' +
+              '<div class="agent-health" style="background: ' + healthColor + ';">Santé: ' + avgHealth + '%</div>'
+              :
+              '<div class="agent-stats" style="color: #9CA3AF;">' + agent.description + '</div>'
+            ) +
           '</div>';
         }).join('')}
       </div>
     </div>
-    ` : ''}
 
     <!-- Footer -->
     <div class="footer">
@@ -1407,16 +1445,15 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, risk
   const controlsCompleted = parseInt(maintenanceStats.completed) || 0;
   const controlsNonConform = parseInt(maintenanceStats.non_conform) || 0;
 
-  // Helper to generate agent cards
+  // Helper to generate agent cards - shows all agents from AGENT_AVATARS
   const generateAgentCards = () => {
-    if (agentSnapshots.length === 0) return '';
-    return agentSnapshots.filter(s => s.agent_type !== 'main').map(snapshot => {
-      const agent = AGENT_AVATARS[snapshot.agent_type] || AGENT_AVATARS.main;
-      const avgHealth = Math.round(parseFloat(snapshot.avg_health_score) || 0);
-      const healthColor = avgHealth >= 80 ? '#22C55E' : avgHealth >= 60 ? '#FBBF24' : '#DC2626';
-      const imageData = agentImages[snapshot.agent_type];
+    return Object.entries(AGENT_AVATARS).filter(([key]) => key !== 'main').map(([agentType, agent]) => {
+      const snapshot = agentSnapshots.find(s => s.agent_type === agentType);
+      const avgHealth = snapshot ? Math.round(parseFloat(snapshot.avg_health_score) || 0) : null;
+      const healthColor = avgHealth !== null ? (avgHealth >= 80 ? '#22C55E' : avgHealth >= 60 ? '#FBBF24' : '#DC2626') : '#9CA3AF';
+      const imageData = agentImages[agentType];
       const imageUrl = imageData?.hasCid ? 'cid:' + imageData.cid : imageData?.httpUrl || null;
-      const agentName = agentCustomNames[snapshot.agent_type] || agent.name;
+      const agentName = agentCustomNames[agentType] || agent.name;
 
       return '<div class="agent-card">' +
         (imageUrl ?
@@ -1424,7 +1461,11 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, risk
           '<div class="agent-avatar-fallback" style="background: linear-gradient(135deg, ' + agent.color + ', ' + agent.color + 'CC);">' + agent.icon + '</div>'
         ) +
         '<div class="agent-name">' + agentName + '</div>' +
-        '<div class="agent-health" style="background: ' + healthColor + ';">' + avgHealth + '%</div>' +
+        (avgHealth !== null ?
+          '<div class="agent-health" style="background: ' + healthColor + ';">' + avgHealth + '%</div>'
+          :
+          '<div class="agent-health" style="background: #9CA3AF;">-</div>'
+        ) +
       '</div>';
     }).join('');
   };
@@ -1618,15 +1659,13 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, risk
     </div>
     ` : ''}
 
-    ${agentSnapshots.length > 0 ? `
     <!-- Agent Performance -->
     <div class="section">
-      <div class="section-title">🤖 Synthèse des agents IA</div>
+      <div class="section-title">🤖 Nos agents IA</div>
       <div class="agent-row">
         ${generateAgentCards()}
       </div>
     </div>
-    ` : ''}
 
     <!-- Footer -->
     <div class="footer">
@@ -1848,11 +1887,12 @@ async function sendWeeklyReport(email, site) {
     const { startDate, endDate } = dateRange;
 
     // Fetch all data for the week
-    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, agentSnapshots, agentImagesData, agentCustomNames] = await Promise.all([
+    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, agentSnapshots, agentImagesData, agentCustomNames] = await Promise.all([
       getStatsForDateRange(site, startDate, endDate),
       getDailyBreakdown(site, startDate, endDate),
       getEquipmentTypeBreakdown(site, startDate, endDate),
       getProblematicEquipment(site, startDate, endDate),
+      getMaintenanceStats(site, startDate, endDate),
       getAgentSnapshotsForRange(site, startDate, endDate),
       getAgentImagesData(),
       getAgentCustomNames()
@@ -1865,7 +1905,7 @@ async function sendWeeklyReport(email, site) {
     const riskData = calculateRiskScores(equipmentBreakdown, totalIncidents);
 
     // Generate email HTML
-    const htmlContent = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, agentSnapshots, agentImages, agentCustomNames);
+    const htmlContent = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, maintenanceStats, agentSnapshots, agentImages, agentCustomNames);
 
     // Prepare email
     const msg = {
@@ -2500,11 +2540,12 @@ router.get('/preview-weekly', async (req, res) => {
     const dateRange = getWeeklyDateRange();
     const { startDate, endDate } = dateRange;
 
-    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, agentSnapshots, agentImages, agentCustomNames] = await Promise.all([
+    const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, agentSnapshots, agentImages, agentCustomNames] = await Promise.all([
       getStatsForDateRange(site, startDate, endDate),
       getDailyBreakdown(site, startDate, endDate),
       getEquipmentTypeBreakdown(site, startDate, endDate),
       getProblematicEquipment(site, startDate, endDate),
+      getMaintenanceStats(site, startDate, endDate),
       getAgentSnapshotsForRange(site, startDate, endDate),
       getAgentImagesForPreview(),
       getAgentCustomNames()
@@ -2513,7 +2554,7 @@ router.get('/preview-weekly', async (req, res) => {
     const totalIncidents = parseInt(stats.total_outages) || 0;
     const riskData = calculateRiskScores(equipmentBreakdown, totalIncidents);
 
-    const html = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, agentSnapshots, agentImages, agentCustomNames);
+    const html = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, riskData, problematicEquipment, maintenanceStats, agentSnapshots, agentImages, agentCustomNames);
 
     res.setHeader('Content-Type', 'text/html');
     res.send(html);
