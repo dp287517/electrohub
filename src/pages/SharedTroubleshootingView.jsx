@@ -309,7 +309,7 @@ export default function SharedTroubleshootingView() {
             </div>
 
             {/* Mini Plan - Uses public API with share token validation */}
-            {record.equipment_type && record.equipment_id && (
+            {record.equipment_type && (record.equipment_id || record.equipment_original_id) && (
               <div className="bg-white rounded-xl shadow-sm border p-6">
                 <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <MapPin size={18} className="text-orange-500" />

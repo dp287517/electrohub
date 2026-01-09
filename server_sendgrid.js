@@ -3311,7 +3311,7 @@ router.get('/shared/:token/map-data', async (req, res) => {
 
     // Get troubleshooting record
     const troubleshootingResult = await pool.query(
-      'SELECT equipment_type, equipment_id, building_code, floor FROM troubleshooting_records WHERE id = $1',
+      'SELECT equipment_type, equipment_id, equipment_original_id, building_code, floor FROM troubleshooting_records WHERE id = $1',
       [troubleshootingId]
     );
 
@@ -3319,9 +3319,12 @@ router.get('/shared/:token/map-data', async (req, res) => {
       return res.status(404).json({ error: 'Troubleshooting not found' });
     }
 
-    const { equipment_type, equipment_id, building_code, floor } = troubleshootingResult.rows[0];
+    const { equipment_type, equipment_id, equipment_original_id, building_code, floor } = troubleshootingResult.rows[0];
 
-    if (!equipment_type || !equipment_id) {
+    // Use equipment_id or fallback to equipment_original_id
+    const effectiveEquipmentId = equipment_id || equipment_original_id;
+
+    if (!equipment_type || !effectiveEquipmentId) {
       return res.json({ success: true, hasPosition: false, reason: 'No equipment linked' });
     }
 
@@ -3348,7 +3351,7 @@ router.get('/shared/:token/map-data', async (req, res) => {
     // Get position data
     const positionResult = await pool.query(
       `SELECT * FROM ${config.table} WHERE ${config.idField} = $1 ORDER BY created_at DESC LIMIT 1`,
-      [equipment_id]
+      [effectiveEquipmentId]
     );
 
     if (positionResult.rows.length === 0) {
@@ -3426,7 +3429,7 @@ router.get('/shared/:token/plan-file', async (req, res) => {
 
     // Validate share token and get troubleshooting data
     const tokenResult = await pool.query(`
-      SELECT t.troubleshooting_id, tr.equipment_type, tr.equipment_id
+      SELECT t.troubleshooting_id, tr.equipment_type, tr.equipment_id, tr.equipment_original_id
       FROM troubleshooting_share_tokens t
       JOIN troubleshooting_records tr ON tr.id = t.troubleshooting_id
       WHERE t.token = $1 AND (t.expires_at IS NULL OR t.expires_at > NOW())
@@ -3436,9 +3439,12 @@ router.get('/shared/:token/plan-file', async (req, res) => {
       return res.status(404).json({ error: 'Invalid or expired token' });
     }
 
-    const { equipment_type, equipment_id } = tokenResult.rows[0];
+    const { equipment_type, equipment_id, equipment_original_id } = tokenResult.rows[0];
 
-    if (!equipment_type || !equipment_id) {
+    // Use equipment_id or fallback to equipment_original_id
+    const effectiveEquipmentId = equipment_id || equipment_original_id;
+
+    if (!equipment_type || !effectiveEquipmentId) {
       return res.status(404).json({ error: 'No equipment linked' });
     }
 
@@ -3465,7 +3471,7 @@ router.get('/shared/:token/plan-file', async (req, res) => {
     // Get position to find logical_name
     const positionResult = await pool.query(
       `SELECT logical_name FROM ${config.table} WHERE ${config.idField} = $1 LIMIT 1`,
-      [equipment_id]
+      [effectiveEquipmentId]
     );
 
     if (positionResult.rows.length === 0) {
