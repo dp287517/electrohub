@@ -48,6 +48,128 @@ const AGENT_AVATARS = {
   firecontrol: { name: 'Blaze', color: '#EF4444', icon: '🧯', description: 'Sécurité incendie' }
 };
 
+// Mapping from equipment_type to app ID (for permission checking)
+const EQUIPMENT_TYPE_TO_APP = {
+  'switchboard': 'switchboards',
+  'device': 'switchboards',
+  'vsd': 'vsd',
+  'meca': 'meca',
+  'mobile': 'mobile-equipments',
+  'mobile_equipment': 'mobile-equipments',
+  'hv': 'hv',
+  'glo': 'glo',
+  'datahub': 'datahub',
+  'infrastructure': 'infrastructure',
+  'atex': 'atex',
+  'doors': 'doors',
+  'firecontrol': 'firecontrol'
+};
+
+// Admin emails (have access to everything)
+const ADMIN_EMAILS = [
+  'daniel.x.palha@haleon.com',
+  'palhadaniel.elec@gmail.com'
+];
+
+/**
+ * Get user permissions from database
+ * Returns the allowed_apps array for a user
+ */
+async function getUserPermissions(email) {
+  if (!email) return { allowedApps: [], isAdmin: false };
+
+  // Check if admin
+  if (ADMIN_EMAILS.includes(email.toLowerCase())) {
+    return { allowedApps: null, isAdmin: true }; // null = all apps
+  }
+
+  try {
+    // Check haleon_users first
+    let result = await pool.query(`
+      SELECT allowed_apps, is_validated, is_active
+      FROM haleon_users
+      WHERE LOWER(email) = LOWER($1)
+    `, [email]);
+
+    if (result.rows.length > 0) {
+      const user = result.rows[0];
+      if (!user.is_validated || !user.is_active) {
+        return { allowedApps: [], isAdmin: false };
+      }
+      return {
+        allowedApps: user.allowed_apps || null, // null = all apps
+        isAdmin: false
+      };
+    }
+
+    // Check external users
+    result = await pool.query(`
+      SELECT allowed_apps, is_active
+      FROM users
+      WHERE LOWER(email) = LOWER($1)
+    `, [email]);
+
+    if (result.rows.length > 0) {
+      const user = result.rows[0];
+      if (!user.is_active) {
+        return { allowedApps: [], isAdmin: false };
+      }
+      return {
+        allowedApps: user.allowed_apps || null,
+        isAdmin: false
+      };
+    }
+
+    // User not found - no access
+    return { allowedApps: [], isAdmin: false };
+
+  } catch (error) {
+    console.error('[SendGrid] Error fetching user permissions:', error.message);
+    return { allowedApps: [], isAdmin: false };
+  }
+}
+
+/**
+ * Check if user can see a specific equipment type
+ */
+function canUserSeeEquipmentType(permissions, equipmentType) {
+  // Admin sees everything
+  if (permissions.isAdmin) return true;
+
+  // null allowedApps = all apps
+  if (permissions.allowedApps === null) return true;
+
+  // Empty array = no access
+  if (!permissions.allowedApps || permissions.allowedApps.length === 0) return false;
+
+  // Check if equipment type's app is in allowed apps
+  const appId = EQUIPMENT_TYPE_TO_APP[equipmentType];
+  if (!appId) return false;
+
+  return permissions.allowedApps.includes(appId);
+}
+
+/**
+ * Get allowed equipment types for a user
+ */
+function getAllowedEquipmentTypes(permissions) {
+  if (permissions.isAdmin || permissions.allowedApps === null) {
+    // Return all equipment types
+    return Object.keys(AGENT_AVATARS).filter(k => k !== 'main');
+  }
+
+  if (!permissions.allowedApps || permissions.allowedApps.length === 0) {
+    return [];
+  }
+
+  // Filter equipment types based on allowed apps
+  return Object.keys(AGENT_AVATARS).filter(type => {
+    if (type === 'main') return false;
+    const appId = EQUIPMENT_TYPE_TO_APP[type];
+    return appId && permissions.allowedApps.includes(appId);
+  });
+}
+
 // ============================================================
 // AUTH MIDDLEWARE
 // ============================================================
@@ -325,12 +447,58 @@ function formatDateRangeFr(startDate, endDate) {
 }
 
 /**
- * Generate QuickChart URL for a chart
+ * Generate QuickChart URL for a chart (sync version for backward compatibility)
  * Uses QuickChart.io service to generate chart images
  */
 function generateChartUrl(config, width = 500, height = 300) {
-  const chartConfig = encodeURIComponent(JSON.stringify(config));
-  return `https://quickchart.io/chart?c=${chartConfig}&w=${width}&h=${height}&bkg=white`;
+  try {
+    const chartConfig = JSON.stringify(config);
+    const url = `https://quickchart.io/chart?c=${encodeURIComponent(chartConfig)}&w=${width}&h=${height}&bkg=white&f=png`;
+    console.log(`[SendGrid] Generated chart URL (length: ${url.length})`);
+    return url;
+  } catch (error) {
+    console.error('[SendGrid] Error generating chart URL:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Generate a short chart URL using QuickChart's API (async)
+ * This creates a shorter, cached URL that works better in emails
+ */
+async function generateShortChartUrl(config, width = 500, height = 300) {
+  try {
+    const response = await fetch('https://quickchart.io/chart/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chart: config,
+        width: width,
+        height: height,
+        backgroundColor: 'white',
+        format: 'png'
+      })
+    });
+
+    if (!response.ok) {
+      console.error(`[SendGrid] QuickChart API error: ${response.status}`);
+      // Fallback to regular URL
+      return generateChartUrl(config, width, height);
+    }
+
+    const data = await response.json();
+    if (data.success && data.url) {
+      console.log(`[SendGrid] Generated short chart URL: ${data.url}`);
+      return data.url;
+    }
+
+    // Fallback to regular URL
+    return generateChartUrl(config, width, height);
+  } catch (error) {
+    console.error('[SendGrid] Error generating short chart URL:', error.message);
+    // Fallback to regular URL
+    return generateChartUrl(config, width, height);
+  }
 }
 
 // ============================================================
@@ -752,48 +920,43 @@ function calculateRiskScores(equipmentBreakdown, totalIncidents) {
 
 /**
  * Generate incidents per day bar chart URL
+ * Uses simple labels to avoid encoding issues
  */
 function generateIncidentsChart(dailyData, width = 600, height = 250) {
+  // Use simple day/month format to avoid encoding issues
   const labels = dailyData.map(d => {
     const date = new Date(d.date);
-    return date.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' });
+    const day = date.getDate();
+    const month = date.getMonth() + 1;
+    return `${day}/${month}`;
   });
 
+  // Simplify config for better URL encoding
   const config = {
     type: 'bar',
     data: {
       labels: labels,
       datasets: [
         {
-          label: 'Critiques',
-          data: dailyData.map(d => parseInt(d.critical) || 0),
-          backgroundColor: '#DC2626'
-        },
-        {
-          label: 'Majeurs',
-          data: dailyData.map(d => parseInt(d.major) || 0),
-          backgroundColor: '#F97316'
-        },
-        {
-          label: 'Autres',
-          data: dailyData.map(d => Math.max(0, parseInt(d.total) - parseInt(d.critical || 0) - parseInt(d.major || 0))),
+          label: 'Total',
+          data: dailyData.map(d => parseInt(d.total) || 0),
           backgroundColor: '#3B82F6'
         }
       ]
     },
     options: {
       plugins: {
-        legend: { position: 'bottom' },
-        title: { display: true, text: 'Incidents par jour' }
+        legend: { display: false }
       },
       scales: {
-        x: { stacked: true },
-        y: { stacked: true, beginAtZero: true }
+        y: { beginAtZero: true }
       }
     }
   };
 
-  return generateChartUrl(config, width, height);
+  const url = generateChartUrl(config, width, height);
+  console.log(`[SendGrid] Chart URL generated for ${dailyData.length} days of data`);
+  return url;
 }
 
 /**
@@ -939,25 +1102,33 @@ function generateAgentAvatarSVG(agentType, size = 40) {
  * Generate the full HTML email template
  * Structure: For each agent with data, show agent info + their troubleshooting table
  */
-function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, agentImages = {}, agentCustomNames = {}) {
+function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, agentImages = {}, agentCustomNames = {}, allowedEquipmentTypes = null) {
   const formattedDate = formatDateFr(date);
-  const hasOutages = outages.length > 0;
+
+  // Filter outages by permissions if provided
+  const filteredOutages = allowedEquipmentTypes
+    ? outages.filter(o => allowedEquipmentTypes.includes(o.equipment_type))
+    : outages;
+
+  const hasOutages = filteredOutages.length > 0;
 
   // Group outages by equipment type (agent type)
-  const outagesByAgent = outages.reduce((acc, outage) => {
+  const outagesByAgent = filteredOutages.reduce((acc, outage) => {
     const type = outage.equipment_type || 'other';
     if (!acc[type]) acc[type] = [];
     acc[type].push(outage);
     return acc;
   }, {});
 
-  // Create a map of agent snapshots by type
+  // Create a map of agent snapshots by type (filtered)
   const snapshotsByAgent = {};
   agentSnapshots.forEach(snapshot => {
-    snapshotsByAgent[snapshot.agent_type] = snapshot;
+    if (!allowedEquipmentTypes || allowedEquipmentTypes.includes(snapshot.agent_type)) {
+      snapshotsByAgent[snapshot.agent_type] = snapshot;
+    }
   });
 
-  // Get all agent types that have either snapshots or outages
+  // Get all agent types that have either snapshots or outages (filtered by permissions)
   const allAgentTypes = new Set([
     ...Object.keys(outagesByAgent),
     ...Object.keys(snapshotsByAgent)
@@ -965,6 +1136,10 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
 
   // Filter to only agents with data (outages or meaningful snapshot data)
   const agentsWithData = Array.from(allAgentTypes).filter(agentType => {
+    // Also check permissions
+    if (allowedEquipmentTypes && !allowedEquipmentTypes.includes(agentType)) {
+      return false;
+    }
     const hasOutagesForAgent = outagesByAgent[agentType]?.length > 0;
     const snapshot = snapshotsByAgent[agentType];
     const hasSnapshotData = snapshot && (
@@ -984,6 +1159,14 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
     const outagesB = outagesByAgent[b]?.length || 0;
     return outagesB - outagesA;
   });
+
+  // Recalculate stats based on filtered outages
+  const filteredStats = {
+    total_outages: filteredOutages.length,
+    critical_count: filteredOutages.filter(o => o.severity === 'critical').length,
+    resolved_count: filteredOutages.filter(o => o.status === 'resolved').length,
+    total_downtime: filteredOutages.reduce((sum, o) => sum + (parseInt(o.downtime_minutes) || 0), 0)
+  };
 
   return `
 <!DOCTYPE html>
@@ -1048,19 +1231,19 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
     <!-- Stats Summary -->
     <div class="stats-grid">
       <div class="stat-box">
-        <div class="stat-value">${stats.total_outages || 0}</div>
+        <div class="stat-value">${filteredStats.total_outages || 0}</div>
         <div class="stat-label">Dépannages</div>
       </div>
       <div class="stat-box">
-        <div class="stat-value" style="color: #DC2626;">${stats.critical_count || 0}</div>
+        <div class="stat-value" style="color: #DC2626;">${filteredStats.critical_count || 0}</div>
         <div class="stat-label">Critiques</div>
       </div>
       <div class="stat-box">
-        <div class="stat-value" style="color: #22C55E;">${stats.resolved_count || 0}</div>
+        <div class="stat-value" style="color: #22C55E;">${filteredStats.resolved_count || 0}</div>
         <div class="stat-label">Résolus</div>
       </div>
       <div class="stat-box">
-        <div class="stat-value">${Math.round(stats.total_downtime || 0)}<span style="font-size: 14px;">min</span></div>
+        <div class="stat-value">${Math.round(filteredStats.total_downtime || 0)}<span style="font-size: 14px;">min</span></div>
         <div class="stat-label">Temps d'arrêt</div>
       </div>
     </div>
@@ -1182,7 +1365,7 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
     <!-- Footer -->
     <div class="footer">
       <p>Ce rapport a été généré automatiquement par Haleon-tool</p>
-      <p style="margin-top: 15px; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Tous droits réservés</p>
+      <p style="margin-top: 15px; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Daniel Palha - Tous droits réservés</p>
     </div>
   </div>
 </body>
@@ -1194,43 +1377,71 @@ function generateDailyReportEmail(site, date, outages, agentSnapshots, stats, ag
  * Generate Weekly KPI Report Email Template
  * Beautiful email with charts, KPIs, and agent performance table
  */
-function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages = {}, agentCustomNames = {}) {
+function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages = {}, agentCustomNames = {}, allowedEquipmentTypes = null) {
   const { startDate, endDate } = dateRange;
   const formattedRange = formatDateRangeFr(startDate, endDate);
 
   // Generate simple chart URL for incidents
   const incidentsChartUrl = dailyBreakdown.length > 0 ? generateIncidentsChart(dailyBreakdown) : null;
 
-  // Calculate KPIs
-  const totalOutages = parseInt(stats.total_outages) || 0;
-  const resolvedCount = parseInt(stats.resolved_count) || 0;
-  const resolutionRate = totalOutages > 0 ? Math.round((resolvedCount / totalOutages) * 100) : 100;
-  const avgRepairTime = Math.round(parseFloat(stats.avg_repair_time) || 0);
-  const totalDowntime = Math.round(parseInt(stats.total_downtime) || 0);
-  const downtimeHours = (totalDowntime / 60).toFixed(1);
+  // Filter equipment types if permissions provided
+  const visibleTypes = allowedEquipmentTypes || Object.keys(AGENT_AVATARS).filter(k => k !== 'main');
 
-  // Maintenance totals
-  const maintenanceDone = parseInt(maintenanceStats?.completed) || 0;
-  const maintenanceTotal = parseInt(maintenanceStats?.total_controls) || 0;
+  // Calculate KPIs (filtered by permissions)
+  let totalOutages = 0;
+  let totalDowntimeMinutes = 0;
+  let totalMaintenance = 0;
 
-  // Build breakdown by agent type for easy lookup
+  // Build breakdown by agent type and calculate filtered totals
   const breakdownByAgent = {};
   equipmentBreakdown.forEach(eq => {
-    breakdownByAgent[eq.equipment_type] = {
-      incidents: parseInt(eq.incident_count) || 0,
-      critical: parseInt(eq.critical_count) || 0,
-      downtime: parseInt(eq.total_downtime) || 0
-    };
+    if (visibleTypes.includes(eq.equipment_type)) {
+      breakdownByAgent[eq.equipment_type] = {
+        incidents: parseInt(eq.incident_count) || 0,
+        critical: parseInt(eq.critical_count) || 0,
+        downtime: parseInt(eq.total_downtime) || 0
+      };
+      totalOutages += parseInt(eq.incident_count) || 0;
+      totalDowntimeMinutes += parseInt(eq.total_downtime) || 0;
+    }
   });
 
-  // Generate agent table rows
+  // Calculate maintenance totals (filtered)
+  visibleTypes.forEach(type => {
+    const m = maintenanceByAgent[type];
+    if (m) totalMaintenance += parseInt(m.completed) || 0;
+  });
+
+  const resolvedCount = parseInt(stats.resolved_count) || 0;
+  const resolutionRate = totalOutages > 0 ? Math.round((resolvedCount / totalOutages) * 100) : 100;
+  const downtimeHours = (totalDowntimeMinutes / 60).toFixed(1);
+
+  // App routes for links
+  const APP_ROUTES = {
+    'switchboard': 'switchboards',
+    'vsd': 'vsd',
+    'meca': 'meca',
+    'mobile': 'mobile-equipments',
+    'hv': 'hv',
+    'glo': 'glo',
+    'datahub': 'datahub',
+    'atex': 'atex',
+    'doors': 'doors',
+    'firecontrol': 'firecontrol'
+  };
+
+  // Generate agent table rows (filtered by permissions)
   const generateAgentTableRows = () => {
-    return Object.entries(AGENT_AVATARS).filter(([key]) => key !== 'main').map(([agentType, agent]) => {
+    return visibleTypes.map(agentType => {
+      const agent = AGENT_AVATARS[agentType];
+      if (!agent) return '';
+
       const imageData = agentImages[agentType];
       const imageUrl = imageData?.hasCid ? 'cid:' + imageData.cid : imageData?.httpUrl || null;
       const agentName = agentCustomNames[agentType] || agent.name;
       const breakdown = breakdownByAgent[agentType] || { incidents: 0, critical: 0, downtime: 0 };
       const maintenance = maintenanceByAgent[agentType] || { total: 0, completed: 0, non_conform: 0 };
+      const appRoute = APP_ROUTES[agentType] || agentType;
 
       return '<tr>' +
         '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">' +
@@ -1239,16 +1450,23 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equip
               '<img src="' + imageUrl + '" alt="' + agentName + '" style="width: 45px; height: 45px; border-radius: 8px; object-fit: cover;" />' :
               '<div style="width: 45px; height: 45px; border-radius: 8px; background: linear-gradient(135deg, ' + agent.color + ', ' + agent.color + 'CC); display: flex; align-items: center; justify-content: center; color: white; font-size: 18px;">' + agent.icon + '</div>'
             ) +
-            '<strong style="color: #1f2937;">' + agentName + '</strong>' +
+            '<div>' +
+              '<strong style="color: #1f2937;">' + agentName + '</strong>' +
+              '<div style="font-size: 11px; color: #6b7280;">' + agent.description + '</div>' +
+            '</div>' +
           '</div>' +
         '</td>' +
         '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
-          '<span style="font-size: 18px; font-weight: bold; color: #1f2937;">' + breakdown.incidents + '</span>' +
+          '<a href="' + APP_URL + '/troubleshooting?type=' + agentType + '" style="text-decoration: none;">' +
+            '<span style="font-size: 18px; font-weight: bold; color: #3B82F6;">' + breakdown.incidents + '</span>' +
+          '</a>' +
           (breakdown.critical > 0 ? '<br><span style="font-size: 11px; color: #DC2626;">dont ' + breakdown.critical + ' critiques</span>' : '') +
         '</td>' +
         '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
-          '<span style="font-size: 18px; font-weight: bold; color: #22C55E;">' + maintenance.completed + '</span>' +
-          (maintenance.non_conform > 0 ? '<br><span style="font-size: 11px; color: #F97316;">' + maintenance.non_conform + ' non conformes</span>' : '') +
+          '<a href="' + APP_URL + '/' + appRoute + '/controls" style="text-decoration: none;">' +
+            '<span style="font-size: 18px; font-weight: bold; color: #22C55E;">' + maintenance.completed + '</span>' +
+          '</a>' +
+          (maintenance.non_conform > 0 ? '<br><span style="font-size: 11px; color: #F97316;">' + maintenance.non_conform + ' NC</span>' : '') +
         '</td>' +
         '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
           '<span style="font-size: 14px; color: #6b7280;">' + Math.round(breakdown.downtime) + ' min</span>' +
@@ -1278,15 +1496,17 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equip
     <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom: 2px solid #e5e7eb;">
       <tr>
         <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
-          <div style="font-size: 32px; font-weight: bold; color: #1f2937;">${totalOutages}</div>
-          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Dépannages</div>
+          <a href="${APP_URL}/troubleshooting" style="text-decoration: none;">
+            <div style="font-size: 32px; font-weight: bold; color: #3B82F6;">${totalOutages}</div>
+            <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Dépannages</div>
+          </a>
         </td>
         <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
           <div style="font-size: 32px; font-weight: bold; color: ${resolutionRate >= 80 ? '#22C55E' : resolutionRate >= 60 ? '#F97316' : '#DC2626'};">${resolutionRate}%</div>
           <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Résolution</div>
         </td>
         <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
-          <div style="font-size: 32px; font-weight: bold; color: #22C55E;">${maintenanceDone}</div>
+          <div style="font-size: 32px; font-weight: bold; color: #22C55E;">${totalMaintenance}</div>
           <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Maintenances</div>
         </td>
         <td style="padding: 25px 15px; text-align: center; width: 25%;">
@@ -1327,7 +1547,7 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equip
     <!-- Footer -->
     <div style="background: #1f2937; padding: 25px; text-align: center; color: #9ca3af; font-size: 12px;">
       <p style="margin: 0;">Ce rapport a été généré automatiquement par Haleon-tool</p>
-      <p style="margin: 15px 0 0; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Tous droits réservés</p>
+      <p style="margin: 15px 0 0; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Daniel Palha - Tous droits réservés</p>
     </div>
   </div>
 </body>
@@ -1339,43 +1559,71 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equip
  * Generate Monthly KPI Report Email Template
  * Same structure as weekly but for 30 days
  */
-function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages = {}, agentCustomNames = {}) {
+function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages = {}, agentCustomNames = {}, allowedEquipmentTypes = null) {
   const { startDate, endDate, monthName } = dateRange;
   const formattedRange = formatDateRangeFr(startDate, endDate);
 
   // Generate chart URL
   const incidentsChartUrl = dailyBreakdown.length > 0 ? generateIncidentsChart(dailyBreakdown, 700, 300) : null;
 
-  // Calculate KPIs
-  const totalOutages = parseInt(stats.total_outages) || 0;
-  const resolvedCount = parseInt(stats.resolved_count) || 0;
-  const resolutionRate = totalOutages > 0 ? Math.round((resolvedCount / totalOutages) * 100) : 100;
-  const avgRepairTime = Math.round(parseFloat(stats.avg_repair_time) || 0);
-  const totalDowntime = Math.round(parseInt(stats.total_downtime) || 0);
-  const downtimeHours = (totalDowntime / 60).toFixed(1);
+  // Filter equipment types if permissions provided
+  const visibleTypes = allowedEquipmentTypes || Object.keys(AGENT_AVATARS).filter(k => k !== 'main');
 
-  // Maintenance totals
-  const maintenanceDone = parseInt(maintenanceStats?.completed) || 0;
-  const maintenanceTotal = parseInt(maintenanceStats?.total_controls) || 0;
+  // Calculate KPIs (filtered by permissions)
+  let totalOutages = 0;
+  let totalDowntimeMinutes = 0;
+  let totalMaintenance = 0;
 
-  // Build breakdown by agent type
+  // Build breakdown by agent type and calculate filtered totals
   const breakdownByAgent = {};
   equipmentBreakdown.forEach(eq => {
-    breakdownByAgent[eq.equipment_type] = {
-      incidents: parseInt(eq.incident_count) || 0,
-      critical: parseInt(eq.critical_count) || 0,
-      downtime: parseInt(eq.total_downtime) || 0
-    };
+    if (visibleTypes.includes(eq.equipment_type)) {
+      breakdownByAgent[eq.equipment_type] = {
+        incidents: parseInt(eq.incident_count) || 0,
+        critical: parseInt(eq.critical_count) || 0,
+        downtime: parseInt(eq.total_downtime) || 0
+      };
+      totalOutages += parseInt(eq.incident_count) || 0;
+      totalDowntimeMinutes += parseInt(eq.total_downtime) || 0;
+    }
   });
 
-  // Generate agent table rows
+  // Calculate maintenance totals (filtered)
+  visibleTypes.forEach(type => {
+    const m = maintenanceByAgent[type];
+    if (m) totalMaintenance += parseInt(m.completed) || 0;
+  });
+
+  const resolvedCount = parseInt(stats.resolved_count) || 0;
+  const resolutionRate = totalOutages > 0 ? Math.round((resolvedCount / totalOutages) * 100) : 100;
+  const downtimeHours = (totalDowntimeMinutes / 60).toFixed(1);
+
+  // App routes for links
+  const APP_ROUTES = {
+    'switchboard': 'switchboards',
+    'vsd': 'vsd',
+    'meca': 'meca',
+    'mobile': 'mobile-equipments',
+    'hv': 'hv',
+    'glo': 'glo',
+    'datahub': 'datahub',
+    'atex': 'atex',
+    'doors': 'doors',
+    'firecontrol': 'firecontrol'
+  };
+
+  // Generate agent table rows (filtered by permissions)
   const generateAgentTableRows = () => {
-    return Object.entries(AGENT_AVATARS).filter(([key]) => key !== 'main').map(([agentType, agent]) => {
+    return visibleTypes.map(agentType => {
+      const agent = AGENT_AVATARS[agentType];
+      if (!agent) return '';
+
       const imageData = agentImages[agentType];
       const imageUrl = imageData?.hasCid ? 'cid:' + imageData.cid : imageData?.httpUrl || null;
       const agentName = agentCustomNames[agentType] || agent.name;
       const breakdown = breakdownByAgent[agentType] || { incidents: 0, critical: 0, downtime: 0 };
       const maintenance = maintenanceByAgent[agentType] || { total: 0, completed: 0, non_conform: 0 };
+      const appRoute = APP_ROUTES[agentType] || agentType;
 
       return '<tr>' +
         '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">' +
@@ -1384,16 +1632,23 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equi
               '<img src="' + imageUrl + '" alt="' + agentName + '" style="width: 45px; height: 45px; border-radius: 8px; object-fit: cover;" />' :
               '<div style="width: 45px; height: 45px; border-radius: 8px; background: linear-gradient(135deg, ' + agent.color + ', ' + agent.color + 'CC); display: flex; align-items: center; justify-content: center; color: white; font-size: 18px;">' + agent.icon + '</div>'
             ) +
-            '<strong style="color: #1f2937;">' + agentName + '</strong>' +
+            '<div>' +
+              '<strong style="color: #1f2937;">' + agentName + '</strong>' +
+              '<div style="font-size: 11px; color: #6b7280;">' + agent.description + '</div>' +
+            '</div>' +
           '</div>' +
         '</td>' +
         '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
-          '<span style="font-size: 18px; font-weight: bold; color: #1f2937;">' + breakdown.incidents + '</span>' +
+          '<a href="' + APP_URL + '/troubleshooting?type=' + agentType + '" style="text-decoration: none;">' +
+            '<span style="font-size: 18px; font-weight: bold; color: #3B82F6;">' + breakdown.incidents + '</span>' +
+          '</a>' +
           (breakdown.critical > 0 ? '<br><span style="font-size: 11px; color: #DC2626;">dont ' + breakdown.critical + ' critiques</span>' : '') +
         '</td>' +
         '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
-          '<span style="font-size: 18px; font-weight: bold; color: #22C55E;">' + maintenance.completed + '</span>' +
-          (maintenance.non_conform > 0 ? '<br><span style="font-size: 11px; color: #F97316;">' + maintenance.non_conform + ' non conformes</span>' : '') +
+          '<a href="' + APP_URL + '/' + appRoute + '/controls" style="text-decoration: none;">' +
+            '<span style="font-size: 18px; font-weight: bold; color: #22C55E;">' + maintenance.completed + '</span>' +
+          '</a>' +
+          (maintenance.non_conform > 0 ? '<br><span style="font-size: 11px; color: #F97316;">' + maintenance.non_conform + ' NC</span>' : '') +
         '</td>' +
         '<td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">' +
           '<span style="font-size: 14px; color: #6b7280;">' + Math.round(breakdown.downtime) + ' min</span>' +
@@ -1423,15 +1678,17 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equi
     <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom: 2px solid #e5e7eb;">
       <tr>
         <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
-          <div style="font-size: 32px; font-weight: bold; color: #1f2937;">${totalOutages}</div>
-          <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Dépannages</div>
+          <a href="${APP_URL}/troubleshooting" style="text-decoration: none;">
+            <div style="font-size: 32px; font-weight: bold; color: #3B82F6;">${totalOutages}</div>
+            <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Dépannages</div>
+          </a>
         </td>
         <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
           <div style="font-size: 32px; font-weight: bold; color: ${resolutionRate >= 80 ? '#22C55E' : resolutionRate >= 60 ? '#F97316' : '#DC2626'};">${resolutionRate}%</div>
           <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Résolution</div>
         </td>
         <td style="padding: 25px 15px; text-align: center; border-right: 1px solid #e5e7eb; width: 25%;">
-          <div style="font-size: 32px; font-weight: bold; color: #22C55E;">${maintenanceDone}</div>
+          <div style="font-size: 32px; font-weight: bold; color: #22C55E;">${totalMaintenance}</div>
           <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; margin-top: 5px;">Maintenances</div>
         </td>
         <td style="padding: 25px 15px; text-align: center; width: 25%;">
@@ -1470,9 +1727,9 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equi
     </div>
 
     <!-- Footer -->
-    <div class="footer">
-      <p>Ce rapport a été généré automatiquement par Haleon-tool</p>
-      <p style="margin-top: 15px; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Tous droits réservés</p>
+    <div style="background: #1f2937; padding: 25px; text-align: center; color: #9ca3af; font-size: 12px;">
+      <p style="margin: 0;">Ce rapport a été généré automatiquement par Haleon-tool</p>
+      <p style="margin: 15px 0 0; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Daniel Palha - Tous droits réservés</p>
     </div>
   </div>
 </body>
@@ -1587,6 +1844,16 @@ async function sendDailyOutageReport(email, site) {
   const yesterday = getYesterdayDate();
 
   try {
+    // Fetch user permissions for filtering
+    const permissions = await getUserPermissions(email);
+    const allowedEquipmentTypes = getAllowedEquipmentTypes(permissions);
+
+    // If user has no access to any equipment types, skip sending
+    if (allowedEquipmentTypes.length === 0 && !permissions.isAdmin && permissions.allowedApps !== null) {
+      console.log(`[SendGrid] Skipping daily report for ${email} - no equipment access`);
+      return { success: false, error: 'User has no equipment access' };
+    }
+
     // Fetch all necessary data including agent images and custom names
     const [outages, agentSnapshots, stats, agentImagesData, agentCustomNames] = await Promise.all([
       getYesterdayOutages(site),
@@ -1598,8 +1865,8 @@ async function sendDailyOutageReport(email, site) {
 
     const { agentImages, attachments } = agentImagesData;
 
-    // Generate email HTML
-    const htmlContent = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats, agentImages, agentCustomNames);
+    // Generate email HTML with permission filtering
+    const htmlContent = generateDailyReportEmail(site, yesterday, outages, agentSnapshots, stats, agentImages, agentCustomNames, allowedEquipmentTypes.length > 0 ? allowedEquipmentTypes : null);
 
     // Prepare email
     const msg = {
@@ -1688,6 +1955,16 @@ async function sendWeeklyReport(email, site) {
     const dateRange = getWeeklyDateRange();
     const { startDate, endDate } = dateRange;
 
+    // Fetch user permissions for filtering
+    const permissions = await getUserPermissions(email);
+    const allowedEquipmentTypes = getAllowedEquipmentTypes(permissions);
+
+    // If user has no access to any equipment types, skip sending
+    if (allowedEquipmentTypes.length === 0 && !permissions.isAdmin && permissions.allowedApps !== null) {
+      console.log(`[SendGrid] Skipping weekly report for ${email} - no equipment access`);
+      return { success: false, error: 'User has no equipment access' };
+    }
+
     // Fetch all data for the week
     const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, maintenanceByAgent, agentImagesData, agentCustomNames] = await Promise.all([
       getStatsForDateRange(site, startDate, endDate),
@@ -1706,8 +1983,8 @@ async function sendWeeklyReport(email, site) {
     const totalIncidents = parseInt(stats.total_outages) || 0;
     const riskData = calculateRiskScores(equipmentBreakdown, totalIncidents);
 
-    // Generate email HTML
-    const htmlContent = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames);
+    // Generate email HTML with permission filtering
+    const htmlContent = generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames, allowedEquipmentTypes.length > 0 ? allowedEquipmentTypes : null);
 
     // Prepare email
     const msg = {
@@ -1789,6 +2066,16 @@ async function sendMonthlyReport(email, site) {
     const dateRange = getMonthlyDateRange();
     const { startDate, endDate, monthName } = dateRange;
 
+    // Fetch user permissions for filtering
+    const permissions = await getUserPermissions(email);
+    const allowedEquipmentTypes = getAllowedEquipmentTypes(permissions);
+
+    // If user has no access to any equipment types, skip sending
+    if (allowedEquipmentTypes.length === 0 && !permissions.isAdmin && permissions.allowedApps !== null) {
+      console.log(`[SendGrid] Skipping monthly report for ${email} - no equipment access`);
+      return { success: false, error: 'User has no equipment access' };
+    }
+
     // Fetch all data for the month
     const [stats, dailyBreakdown, equipmentBreakdown, problematicEquipment, maintenanceStats, maintenanceByAgent, agentImagesData, agentCustomNames] = await Promise.all([
       getStatsForDateRange(site, startDate, endDate),
@@ -1807,8 +2094,8 @@ async function sendMonthlyReport(email, site) {
     const totalIncidents = parseInt(stats.total_outages) || 0;
     const riskData = calculateRiskScores(equipmentBreakdown, totalIncidents);
 
-    // Generate email HTML
-    const htmlContent = generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames);
+    // Generate email HTML with permission filtering
+    const htmlContent = generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equipmentBreakdown, maintenanceStats, maintenanceByAgent, agentImages, agentCustomNames, allowedEquipmentTypes.length > 0 ? allowedEquipmentTypes : null);
 
     // Prepare email
     const msg = {
