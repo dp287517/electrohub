@@ -84,10 +84,17 @@ export async function initTroubleshootingTables(poolInstance) {
         ai_recommendations TEXT,
 
         -- Status
-        status VARCHAR(50) DEFAULT 'completed', -- 'in_progress', 'completed', 'pending_review'
+        status VARCHAR(50) DEFAULT 'completed', -- 'in_progress', 'completed', 'pending_review', 'pending_parts', 'pending_external'
 
         -- Sequential report number (per site)
         report_number INTEGER,
+
+        -- Source tracking (for NC from maintenance)
+        source VARCHAR(50) DEFAULT 'manual', -- 'manual', 'maintenance_nc', 'preventive'
+        source_maintenance_id UUID, -- Reference to maintenance control if from NC
+        source_nc_item VARCHAR(255), -- Name of the NC item (e.g., "Serrage des bornes")
+        nc_resolution VARCHAR(50), -- 'immediate', 'deferred' (only for maintenance_nc)
+        priority VARCHAR(20) DEFAULT 'medium', -- 'high', 'medium', 'low'
 
         -- Metadata
         created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -99,6 +106,16 @@ export async function initTroubleshootingTables(poolInstance) {
     await pool.query(`
       ALTER TABLE troubleshooting_records
       ADD COLUMN IF NOT EXISTS report_number INTEGER
+    `);
+
+    // Add NC-related columns (migration)
+    await pool.query(`
+      ALTER TABLE troubleshooting_records
+      ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'manual',
+      ADD COLUMN IF NOT EXISTS source_maintenance_id UUID,
+      ADD COLUMN IF NOT EXISTS source_nc_item VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS nc_resolution VARCHAR(50),
+      ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'medium'
     `);
 
     // Migrate existing records without report_number
@@ -435,8 +452,15 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
       technician_name, technician_email,
       ai_diagnosis, ai_recommendations,
       photos = [],
-      // NEW: Support for multiple equipment
-      additional_equipment = [] // Array of { equipment_id, equipment_type, equipment_name, equipment_code, building_code }
+      // Support for multiple equipment
+      additional_equipment = [], // Array of { equipment_id, equipment_type, equipment_name, equipment_code, building_code }
+      // NC source tracking
+      source = 'manual', // 'manual', 'maintenance_nc', 'preventive'
+      source_maintenance_id = null,
+      source_nc_item = null,
+      nc_resolution = null, // 'immediate', 'deferred'
+      priority = 'medium', // 'high', 'medium', 'low'
+      status: requestedStatus = null // Allow caller to specify status
     } = req.body;
 
     // Get user info from request if not provided
@@ -461,6 +485,11 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
     );
     const nextReportNumber = reportNumberResult.rows[0]?.next_number || 1;
 
+    // Determine final status
+    // For NC: if deferred, use the requested status (pending_parts, pending_external, in_progress)
+    // For immediate NC or manual: use 'completed'
+    const finalStatus = requestedStatus || (nc_resolution === 'deferred' ? 'in_progress' : 'completed');
+
     // Insert main record (equipment_original_id stores the original ID for position lookups)
     const result = await pool.query(`
       INSERT INTO troubleshooting_records (
@@ -471,8 +500,9 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
         started_at, completed_at, duration_minutes, downtime_minutes,
         technician_name, technician_email,
         ai_diagnosis, ai_recommendations,
-        status, report_number
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, 'completed', $27)
+        status, report_number,
+        source, source_maintenance_id, source_nc_item, nc_resolution, priority
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
       RETURNING *
     `, [
       site, finalEquipmentType, finalEquipmentId, equipment_id || null, equipment_name, equipment_code,
@@ -482,7 +512,8 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
       started_at || new Date(), completed_at || new Date(), duration_minutes || 0, downtime_minutes || 0,
       finalTechnicianName, finalTechnicianEmail,
       ai_diagnosis, ai_recommendations,
-      nextReportNumber
+      finalStatus, nextReportNumber,
+      source, source_maintenance_id, source_nc_item, nc_resolution, priority
     ]);
 
     const record = result.rows[0];
@@ -568,6 +599,7 @@ router.get('/list', async (req, res) => {
     const {
       equipment_type, equipment_id, building_code, floor, zone,
       category, severity, fault_type,
+      status, source, // NC-related filters
       date_from, date_to,
       search,
       limit = 50, offset = 0
@@ -641,6 +673,14 @@ router.get('/list', async (req, res) => {
       sql += ` AND tr.fault_type = $${paramIndex++}`;
       params.push(fault_type);
     }
+    if (status) {
+      sql += ` AND tr.status = $${paramIndex++}`;
+      params.push(status);
+    }
+    if (source) {
+      sql += ` AND tr.source = $${paramIndex++}`;
+      params.push(source);
+    }
     if (date_from) {
       sql += ` AND tr.created_at >= $${paramIndex++}`;
       params.push(date_from);
@@ -686,6 +726,8 @@ router.get('/list', async (req, res) => {
     if (category) { countSql += ` AND tr.category = $${countParamIndex++}`; countParams.push(category); }
     if (severity) { countSql += ` AND tr.severity = $${countParamIndex++}`; countParams.push(severity); }
     if (fault_type) { countSql += ` AND tr.fault_type = $${countParamIndex++}`; countParams.push(fault_type); }
+    if (status) { countSql += ` AND tr.status = $${countParamIndex++}`; countParams.push(status); }
+    if (source) { countSql += ` AND tr.source = $${countParamIndex++}`; countParams.push(source); }
     if (date_from) { countSql += ` AND tr.created_at >= $${countParamIndex++}`; countParams.push(date_from); }
     if (date_to) { countSql += ` AND tr.created_at <= $${countParamIndex++}`; countParams.push(date_to); }
     if (search) { countSql += ` AND (tr.title ILIKE $${countParamIndex} OR tr.description ILIKE $${countParamIndex} OR tr.equipment_name ILIKE $${countParamIndex} OR tr.technician_name ILIKE $${countParamIndex})`; countParams.push(`%${search}%`); }
@@ -745,7 +787,8 @@ router.put('/:id', async (req, res) => {
       'title', 'description', 'root_cause', 'solution', 'parts_replaced',
       'category', 'severity', 'fault_type',
       'started_at', 'completed_at', 'duration_minutes', 'downtime_minutes',
-      'ai_diagnosis', 'ai_recommendations', 'status'
+      'ai_diagnosis', 'ai_recommendations', 'status',
+      'priority', 'nc_resolution' // NC-related fields
     ];
 
     const setClauses = [];
@@ -1172,6 +1215,15 @@ router.get('/:id/pdf', async (req, res) => {
 
     doc.font('Helvetica-Bold').text('Type de panne:', 320, y + 60);
     doc.font('Helvetica').text(getFaultTypeLabel(record.fault_type), 430, y + 60);
+
+    // Show source if from maintenance NC
+    if (record.source === 'maintenance_nc') {
+      doc.font('Helvetica-Bold').text('Source:', 320, y + 76);
+      doc.font('Helvetica').fillColor('#dc2626').text('NC Maintenance', 430, y + 76);
+      if (record.source_nc_item) {
+        doc.font('Helvetica').fillColor('#374151');
+      }
+    }
 
     // Mini plan section (if equipment has a position on a plan)
     y = 210;
