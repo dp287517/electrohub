@@ -50,6 +50,7 @@ import FireControlMap from './pages/FireControl_map.jsx';
 import TroubleshootingDashboard from './pages/TroubleshootingDashboard.jsx';
 import TroubleshootingDetail from './pages/TroubleshootingDetail.jsx';
 import SharedTroubleshootingView from './pages/SharedTroubleshootingView.jsx';
+import HaleonTicketTeamsAdmin from './pages/HaleonTicketTeamsAdmin.jsx';
 // FloatingAssistant removed from global - now only in Dashboard for mobile
 
 // Component to redirect authenticated users to dashboard
@@ -97,6 +98,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <Admin />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/haleon-tickets"
+            element={
+              <ProtectedRoute>
+                <HaleonTicketTeamsAdmin />
               </ProtectedRoute>
             }
           />

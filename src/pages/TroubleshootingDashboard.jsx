@@ -10,6 +10,7 @@ import {
 import { get, API_BASE } from '../lib/api';
 import MiniEquipmentPreview from '../components/AIAvatar/MiniEquipmentPreview';
 import { getUserPermissions, ADMIN_EMAILS } from '../lib/permissions';
+import HaleonTicketsWidget from '../components/HaleonTicketsWidget';
 
 // Get current user email from localStorage
 function getCurrentUserEmail() {
@@ -795,8 +796,12 @@ export default function TroubleshootingDashboard() {
           )}
         </div>
 
-        {/* Tab content */}
-        {loading ? (
+        {/* Main content grid with widget sidebar */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Main content - 2/3 width on large screens */}
+          <div className="lg:col-span-2">
+            {/* Tab content */}
+            {loading ? (
           <div className="flex items-center justify-center py-12">
             <RefreshCw className="w-8 h-8 text-orange-500 animate-spin" />
           </div>
@@ -1114,6 +1119,13 @@ export default function TroubleshootingDashboard() {
             )}
           </>
         )}
+          </div>
+
+          {/* Sidebar - Haleon Tickets Widget */}
+          <div className="lg:col-span-1">
+            <HaleonTicketsWidget userEmail={getCurrentUserEmail()} />
+          </div>
+        </div>
       </div>
 
       {/* Detail Modal */}

@@ -16,6 +16,7 @@ import { createChatV2Router, initChatV2Tables } from "./server_ai_chat_v2.js";
 import { createAgentMemoryRouter, initAgentMemoryTables, generateAllDailySnapshots } from "./server_agent_memory.js";
 import measurementsRouter, { initMeasurementsTables } from "./server_measurements.js";
 import sendgridRouter, { initEmailTables } from "./server_sendgrid.js";
+import { createHaleonTicketsRouter, initHaleonTicketsTables } from "./server_haleon_tickets.js";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import multer from "multer";
@@ -10451,6 +10452,20 @@ console.log('[Measurements] Measurements router mounted');
 console.log('[SendGrid] Mounting sendgrid router at /api/sendgrid');
 app.use("/api/sendgrid", sendgridRouter);
 console.log('[SendGrid] SendGrid router mounted - Daily reports enabled');
+
+/* ================================================================
+   🎫 Haleon Tickets API Routes - Integration with Bubble
+   ================================================================ */
+console.log('[Haleon Tickets] Initializing tables...');
+initHaleonTicketsTables(pool).then(() => {
+  console.log('[Haleon Tickets] Tables initialized');
+}).catch(err => {
+  console.error('[Haleon Tickets] Error initializing tables:', err.message);
+});
+const haleonTicketsRouter = createHaleonTicketsRouter(pool);
+console.log('[Haleon Tickets] Mounting haleon-tickets router at /api/haleon-tickets');
+app.use("/api/haleon-tickets", haleonTicketsRouter);
+console.log('[Haleon Tickets] Haleon tickets router mounted');
 
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
