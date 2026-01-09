@@ -534,13 +534,36 @@ const MecaLeafletViewer = forwardRef(({
     }
   }, [controlStatuses]);
 
-  function makeMecaIcon(isSelected = false, equipmentId = null) {
+  // SVG paths for MECA category icons
+  const MECA_ICON_SVGS = {
+    Cog: '<path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="M12.5 2h-1l-.447 2.236a7.001 7.001 0 0 0-2.268.94L6.54 3.93l-.707.708 1.245 2.245a7.001 7.001 0 0 0-.94 2.268L4 9.5v1l2.236.447a7.001 7.001 0 0 0 .94 2.268L5.93 15.46l.708.707 2.245-1.245a7.001 7.001 0 0 0 2.268.94L11.5 18h1l.447-2.236a7.001 7.001 0 0 0 2.268-.94l2.245 1.245.707-.708-1.245-2.245a7.001 7.001 0 0 0 .94-2.268L20 11.5v-1l-2.236-.447a7.001 7.001 0 0 0-.94-2.268l1.245-2.245-.708-.707-2.245 1.245a7.001 7.001 0 0 0-2.268-.94L12.5 2Z" fill="none" stroke="white" stroke-width="1.5"/>',
+    Fan: '<path d="M12 12c-1.5-2.5-4-4-7-4 0 4 2 6 4 7 2.5 1.5 4 4 4 7 0-4 2-6 4-7 2.5-1.5 4-4 4-7-4 0-6 2-7 4Z" fill="white"/>',
+    Gauge: '<path d="M12 16v-4" stroke="white" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="10" fill="none" stroke="white" stroke-width="2"/><path d="M12 6v2M6 12H4M20 12h-2" stroke="white" stroke-width="2" stroke-linecap="round"/>',
+    Thermometer: '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0Z" fill="none" stroke="white" stroke-width="2"/><circle cx="11.5" cy="17.5" r="2" fill="white"/>',
+    Droplet: '<path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0L12 2.69z" fill="white"/>',
+    Flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" fill="white"/>',
+    Zap: '<path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" fill="white"/>',
+    Wind: '<path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"/>',
+    Waves: '<path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"/>',
+    Activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    Factory: '<path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" fill="none" stroke="white" stroke-width="2"/>',
+    Wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" fill="none" stroke="white" stroke-width="2"/>',
+    Hammer: '<path d="m15 12-8.5 8.5c-.83.83-2.17.83-3 0 0 0 0 0 0 0a2.12 2.12 0 0 1 0-3L12 9" fill="none" stroke="white" stroke-width="2"/><path d="M17.64 15 22 10.64" fill="none" stroke="white" stroke-width="2"/><path d="m2.34 7.03 3.54-3.54M6.05 10.5l4.24-4.24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"/>',
+    Box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" fill="none" stroke="white" stroke-width="2"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12" stroke="white" stroke-width="2"/>',
+    Power: '<path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.77.04" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"/>',
+    CircleDot: '<circle cx="12" cy="12" r="10" fill="none" stroke="white" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="white"/>',
+  };
+
+  // Default icon SVG (compass-like for meca)
+  const DEFAULT_MECA_SVG = '<circle cx="12" cy="12" r="3" fill="white"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" stroke="white" stroke-width="2" stroke-linecap="round"/>';
+
+  function makeMecaIcon(isSelected = false, equipmentId = null, categoryColor = null, categoryIcon = null) {
     const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
     const controlStatus = equipmentId ? controlStatusesRef.current[equipmentId] : null;
     const isOverdue = controlStatus?.status === 'overdue';
     const isUpcoming = controlStatus?.status === 'upcoming';
 
-    // Colors aligned with UnifiedEquipmentMap STATUS_COLORS
+    // Colors: selected > control status > category color > default blue
     let bg;
     if (isSelected) {
       bg = "background: radial-gradient(circle at 30% 30%, #a78bfa, #7c3aed);"; // Purple - selected
@@ -548,6 +571,8 @@ const MecaLeafletViewer = forwardRef(({
       bg = "background: radial-gradient(circle at 30% 30%, #ef4444, #dc2626);"; // Red - overdue
     } else if (isUpcoming) {
       bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #d97706);"; // Amber - upcoming
+    } else if (categoryColor) {
+      bg = `background: radial-gradient(circle at 30% 30%, ${categoryColor}cc, ${categoryColor});`; // Category color
     } else {
       bg = "background: radial-gradient(circle at 30% 30%, #3b82f6, #2563eb);"; // Blue - Meca default
     }
@@ -556,11 +581,13 @@ const MecaLeafletViewer = forwardRef(({
     if (isSelected) animClass = "meca-marker-selected";
     else if (isOverdue) animClass = "meca-marker-overdue";
 
+    // Get icon SVG based on category icon name
+    const iconSvg = categoryIcon && MECA_ICON_SVGS[categoryIcon] ? MECA_ICON_SVGS[categoryIcon] : DEFAULT_MECA_SVG;
+
     const html = `
       <div class="${animClass}" style="width:${s}px;height:${s}px;${bg}border:2px solid white;border-radius:9999px;box-shadow:0 4px 10px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;transition:all 0.2s ease;">
         <svg viewBox="0 0 24 24" width="${s * 0.5}" height="${s * 0.5}" fill="white" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="12" cy="12" r="3" fill="white"/>
-          <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          ${iconSvg}
         </svg>
       </div>`;
     return L.divIcon({
@@ -588,7 +615,7 @@ const MecaLeafletViewer = forwardRef(({
 
       const latlng = L.latLng(y, x);
       const isSelected = p.equipment_id === selectedIdRef.current;
-      const icon = makeMecaIcon(isSelected, p.equipment_id);
+      const icon = makeMecaIcon(isSelected, p.equipment_id, p.category_color, p.category_icon);
 
       const wantsDraggable = !disabled && !placementActiveRef.current;
       const mk = L.marker(latlng, {

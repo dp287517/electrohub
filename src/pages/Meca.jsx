@@ -9,7 +9,8 @@ import {
   Menu, Settings, Share2, ExternalLink, MapPin, Zap, Power,
   Tag, Hash, Factory, Gauge, Thermometer, Network, Info, Droplet, Wind,
   FolderPlus, Folder, ChevronUp, GripVertical, ClipboardCheck, Clock, Calendar,
-  History, FileText, Download, ArrowLeft
+  History, FileText, Download, ArrowLeft, Fan, Flame, Wrench, Box, Boxes,
+  CircleDot, Activity, Waves, Hammer, HardHat, Palette
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { getUserPermissions } from '../lib/permissions';
@@ -959,6 +960,46 @@ const DetailPanel = ({
 
 // ==================== CATEGORIES SETTINGS PANEL ====================
 
+// Predefined colors for MECA categories
+const MECA_CATEGORY_COLORS = [
+  { value: '#F97316', name: 'Orange' },
+  { value: '#EF4444', name: 'Rouge' },
+  { value: '#10B981', name: 'Vert' },
+  { value: '#3B82F6', name: 'Bleu' },
+  { value: '#8B5CF6', name: 'Violet' },
+  { value: '#EC4899', name: 'Rose' },
+  { value: '#14B8A6', name: 'Turquoise' },
+  { value: '#F59E0B', name: 'Ambre' },
+  { value: '#6366F1', name: 'Indigo' },
+  { value: '#84CC16', name: 'Lime' },
+];
+
+// Available icons for MECA categories
+const MECA_CATEGORY_ICONS = [
+  { value: 'Cog', name: 'Engrenage', component: Cog },
+  { value: 'Fan', name: 'Ventilateur', component: Fan },
+  { value: 'Gauge', name: 'Jauge', component: Gauge },
+  { value: 'Thermometer', name: 'Thermomètre', component: Thermometer },
+  { value: 'Droplet', name: 'Goutte', component: Droplet },
+  { value: 'Flame', name: 'Flamme', component: Flame },
+  { value: 'Zap', name: 'Éclair', component: Zap },
+  { value: 'Wind', name: 'Vent', component: Wind },
+  { value: 'Waves', name: 'Vagues', component: Waves },
+  { value: 'Activity', name: 'Activité', component: Activity },
+  { value: 'Factory', name: 'Usine', component: Factory },
+  { value: 'Wrench', name: 'Clé', component: Wrench },
+  { value: 'Hammer', name: 'Marteau', component: Hammer },
+  { value: 'Box', name: 'Boîte', component: Box },
+  { value: 'Power', name: 'Power', component: Power },
+  { value: 'CircleDot', name: 'Cercle', component: CircleDot },
+];
+
+// Helper to get icon component by name
+const getIconComponent = (iconName) => {
+  const iconDef = MECA_CATEGORY_ICONS.find(i => i.value === iconName);
+  return iconDef?.component || Cog;
+};
+
 const CategoriesSettingsPanel = ({ onClose, showToast }) => {
   const [categories, setCategories] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -966,6 +1007,8 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
 
   // Form state for new category
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryColor, setNewCategoryColor] = useState('#F97316');
+  const [newCategoryIcon, setNewCategoryIcon] = useState('Cog');
   const [isAddingCategory, setIsAddingCategory] = useState(false);
 
   // Form state for new subcategory
@@ -976,6 +1019,8 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
   const [editingCategory, setEditingCategory] = useState(null);
   const [editingSubcategory, setEditingSubcategory] = useState(null);
   const [editName, setEditName] = useState('');
+  const [editColor, setEditColor] = useState('');
+  const [editIcon, setEditIcon] = useState('');
 
   const loadCategories = useCallback(async () => {
     setIsLoading(true);
@@ -999,9 +1044,15 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
     if (!newCategoryName.trim()) return;
     setIsAddingCategory(true);
     try {
-      await api.meca.createCategory({ name: newCategoryName.trim() });
+      await api.meca.createCategory({
+        name: newCategoryName.trim(),
+        color: newCategoryColor,
+        icon: newCategoryIcon
+      });
       showToast?.('Catégorie créée', 'success');
       setNewCategoryName('');
+      setNewCategoryColor('#F97316');
+      setNewCategoryIcon('Cog');
       loadCategories();
     } catch (err) {
       showToast?.('Erreur lors de la création', 'error');
@@ -1013,10 +1064,16 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
   const handleUpdateCategory = async (id) => {
     if (!editName.trim()) return;
     try {
-      await api.meca.updateCategory(id, { name: editName.trim() });
+      await api.meca.updateCategory(id, {
+        name: editName.trim(),
+        color: editColor,
+        icon: editIcon
+      });
       showToast?.('Catégorie modifiée', 'success');
       setEditingCategory(null);
       setEditName('');
+      setEditColor('');
+      setEditIcon('');
       loadCategories();
     } catch (err) {
       showToast?.('Erreur lors de la modification', 'error');
@@ -1120,7 +1177,7 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
                 <FolderPlus size={18} className="text-orange-500" />
                 Ajouter une catégorie d'équipement
               </h3>
-              <div className="flex gap-2">
+              <div className="space-y-3">
                 <input
                   type="text"
                   value={newCategoryName}
@@ -1129,14 +1186,62 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
                   placeholder="Ex: Porte Automatique, Ascenseur..."
                   className={inputBaseClass}
                 />
-                <button
-                  onClick={handleAddCategory}
-                  disabled={!newCategoryName.trim() || isAddingCategory}
-                  className="px-4 py-2 bg-gradient-to-r from-orange-500 to-amber-600 text-white rounded-xl font-medium hover:from-orange-600 hover:to-amber-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
-                >
-                  {isAddingCategory ? <RefreshCw size={16} className="animate-spin" /> : <Plus size={16} />}
-                  Ajouter
-                </button>
+                <div className="flex flex-wrap gap-4">
+                  {/* Color picker */}
+                  <div className="flex-1 min-w-[200px]">
+                    <label className="text-xs font-medium text-gray-600 mb-1 block">Couleur</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {MECA_CATEGORY_COLORS.map(c => (
+                        <button
+                          key={c.value}
+                          onClick={() => setNewCategoryColor(c.value)}
+                          className={`w-7 h-7 rounded-lg transition-all ${newCategoryColor === c.value ? 'ring-2 ring-offset-1 ring-gray-400 scale-110' : 'hover:scale-105'}`}
+                          style={{ backgroundColor: c.value }}
+                          title={c.name}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  {/* Icon picker */}
+                  <div className="flex-1 min-w-[200px]">
+                    <label className="text-xs font-medium text-gray-600 mb-1 block">Icône</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {MECA_CATEGORY_ICONS.map(ic => {
+                        const IconComp = ic.component;
+                        return (
+                          <button
+                            key={ic.value}
+                            onClick={() => setNewCategoryIcon(ic.value)}
+                            className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${newCategoryIcon === ic.value ? 'ring-2 ring-offset-1 ring-gray-400 scale-110 bg-gray-200' : 'bg-gray-100 hover:bg-gray-200 hover:scale-105'}`}
+                            title={ic.name}
+                          >
+                            <IconComp size={16} className="text-gray-700" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+                {/* Preview and Add button */}
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border">
+                    <div
+                      className="w-8 h-8 rounded-lg flex items-center justify-center"
+                      style={{ backgroundColor: newCategoryColor }}
+                    >
+                      {React.createElement(getIconComponent(newCategoryIcon), { size: 18, className: 'text-white' })}
+                    </div>
+                    <span className="text-sm text-gray-600">{newCategoryName || 'Aperçu'}</span>
+                  </div>
+                  <button
+                    onClick={handleAddCategory}
+                    disabled={!newCategoryName.trim() || isAddingCategory}
+                    className="px-4 py-2 bg-gradient-to-r from-orange-500 to-amber-600 text-white rounded-xl font-medium hover:from-orange-600 hover:to-amber-700 disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
+                  >
+                    {isAddingCategory ? <RefreshCw size={16} className="animate-spin" /> : <Plus size={16} />}
+                    Ajouter
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1149,7 +1254,10 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
               </div>
             ) : (
               <div className="space-y-3">
-                {categories.map(cat => (
+                {categories.map(cat => {
+                  const CatIcon = getIconComponent(cat.icon);
+                  const catColor = cat.color || '#F97316';
+                  return (
                   <div key={cat.id} className="border rounded-xl overflow-hidden bg-white shadow-sm">
                     {/* Category Header */}
                     <div className="flex items-center gap-3 p-4 bg-gray-50 border-b">
@@ -1160,30 +1268,73 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
                         {expandedCategories[cat.id] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                       </button>
 
-                      <Folder size={20} className="text-orange-500" />
+                      {/* Category icon with color */}
+                      <div
+                        className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                        style={{ backgroundColor: catColor }}
+                      >
+                        <CatIcon size={18} className="text-white" />
+                      </div>
 
                       {editingCategory === cat.id ? (
-                        <div className="flex-1 flex gap-2">
-                          <input
-                            type="text"
-                            value={editName}
-                            onChange={e => setEditName(e.target.value)}
-                            onKeyDown={e => e.key === 'Enter' && handleUpdateCategory(cat.id)}
-                            className="flex-1 px-3 py-1.5 border rounded-lg text-sm"
-                            autoFocus
-                          />
-                          <button
-                            onClick={() => handleUpdateCategory(cat.id)}
-                            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded"
-                          >
-                            <CheckCircle size={18} />
-                          </button>
-                          <button
-                            onClick={() => { setEditingCategory(null); setEditName(''); }}
-                            className="p-1.5 text-gray-400 hover:bg-gray-100 rounded"
-                          >
-                            <X size={18} />
-                          </button>
+                        <div className="flex-1 space-y-3">
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={editName}
+                              onChange={e => setEditName(e.target.value)}
+                              onKeyDown={e => e.key === 'Enter' && handleUpdateCategory(cat.id)}
+                              className="flex-1 px-3 py-1.5 border rounded-lg text-sm"
+                              autoFocus
+                            />
+                            <button
+                              onClick={() => handleUpdateCategory(cat.id)}
+                              className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded"
+                            >
+                              <CheckCircle size={18} />
+                            </button>
+                            <button
+                              onClick={() => { setEditingCategory(null); setEditName(''); setEditColor(''); setEditIcon(''); }}
+                              className="p-1.5 text-gray-400 hover:bg-gray-100 rounded"
+                            >
+                              <X size={18} />
+                            </button>
+                          </div>
+                          {/* Color and Icon pickers in edit mode */}
+                          <div className="flex flex-wrap gap-4 bg-white p-3 rounded-lg border">
+                            <div>
+                              <label className="text-xs font-medium text-gray-500 mb-1 block">Couleur</label>
+                              <div className="flex flex-wrap gap-1">
+                                {MECA_CATEGORY_COLORS.map(c => (
+                                  <button
+                                    key={c.value}
+                                    onClick={() => setEditColor(c.value)}
+                                    className={`w-6 h-6 rounded transition-all ${editColor === c.value ? 'ring-2 ring-offset-1 ring-gray-400 scale-110' : 'hover:scale-105'}`}
+                                    style={{ backgroundColor: c.value }}
+                                    title={c.name}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-xs font-medium text-gray-500 mb-1 block">Icône</label>
+                              <div className="flex flex-wrap gap-1">
+                                {MECA_CATEGORY_ICONS.map(ic => {
+                                  const IconComp = ic.component;
+                                  return (
+                                    <button
+                                      key={ic.value}
+                                      onClick={() => setEditIcon(ic.value)}
+                                      className={`w-6 h-6 rounded flex items-center justify-center transition-all ${editIcon === ic.value ? 'ring-2 ring-offset-1 ring-gray-400 scale-110 bg-gray-200' : 'bg-gray-100 hover:bg-gray-200 hover:scale-105'}`}
+                                      title={ic.name}
+                                    >
+                                      <IconComp size={14} className="text-gray-700" />
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       ) : (
                         <>
@@ -1204,7 +1355,12 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
                             <Zap size={14} />
                           </button>
                           <button
-                            onClick={() => { setEditingCategory(cat.id); setEditName(cat.name); }}
+                            onClick={() => {
+                              setEditingCategory(cat.id);
+                              setEditName(cat.name);
+                              setEditColor(cat.color || '#F97316');
+                              setEditIcon(cat.icon || 'Cog');
+                            }}
                             className="p-1.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded"
                           >
                             <Edit3 size={16} />
@@ -1317,7 +1473,8 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
                       </div>
                     )}
                   </div>
-                ))}
+                );
+                })}
               </div>
             )}
           </div>
