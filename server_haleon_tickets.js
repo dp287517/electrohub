@@ -77,8 +77,8 @@ export async function initHaleonTicketsTables(pool) {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS haleon_ticket_teams (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        bubble_team_id VARCHAR(255) UNIQUE,
-        name VARCHAR(255) NOT NULL UNIQUE,
+        bubble_team_id VARCHAR(255),
+        name VARCHAR(255) NOT NULL,
         color VARCHAR(50) DEFAULT '#3b82f6',
         site VARCHAR(100) DEFAULT 'Nyon',
         bubble_users TEXT[],
@@ -89,18 +89,21 @@ export async function initHaleonTicketsTables(pool) {
       )
     `);
 
-    // Ajouter la contrainte unique sur name si elle n'existe pas (pour les DB existantes)
+    // Ajouter un index unique sur name pour les ON CONFLICT (plus robuste)
+    // D'abord supprimer les doublons s'il y en a
+    try {
+      await pool.query(`
+        DELETE FROM haleon_ticket_teams a
+        USING haleon_ticket_teams b
+        WHERE a.id < b.id AND a.name = b.name
+      `);
+    } catch (e) {
+      console.log('[Haleon Tickets] No duplicates to clean');
+    }
+
+    // Créer l'index unique s'il n'existe pas
     await pool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint WHERE conname = 'haleon_ticket_teams_name_key'
-        ) THEN
-          ALTER TABLE haleon_ticket_teams ADD CONSTRAINT haleon_ticket_teams_name_key UNIQUE (name);
-        END IF;
-      EXCEPTION WHEN duplicate_object THEN
-        NULL;
-      END $$;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_haleon_ticket_teams_name_unique ON haleon_ticket_teams(name)
     `);
 
     // Table des catégories
@@ -326,23 +329,58 @@ export function createHaleonTicketsRouter(pool) {
           (Array.isArray(bubbleTeam.Users) ? bubbleTeam.Users : bubbleTeam.Users.split(',').map(u => u.trim()))
           : [];
 
-        const result = await pool.query(`
-          INSERT INTO haleon_ticket_teams (bubble_team_id, name, color, site, bubble_users, last_sync_at)
-          VALUES ($1, $2, $3, $4, $5, NOW())
-          ON CONFLICT (name) DO UPDATE SET
-            bubble_team_id = COALESCE(EXCLUDED.bubble_team_id, haleon_ticket_teams.bubble_team_id),
-            color = EXCLUDED.color,
-            site = EXCLUDED.site,
-            bubble_users = EXCLUDED.bubble_users,
-            last_sync_at = NOW(),
-            updated_at = NOW()
-          RETURNING (xmax = 0) as inserted
-        `, [bubbleTeam?._id, teamName, teamData.color, teamData.site, bubbleUsers]);
+        // Upsert avec gestion d'erreur pour le cas où l'index n'existe pas encore
+        try {
+          const result = await pool.query(`
+            INSERT INTO haleon_ticket_teams (bubble_team_id, name, color, site, bubble_users, last_sync_at)
+            VALUES ($1, $2, $3, $4, $5, NOW())
+            ON CONFLICT (name) DO UPDATE SET
+              bubble_team_id = COALESCE(EXCLUDED.bubble_team_id, haleon_ticket_teams.bubble_team_id),
+              color = EXCLUDED.color,
+              site = EXCLUDED.site,
+              bubble_users = EXCLUDED.bubble_users,
+              last_sync_at = NOW(),
+              updated_at = NOW()
+            RETURNING (xmax = 0) as inserted
+          `, [bubbleTeam?._id, teamName, teamData.color, teamData.site, bubbleUsers]);
 
-        if (result.rows[0]?.inserted) {
-          teamsCreated++;
-        } else {
-          teamsUpdated++;
+          if (result.rows[0]?.inserted) {
+            teamsCreated++;
+          } else {
+            teamsUpdated++;
+          }
+        } catch (upsertError) {
+          // Si l'ON CONFLICT échoue, essayer de créer l'index et réessayer
+          if (upsertError.message.includes('ON CONFLICT') || upsertError.message.includes('unique')) {
+            console.log('[Haleon Tickets] Creating unique index on name...');
+            await pool.query(`
+              CREATE UNIQUE INDEX IF NOT EXISTS idx_haleon_ticket_teams_name_unique ON haleon_ticket_teams(name)
+            `);
+
+            // Réessayer l'upsert
+            const existing = await pool.query(
+              'SELECT id FROM haleon_ticket_teams WHERE name = $1',
+              [teamName]
+            );
+
+            if (existing.rows.length > 0) {
+              await pool.query(`
+                UPDATE haleon_ticket_teams
+                SET bubble_team_id = COALESCE($2, bubble_team_id),
+                    color = $3, site = $4, bubble_users = $5, last_sync_at = NOW(), updated_at = NOW()
+                WHERE name = $1
+              `, [teamName, bubbleTeam?._id, teamData.color, teamData.site, bubbleUsers]);
+              teamsUpdated++;
+            } else {
+              await pool.query(`
+                INSERT INTO haleon_ticket_teams (bubble_team_id, name, color, site, bubble_users, last_sync_at)
+                VALUES ($1, $2, $3, $4, $5, NOW())
+              `, [bubbleTeam?._id, teamName, teamData.color, teamData.site, bubbleUsers]);
+              teamsCreated++;
+            }
+          } else {
+            throw upsertError;
+          }
         }
       }
 
