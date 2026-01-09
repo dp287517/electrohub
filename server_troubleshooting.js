@@ -349,6 +349,38 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
   }
 });
 
+// Helper: Get equipment name from source table for non-UUID IDs
+async function getEquipmentNameFromSource(equipmentType, numericId, site) {
+  const tableMap = {
+    switchboard: { table: 'switchboards', nameCol: 'name', siteCol: 'site' },
+    vsd: { table: 'vsd_equipments', nameCol: 'name', siteCol: 'site' },
+    meca: { table: 'meca_equipments', nameCol: 'name', siteCol: null }, // Uses site_id via join
+    mobile: { table: 'me_equipments', nameCol: 'name', siteCol: null },
+    hv: { table: 'hv_equipments', nameCol: 'name', siteCol: 'site' },
+    glo: { table: 'glo_equipments', nameCol: 'name', siteCol: null },
+    datahub: { table: 'dh_items', nameCol: 'name', siteCol: null }
+  };
+
+  const config = tableMap[equipmentType];
+  if (!config) return null;
+
+  try {
+    let query, params;
+    if (config.siteCol) {
+      query = `SELECT ${config.nameCol} as name FROM ${config.table} WHERE id = $1 AND ${config.siteCol} = $2`;
+      params = [numericId, site];
+    } else {
+      query = `SELECT ${config.nameCol} as name FROM ${config.table} WHERE id = $1`;
+      params = [numericId];
+    }
+    const result = await pool.query(query, params);
+    return result.rows[0]?.name || null;
+  } catch (err) {
+    console.error(`[TROUBLESHOOTING] Error fetching equipment name for ${equipmentType}/${numericId}:`, err.message);
+    return null;
+  }
+}
+
 // Get all troubleshooting records with filters
 router.get('/list', async (req, res) => {
   try {
@@ -364,6 +396,13 @@ router.get('/list', async (req, res) => {
     // Validate equipment_id is a valid UUID (some equipment types use numeric IDs)
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const validEquipmentId = equipment_id && uuidRegex.test(equipment_id) ? equipment_id : null;
+
+    // For non-UUID equipment IDs (numeric like switchboards), lookup the equipment name
+    let equipmentNameFromSource = null;
+    if (equipment_id && !validEquipmentId && equipment_type) {
+      equipmentNameFromSource = await getEquipmentNameFromSource(equipment_type, equipment_id, site);
+      console.log(`[TROUBLESHOOTING] Non-UUID equipment_id=${equipment_id}, looked up name: "${equipmentNameFromSource}"`);
+    }
 
     // Use subquery to calculate global row_number BEFORE filtering
     // This ensures report numbers are consistent regardless of filters
@@ -388,8 +427,12 @@ router.get('/list', async (req, res) => {
     if (validEquipmentId) {
       sql += ` AND tr.equipment_id = $${paramIndex++}`;
       params.push(validEquipmentId);
+    } else if (equipmentNameFromSource) {
+      // Non-UUID equipment_id: search by the looked-up equipment name
+      sql += ` AND tr.equipment_name = $${paramIndex++}`;
+      params.push(equipmentNameFromSource);
     } else if (equipment_id && !validEquipmentId) {
-      // Non-UUID equipment_id provided - search by equipment_code instead
+      // Fallback: try equipment_code (legacy behavior)
       sql += ` AND tr.equipment_code = $${paramIndex++}`;
       params.push(equipment_id);
     }
@@ -447,7 +490,12 @@ router.get('/list', async (req, res) => {
     if (validEquipmentId) {
       countSql += ` AND tr.equipment_id = $${countParamIndex++}`;
       countParams.push(validEquipmentId);
+    } else if (equipmentNameFromSource) {
+      // Non-UUID equipment_id: search by the looked-up equipment name
+      countSql += ` AND tr.equipment_name = $${countParamIndex++}`;
+      countParams.push(equipmentNameFromSource);
     } else if (equipment_id && !validEquipmentId) {
+      // Fallback: try equipment_code (legacy behavior)
       countSql += ` AND tr.equipment_code = $${countParamIndex++}`;
       countParams.push(equipment_id);
     }
