@@ -273,6 +273,10 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
     const finalEquipmentType = equipment_type || 'generic';
     const finalTitle = title || 'Dépannage sans titre';
 
+    // Validate equipment_id is a valid UUID (some equipment types use numeric IDs)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const finalEquipmentId = equipment_id && uuidRegex.test(equipment_id) ? equipment_id : null;
+
     // Validate required fields - only title is truly required now
     if (!finalTitle) {
       return res.status(400).json({ error: 'Le titre est requis' });
@@ -292,7 +296,7 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, 'completed')
       RETURNING *
     `, [
-      site, finalEquipmentType, equipment_id, equipment_name, equipment_code,
+      site, finalEquipmentType, finalEquipmentId, equipment_name, equipment_code,
       building_code, floor, zone, room,
       finalTitle, description || '', root_cause, solution, parts_replaced,
       category, severity || 'minor', fault_type,
