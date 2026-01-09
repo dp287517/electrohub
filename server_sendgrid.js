@@ -1893,13 +1893,13 @@ function generateTroubleshootingShareEmail(record, photos, shareUrl, agentName, 
       </div>
       <h1 style="margin: 0; font-size: 22px;">📤 Dépannage partagé par ${agentName}</h1>
       <p style="margin: 8px 0 0; opacity: 0.9; font-size: 13px;">${agentInfo.description}</p>
-    </div>
 
-    <!-- Shared by info -->
-    <div style="background: #f0f9ff; padding: 15px 25px; border-bottom: 1px solid #e5e7eb;">
-      <p style="margin: 0; font-size: 14px; color: #1e40af;">
-        <strong>${sharedByName}</strong> vous a partagé ce dépannage
-      </p>
+      <!-- CTA Button - Right after header -->
+      <div style="margin-top: 20px;">
+        <a href="${shareUrl}" style="display: inline-block; padding: 14px 35px; background: #ffffff; color: ${agentInfo.color}; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 15px; border: 2px solid white;">
+          👁️ Voir le dépannage
+        </a>
+      </div>
     </div>
 
     <!-- Equipment & Status -->
@@ -1972,16 +1972,6 @@ function generateTroubleshootingShareEmail(record, photos, shareUrl, agentName, 
       ${photos.length > 1 ? `<p style="margin: 10px 0 0; font-size: 13px; color: #6b7280;">+ ${photos.length - 1} autre(s) photo(s) disponible(s)</p>` : ''}
     </div>
     ` : ''}
-
-    <!-- CTA Button -->
-    <div style="padding: 30px; text-align: center; background: #f8fafc;">
-      <a href="${shareUrl}" style="display: inline-block; padding: 16px 40px; background: linear-gradient(135deg, ${agentInfo.color}, ${agentInfo.color}CC); color: white; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 14px rgba(0,0,0,0.15);">
-        👁️ Voir le dépannage complet
-      </a>
-      <p style="margin: 15px 0 0; font-size: 12px; color: #6b7280;">
-        Accédez aux photos, au plan de localisation et aux détails complets
-      </p>
-    </div>
 
     <!-- Footer -->
     <div style="background: #1f2937; padding: 25px; text-align: center; color: #9ca3af; font-size: 12px;">
