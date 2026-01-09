@@ -102,6 +102,23 @@ export async function initTroubleshootingTables(poolInstance) {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_troubleshooting_status ON troubleshooting_records(status)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_troubleshooting_photos_record ON troubleshooting_photos(troubleshooting_id)`);
 
+    // Multi-equipment support table - links troubleshooting to multiple equipment
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS troubleshooting_equipment_links (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        troubleshooting_id UUID NOT NULL REFERENCES troubleshooting_records(id) ON DELETE CASCADE,
+        equipment_id UUID NOT NULL,
+        equipment_type VARCHAR(50) NOT NULL,
+        equipment_name VARCHAR(255),
+        equipment_code VARCHAR(100),
+        building_code VARCHAR(100),
+        is_primary BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_troubleshooting_links_record ON troubleshooting_equipment_links(troubleshooting_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_troubleshooting_links_equipment ON troubleshooting_equipment_links(equipment_type, equipment_id)`);
+
     console.log('[TROUBLESHOOTING] ✅ Tables initialized successfully');
     return true;
   } catch (error) {
@@ -232,7 +249,7 @@ async function generateMiniPlanImage(planData, markerColor = '#3b82f6') {
 // CRUD ENDPOINTS
 // ============================================================
 
-// Create new troubleshooting record
+// Create new troubleshooting record (supports multiple equipment)
 router.post('/create', async (req, res) => {
   try {
     const site = req.headers['x-site'] || 'default';
@@ -244,7 +261,9 @@ router.post('/create', async (req, res) => {
       started_at, completed_at, duration_minutes, downtime_minutes,
       technician_name, technician_email,
       ai_diagnosis, ai_recommendations,
-      photos = []
+      photos = [],
+      // NEW: Support for multiple equipment
+      additional_equipment = [] // Array of { equipment_id, equipment_type, equipment_name, equipment_code, building_code }
     } = req.body;
 
     // Get user info from request if not provided
@@ -293,8 +312,29 @@ router.post('/create', async (req, res) => {
       }
     }
 
-    console.log(`[TROUBLESHOOTING] ✅ Created record ${record.id} for ${finalEquipmentType} - ${equipment_name}`);
-    res.json({ success: true, id: record.id, record });
+    // Insert primary equipment link
+    if (equipment_id) {
+      await pool.query(`
+        INSERT INTO troubleshooting_equipment_links
+        (troubleshooting_id, equipment_id, equipment_type, equipment_name, equipment_code, building_code, is_primary)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+      `, [record.id, equipment_id, finalEquipmentType, equipment_name, equipment_code, building_code]);
+    }
+
+    // Insert additional equipment links
+    if (additional_equipment && additional_equipment.length > 0) {
+      for (const eq of additional_equipment) {
+        await pool.query(`
+          INSERT INTO troubleshooting_equipment_links
+          (troubleshooting_id, equipment_id, equipment_type, equipment_name, equipment_code, building_code, is_primary)
+          VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+        `, [record.id, eq.equipment_id, eq.equipment_type, eq.equipment_name, eq.equipment_code, eq.building_code]);
+      }
+    }
+
+    const totalEquipment = 1 + (additional_equipment?.length || 0);
+    console.log(`[TROUBLESHOOTING] ✅ Created record ${record.id} for ${totalEquipment} equipment(s) - Primary: ${equipment_name}`);
+    res.json({ success: true, id: record.id, record, linkedEquipment: totalEquipment });
   } catch (error) {
     console.error('[TROUBLESHOOTING] Create error:', error);
     res.status(500).json({ error: error.message });
@@ -1317,6 +1357,304 @@ ${recent.map(r => `- ${new Date(r.created_at).toLocaleDateString('fr-FR')}: ${r.
     });
   } catch (error) {
     console.error('[TROUBLESHOOTING] AI chat error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================
+// INTELLIGENT EQUIPMENT SEARCH FOR TROUBLESHOOTING
+// ============================================================
+
+// Dictionnaire de synonymes et termes associés
+const EQUIPMENT_SYNONYMS = {
+  // Éclairage / Luminaires
+  'luminaire': ['eclairage', 'éclairage', 'lampe', 'led', 'tube', 'neon', 'néon', 'projecteur', 'spot', 'plafonnier', 'applique'],
+  'eclairage': ['luminaire', 'éclairage', 'lampe', 'led', 'tube', 'neon', 'néon', 'lumiere', 'lumière'],
+  'lumiere': ['luminaire', 'eclairage', 'éclairage', 'lampe', 'led'],
+
+  // CVC / Climatisation
+  'climatisation': ['clim', 'cvc', 'chauffage', 'ventilation', 'hvac', 'pac', 'pompe a chaleur', 'chaud', 'froid', 'temperature', 'température'],
+  'clim': ['climatisation', 'cvc', 'hvac', 'froid', 'chaud'],
+  'cvc': ['climatisation', 'clim', 'chauffage', 'ventilation', 'hvac'],
+  'chauffage': ['cvc', 'climatisation', 'chaud', 'radiateur', 'chaudiere', 'chaudière', 'temperature', 'température'],
+  'froid': ['climatisation', 'clim', 'cvc', 'refroidissement', 'frigo', 'groupe froid', 'temperature', 'température'],
+  'chaud': ['chauffage', 'cvc', 'climatisation', 'temperature', 'température'],
+  'gel': ['froid', 'temperature', 'température', 'chauffage', 'cvc', 'protection gel'],
+
+  // Plomberie / Eau
+  'fuite': ['eau', 'plomberie', 'inondation', 'humidite', 'humidité', 'vanne', 'tuyau', 'canalisation'],
+  'eau': ['fuite', 'plomberie', 'inondation', 'pompe', 'vanne', 'canalisation', 'robinet'],
+  'inondation': ['fuite', 'eau', 'plomberie', 'pompe', 'degat des eaux', 'dégât des eaux'],
+  'plomberie': ['eau', 'fuite', 'vanne', 'pompe', 'tuyau', 'canalisation', 'robinet'],
+
+  // Électricité
+  'tableau': ['armoire', 'coffret', 'switchboard', 'tgbt', 'td', 'disjoncteur'],
+  'armoire': ['tableau', 'coffret', 'switchboard', 'armoire electrique', 'armoire électrique'],
+  'variateur': ['vsd', 'vfd', 'drive', 'convertisseur', 'frequence', 'fréquence'],
+  'vsd': ['variateur', 'vfd', 'drive', 'convertisseur frequence'],
+  'disjoncteur': ['tableau', 'protection', 'coupure', 'differentiel', 'différentiel'],
+  'prise': ['electricite', 'électricité', 'courant', 'alimentation'],
+
+  // Moteurs / Mécanique
+  'moteur': ['meca', 'mecanique', 'mécanique', 'pompe', 'ventilateur', 'compresseur'],
+  'pompe': ['moteur', 'meca', 'eau', 'refoulement', 'relevage', 'surpresseur'],
+  'ventilateur': ['moteur', 'meca', 'extraction', 'soufflage', 'cvc', 'ventilation'],
+  'compresseur': ['moteur', 'meca', 'air comprime', 'air comprimé'],
+
+  // Portes / Accès
+  'porte': ['acces', 'accès', 'portail', 'barriere', 'barrière', 'issue', 'entree', 'entrée', 'sortie'],
+  'portail': ['porte', 'barriere', 'barrière', 'acces', 'accès', 'parking'],
+  'barriere': ['portail', 'porte', 'parking', 'acces', 'accès'],
+  'issue': ['porte', 'secours', 'evacuation', 'évacuation', 'sortie'],
+
+  // Sécurité
+  'incendie': ['securite', 'sécurité', 'detecteur', 'détecteur', 'alarme', 'extincteur', 'desenfumage', 'désenfumage', 'sprinkler'],
+  'alarme': ['securite', 'sécurité', 'incendie', 'intrusion', 'detecteur', 'détecteur'],
+  'detecteur': ['alarme', 'incendie', 'fumee', 'fumée', 'presence', 'présence'],
+
+  // Général
+  'panne': ['probleme', 'problème', 'dysfonctionnement', 'arret', 'arrêt', 'defaut', 'défaut', 'erreur'],
+  'probleme': ['panne', 'dysfonctionnement', 'defaut', 'défaut', 'incident'],
+  'urgence': ['panne', 'critique', 'prioritaire', 'arret', 'arrêt']
+};
+
+// Mapping problèmes → types d'équipements suggérés
+const PROBLEM_TO_EQUIPMENT_TYPE = {
+  // Problèmes température
+  'froid': ['cvc', 'climatisation', 'chauffage', 'glo'],
+  'chaud': ['cvc', 'climatisation', 'chauffage', 'glo'],
+  'gel': ['cvc', 'chauffage', 'plomberie', 'glo'],
+  'temperature': ['cvc', 'climatisation', 'glo'],
+
+  // Problèmes eau
+  'fuite': ['plomberie', 'cvc', 'meca'],
+  'inondation': ['plomberie', 'meca'],
+  'eau': ['plomberie', 'meca', 'cvc'],
+
+  // Problèmes électriques
+  'coupure': ['switchboard', 'hv', 'vsd'],
+  'court-circuit': ['switchboard', 'hv'],
+  'surcharge': ['switchboard', 'vsd'],
+
+  // Problèmes éclairage
+  'luminaire': ['glo', 'eclairage'],
+  'eclairage': ['glo'],
+  'noir': ['glo', 'switchboard'],
+
+  // Problèmes accès
+  'porte': ['meca', 'mobile'],
+  'acces': ['meca', 'mobile'],
+  'bloquer': ['meca', 'mobile']
+};
+
+// Fonction de calcul de distance de Levenshtein pour tolérance aux fautes
+function levenshteinDistance(a, b) {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+// Normalise une chaîne pour la comparaison
+function normalizeString(str) {
+  return str
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remove accents
+    .replace(/[^a-z0-9\s]/g, '') // Remove special chars
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Trouve les termes de recherche étendus basés sur les synonymes
+function expandSearchTerms(query) {
+  const normalized = normalizeString(query);
+  const words = normalized.split(' ');
+  const expandedTerms = new Set(words);
+
+  for (const word of words) {
+    // Recherche exacte dans le dictionnaire
+    if (EQUIPMENT_SYNONYMS[word]) {
+      EQUIPMENT_SYNONYMS[word].forEach(syn => expandedTerms.add(normalizeString(syn)));
+    }
+
+    // Recherche fuzzy dans les clés du dictionnaire
+    for (const key of Object.keys(EQUIPMENT_SYNONYMS)) {
+      const distance = levenshteinDistance(word, key);
+      if (distance <= 2 && word.length > 3) { // Tolérance de 2 caractères pour mots > 3 chars
+        expandedTerms.add(key);
+        EQUIPMENT_SYNONYMS[key].forEach(syn => expandedTerms.add(normalizeString(syn)));
+      }
+    }
+  }
+
+  return Array.from(expandedTerms);
+}
+
+// Détermine les types d'équipements suggérés basés sur le problème
+function suggestEquipmentTypes(query) {
+  const normalized = normalizeString(query);
+  const suggestedTypes = new Set();
+
+  for (const [problem, types] of Object.entries(PROBLEM_TO_EQUIPMENT_TYPE)) {
+    if (normalized.includes(normalizeString(problem))) {
+      types.forEach(t => suggestedTypes.add(t));
+    }
+  }
+
+  return Array.from(suggestedTypes);
+}
+
+// Endpoint de recherche intelligente d'équipements
+router.get('/equipment/smart-search', async (req, res) => {
+  try {
+    const site = req.headers['x-site'] || 'default';
+    const { q, limit = 20 } = req.query;
+
+    if (!q || q.length < 2) {
+      return res.json({ results: [], expandedTerms: [], suggestedTypes: [] });
+    }
+
+    // Expansion des termes de recherche
+    const expandedTerms = expandSearchTerms(q);
+    const suggestedTypes = suggestEquipmentTypes(q);
+
+    console.log(`[SMART-SEARCH] Query: "${q}" -> Expanded: [${expandedTerms.slice(0, 5).join(', ')}...]`);
+
+    const results = [];
+
+    // Tables à rechercher avec leurs configurations
+    const searchConfigs = [
+      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true },
+      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', hasSite: true, hasBuilding: true, hasBuildingCode: false },
+      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, extraCols: ['equipment_type', 'category', 'function'] },
+      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false },
+      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true },
+      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, extraCols: ['equipment_type', 'function'] },
+      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false },
+      { type: 'atex', table: 'atex_equipments', nameCol: 'name', codeCol: null, hasSite: false, hasBuilding: true, hasBuildingCode: false }
+    ];
+
+    for (const config of searchConfigs) {
+      try {
+        // Construire les colonnes SELECT
+        const selectCols = ['id', `${config.nameCol} as name`];
+        if (config.codeCol) selectCols.push(`${config.codeCol} as code`);
+        if (config.hasBuilding) selectCols.push('building');
+        if (config.hasBuildingCode) selectCols.push('building_code');
+        if (config.extraCols) {
+          config.extraCols.forEach(col => selectCols.push(col));
+        }
+        selectCols.push('floor', 'zone');
+
+        // Construire les conditions WHERE pour tous les termes étendus
+        const searchConditions = expandedTerms.map((term, idx) => {
+          const paramNum = config.hasSite ? idx + 2 : idx + 1;
+          const conditions = [
+            `LOWER(COALESCE(${config.nameCol}, '')) LIKE $${paramNum}`
+          ];
+          if (config.codeCol) {
+            conditions.push(`LOWER(COALESCE(${config.codeCol}, '')) LIKE $${paramNum}`);
+          }
+          if (config.hasBuilding) {
+            conditions.push(`LOWER(COALESCE(building, '')) LIKE $${paramNum}`);
+          }
+          if (config.hasBuildingCode) {
+            conditions.push(`LOWER(COALESCE(building_code, '')) LIKE $${paramNum}`);
+          }
+          if (config.extraCols) {
+            config.extraCols.forEach(col => {
+              conditions.push(`LOWER(COALESCE(${col}, '')) LIKE $${paramNum}`);
+            });
+          }
+          return `(${conditions.join(' OR ')})`;
+        });
+
+        const whereClause = searchConditions.join(' OR ');
+        const params = config.hasSite ? [site] : [];
+        expandedTerms.forEach(term => params.push(`%${term}%`));
+
+        const query = `
+          SELECT ${selectCols.join(', ')}, '${config.type}' as equipment_type
+          FROM ${config.table}
+          ${config.hasSite ? 'WHERE site = $1 AND' : 'WHERE'} (${whereClause})
+          LIMIT 10
+        `;
+
+        const result = await pool.query(query, params);
+
+        for (const row of result.rows) {
+          // Calculer un score de pertinence
+          const nameNorm = normalizeString(row.name || '');
+          const queryNorm = normalizeString(q);
+          let score = 0;
+
+          // Match exact = score élevé
+          if (nameNorm.includes(queryNorm)) score += 100;
+          // Match sur le code
+          if (row.code && normalizeString(row.code).includes(queryNorm)) score += 80;
+          // Match sur les termes étendus
+          expandedTerms.forEach(term => {
+            if (nameNorm.includes(term)) score += 20;
+          });
+          // Bonus si le type est suggéré
+          if (suggestedTypes.includes(config.type)) score += 30;
+
+          results.push({
+            id: row.id,
+            name: row.name,
+            code: row.code || row.tag,
+            equipment_type: config.type,
+            type_label: getEquipmentTypeLabel(config.type),
+            building: row.building || row.building_code,
+            floor: row.floor,
+            zone: row.zone,
+            extra: config.extraCols ? config.extraCols.reduce((acc, col) => {
+              if (row[col]) acc[col] = row[col];
+              return acc;
+            }, {}) : null,
+            score
+          });
+        }
+      } catch (err) {
+        console.warn(`[SMART-SEARCH] Error searching ${config.type}:`, err.message);
+      }
+    }
+
+    // Trier par score décroissant
+    results.sort((a, b) => b.score - a.score);
+
+    console.log(`[SMART-SEARCH] Found ${results.length} results for "${q}"`);
+
+    res.json({
+      success: true,
+      query: q,
+      expandedTerms: expandedTerms.slice(0, 10),
+      suggestedTypes,
+      results: results.slice(0, parseInt(limit))
+    });
+  } catch (error) {
+    console.error('[SMART-SEARCH] Error:', error);
     res.status(500).json({ error: error.message });
   }
 });

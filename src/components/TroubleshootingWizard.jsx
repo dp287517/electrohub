@@ -527,7 +527,7 @@ function ClassificationStep({ formData, setFormData, onNext, onBack }) {
 }
 
 // Step 4: Summary & Submit
-function SummaryStep({ formData, photos, equipment, onBack, onSubmit, isSubmitting }) {
+function SummaryStep({ formData, photos, equipment, additionalEquipment = [], onBack, onSubmit, isSubmitting }) {
   return (
     <div className="space-y-6 animate-slideIn">
       <div className="text-center">
@@ -541,17 +541,38 @@ function SummaryStep({ formData, photos, equipment, onBack, onSubmit, isSubmitti
       {/* Summary card */}
       <div className="bg-gray-50 rounded-2xl p-6 space-y-4">
         {/* Equipment */}
-        <div className="flex items-center gap-3 pb-4 border-b border-gray-200">
-          <div className="p-2 bg-blue-100 rounded-lg">
-            <Building2 className="w-5 h-5 text-blue-600" />
+        <div className="pb-4 border-b border-gray-200">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <Building2 className="w-5 h-5 text-blue-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-500">
+                Équipement{additionalEquipment.length > 0 ? 's' : ''} concerné{additionalEquipment.length > 0 ? 's' : ''}
+              </p>
+              <p className="font-semibold text-gray-900">
+                {equipment?.name || equipment?.equipment_name || 'Non défini'}
+                {equipment?.code || equipment?.tag ? ` (${equipment.code || equipment.tag})` : ''}
+              </p>
+            </div>
           </div>
-          <div>
-            <p className="text-sm text-gray-500">Équipement</p>
-            <p className="font-semibold text-gray-900">
-              {equipment?.name || equipment?.equipment_name || 'Non défini'}
-              {equipment?.code || equipment?.tag ? ` (${equipment.code || equipment.tag})` : ''}
-            </p>
-          </div>
+          {/* Additional equipment */}
+          {additionalEquipment.length > 0 && (
+            <div className="mt-3 ml-11 space-y-2">
+              {additionalEquipment.map((eq, idx) => (
+                <div key={idx} className="flex items-center gap-2 text-sm">
+                  <span className="w-1.5 h-1.5 bg-orange-400 rounded-full"></span>
+                  <span className="text-gray-700">{eq.equipment_name}</span>
+                  {eq.equipment_code && (
+                    <span className="text-gray-400 text-xs">({eq.equipment_code})</span>
+                  )}
+                </div>
+              ))}
+              <p className="text-xs text-orange-600 font-medium mt-1">
+                +{additionalEquipment.length} équipement{additionalEquipment.length > 1 ? 's' : ''} lié{additionalEquipment.length > 1 ? 's' : ''}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Title & Description */}
@@ -695,7 +716,8 @@ export default function TroubleshootingWizard({
   onClose,
   equipment,
   equipmentType,
-  onSuccess
+  onSuccess,
+  additionalEquipment = [] // Support for multiple equipment
 }) {
   const [step, setStep] = useState(1);
   const [photos, setPhotos] = useState([]);
@@ -857,7 +879,9 @@ export default function TroubleshootingWizard({
           data: p.data,
           caption: p.caption,
           type: p.type
-        }))
+        })),
+        // Support for multiple equipment
+        additional_equipment: additionalEquipment || []
       };
 
       const response = await post('/api/troubleshooting/create', payload);
@@ -990,6 +1014,7 @@ export default function TroubleshootingWizard({
                   formData={formData}
                   photos={photos}
                   equipment={equipment}
+                  additionalEquipment={additionalEquipment}
                   onBack={() => setStep(3)}
                   onSubmit={handleSubmit}
                   isSubmitting={isSubmitting}
