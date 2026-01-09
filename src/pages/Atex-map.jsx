@@ -1545,9 +1545,9 @@ export default function AtexMap({
     clearSearchHighlight();
   }
 
-  // Keyboard shortcut for search (Ctrl+F)
+  // Keyboard shortcut for search (Ctrl+F) - Desktop only
   useEffect(() => {
-    if (!open) return;
+    if (!open || IS_MOBILE) return; // Disabled on mobile to prevent crashes
 
     const handleKeyDown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
@@ -2719,14 +2719,16 @@ function setupHandleDrag(map, onMoveCallback) {
             💾
           </button>
         )}
-        {/* 🔍 Bouton recherche texte PDF */}
-        <button
-          className="btn-search"
-          title="Rechercher du texte sur le plan (Ctrl+F)"
-          onClick={() => setSearchOpen(true)}
-        >
-          🔍
-        </button>
+        {/* 🔍 Bouton recherche texte PDF - Desktop uniquement (crash sur mobile) */}
+        {!IS_MOBILE && (
+          <button
+            className="btn-search"
+            title="Rechercher du texte sur le plan (Ctrl+F)"
+            onClick={() => setSearchOpen(true)}
+          >
+            🔍
+          </button>
+        )}
         {/* Légende - 🆕 Bouton distinct et plus visible */}
         <button
           className="btn-legend"
@@ -2742,8 +2744,8 @@ function setupHandleDrag(map, onMoveCallback) {
           Mode polygone : cliquez pour ajouter des sommets, puis "Terminer polygone".
         </div>
       )}
-      {/* 🔍 Barre de recherche texte PDF */}
-      {searchOpen && (
+      {/* 🔍 Barre de recherche texte PDF - Desktop uniquement */}
+      {searchOpen && !IS_MOBILE && (
         <div className="atex-search-bar">
           <div className="search-input-wrapper">
             <span className="search-icon">🔍</span>
