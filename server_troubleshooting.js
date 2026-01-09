@@ -1400,6 +1400,9 @@ const EQUIPMENT_SYNONYMS = {
   'pompe': ['moteur', 'meca', 'eau', 'refoulement', 'relevage', 'surpresseur'],
   'ventilateur': ['moteur', 'meca', 'extraction', 'soufflage', 'cvc', 'ventilation'],
   'compresseur': ['moteur', 'meca', 'air comprime', 'air comprimé'],
+  'convoyeur': ['meca', 'mecanique', 'mécanique', 'tapis', 'bande', 'transporteur', 'conv'],
+  'tapis': ['convoyeur', 'bande', 'transporteur', 'meca'],
+  'transporteur': ['convoyeur', 'tapis', 'bande', 'meca'],
 
   // Portes / Accès
   'porte': ['acces', 'accès', 'portail', 'barriere', 'barrière', 'issue', 'entree', 'entrée', 'sortie'],
@@ -1602,16 +1605,17 @@ router.get('/equipment/smart-search', async (req, res) => {
 
     // Tables à rechercher avec leurs configurations
     // hasZone: true si la table a une colonne 'zone'
+    // hasFloor: true si la table a une colonne 'floor'
     const searchConfigs = [
-      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true, hasZone: true },
-      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', hasSite: true, hasBuilding: true, hasBuildingCode: false, hasZone: true },
-      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true, extraCols: ['equipment_type', 'category', 'function'] },
-      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true },
-      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true, hasZone: true },
-      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true, extraCols: ['equipment_type', 'function'] },
-      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: false },
-      { type: 'atex', table: 'atex_equipments', nameCol: 'name', codeCol: null, hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true },
-      { type: 'infrastructure', table: 'inf_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: false, extraCols: ['location', 'description'] }
+      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true, hasFloor: true, hasZone: false },
+      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', hasSite: true, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: true },
+      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: true, extraCols: ['equipment_type', 'category', 'function'] },
+      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: false },
+      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true, hasFloor: true, hasZone: false },
+      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: true, extraCols: ['equipment_type', 'function'] },
+      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: false },
+      { type: 'atex', table: 'atex_equipments', nameCol: 'name', codeCol: null, hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: false, hasZone: true },
+      { type: 'infrastructure', table: 'inf_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: false, extraCols: ['location', 'description'] }
     ];
 
     for (const config of searchConfigs) {
@@ -1624,7 +1628,7 @@ router.get('/equipment/smart-search', async (req, res) => {
         if (config.extraCols) {
           config.extraCols.forEach(col => selectCols.push(col));
         }
-        selectCols.push('floor');
+        if (config.hasFloor) selectCols.push('floor');
         if (config.hasZone) selectCols.push('zone');
 
         // Construire les conditions WHERE pour tous les termes étendus
@@ -1642,8 +1646,10 @@ router.get('/equipment/smart-search', async (req, res) => {
           if (config.hasBuildingCode) {
             conditions.push(`LOWER(COALESCE(building_code, '')) LIKE $${paramNum}`);
           }
-          // Always search floor column
-          conditions.push(`LOWER(COALESCE(floor, '')) LIKE $${paramNum}`);
+          // Search floor column only if table has it
+          if (config.hasFloor) {
+            conditions.push(`LOWER(COALESCE(floor, '')) LIKE $${paramNum}`);
+          }
           if (config.extraCols) {
             config.extraCols.forEach(col => {
               conditions.push(`LOWER(COALESCE(${col}, '')) LIKE $${paramNum}`);
@@ -1686,12 +1692,18 @@ router.get('/equipment/smart-search', async (req, res) => {
           let locationMatches = 0; // Track building/floor matches
 
           // Helper: pour les chiffres, utiliser word boundary pour éviter "5" matchant "35"
+          // Mais aussi fallback sur includes pour les cas spéciaux (ex: "convoyeur5", "convoyeur-5")
           const wordMatches = (text, word) => {
             if (!text || !word) return false;
-            // Pour les chiffres purs, utiliser word boundary
+            // Pour les chiffres purs, essayer word boundary d'abord
             if (/^\d+$/.test(word)) {
-              const regex = new RegExp(`(^|[^0-9])${word}([^0-9]|$)`);
-              return regex.test(text);
+              // Word boundary strict: espaces ou début/fin, ou séparateurs comme - _
+              const regex = new RegExp(`(^|[^0-9a-z])${word}([^0-9a-z]|$)`, 'i');
+              if (regex.test(text)) return true;
+              // Fallback: le nombre apparaît dans le texte (ex: zone5, conv5)
+              // Mais seulement si c'est le bon contexte (pas au milieu d'un autre nombre)
+              const simpleRegex = new RegExp(`[a-z]${word}([^0-9]|$)|${word}[a-z]`, 'i');
+              return simpleRegex.test(text);
             }
             // Pour les mots normaux, simple includes
             return text.includes(word);
@@ -1756,6 +1768,11 @@ router.get('/equipment/smart-search', async (req, res) => {
           // Bonus si le type est suggéré
           if (suggestedTypes.includes(config.type)) score += 30;
 
+          // Debug log for first few results
+          if (results.length < 5) {
+            console.log(`[SMART-SEARCH] Match: "${row.name}" - score=${score}, matchCount=${originalWordMatches}, nameMatches=${nameMatches}, primaryMatch=${primaryWordMatchesName}, primaryWord="${primaryWord}"`);
+          }
+
           results.push({
             id: row.id,
             name: row.name,
@@ -1799,30 +1816,39 @@ router.get('/equipment/smart-search', async (req, res) => {
 
     let filteredResults = results;
 
-    // RÈGLE STRICTE : Pour 2+ mots, TOUS les mots importants doivent matcher quelque part
+    // RÈGLE : Pour 2+ mots, essayer de matcher tous les mots avec fallback progressif
     if (queryWordCount >= 2) {
-      // Filtrer : le mot principal DOIT matcher le nom
-      // ET au moins un autre terme doit matcher (building, floor, code, ou autre dans le nom)
       if (hasPrimaryWord) {
-        // Ex: "convoyeur 5" → "convoyeur" DOIT être dans le nom ET "5" doit matcher quelque chose
-        const strictMatches = results.filter(r => {
-          // Le mot principal doit être dans le nom
-          if (!r.primaryWordMatch) return false;
-          // Au moins 2 mots de la requête doivent matcher
-          return r.matchCount >= 2;
-        });
+        // Ex: "convoyeur 5" → "convoyeur" DOIT être dans le nom
+        // Niveau 1: strict - primaryWord + 2 matchs
+        const strictMatches = results.filter(r => r.primaryWordMatch && r.matchCount >= 2);
 
         if (strictMatches.length > 0) {
           filteredResults = strictMatches;
+          console.log(`[SMART-SEARCH] Using strict matches: ${strictMatches.length} results`);
         } else {
-          // Pas de match strict → AUCUN RÉSULTAT
-          // "convoyeur 5" sans convoyeur 5 = pas de résultat
-          filteredResults = [];
+          // Niveau 2: fallback - primaryWord uniquement
+          const primaryMatches = results.filter(r => r.primaryWordMatch);
+          if (primaryMatches.length > 0) {
+            filteredResults = primaryMatches;
+            console.log(`[SMART-SEARCH] Fallback to primary matches: ${primaryMatches.length} results`);
+          } else {
+            // Niveau 3: fallback ultime - au moins 1 match dans le nom
+            const nameMatches = results.filter(r => r.nameMatches > 0);
+            if (nameMatches.length > 0) {
+              filteredResults = nameMatches;
+              console.log(`[SMART-SEARCH] Fallback to name matches: ${nameMatches.length} results`);
+            } else {
+              // Garder les résultats les mieux scorés
+              filteredResults = results.filter(r => r.score > 0);
+              console.log(`[SMART-SEARCH] Fallback to scored results: ${filteredResults.length} results`);
+            }
+          }
         }
       } else {
-        // Requête sans mot principal (ex: "22 rdc") → les 2 doivent matcher
-        const multiMatches = results.filter(r => r.matchCount >= 2);
-        filteredResults = multiMatches; // Peut être vide
+        // Requête sans mot principal (ex: "22 rdc") → au moins 1 match
+        const multiMatches = results.filter(r => r.matchCount >= 1);
+        filteredResults = multiMatches.length > 0 ? multiMatches : results;
       }
     }
     // Pour 1 seul mot, garder tous les résultats triés par score
