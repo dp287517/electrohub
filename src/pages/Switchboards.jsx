@@ -125,6 +125,51 @@ const COLOR_PRESETS = [
 
 // ==================== CATEGORY MANAGER MODAL ====================
 
+// CategoryForm component - MUST be defined outside CategoryManagerModal to prevent re-mounting on state changes
+const CategoryForm = ({ form, setForm, onSave, onCancel, saveLabel, isLoading }) => (
+  <div className="bg-amber-50 rounded-xl p-4 space-y-3 border border-amber-200">
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">Nom *</label>
+      <input
+        type="text"
+        value={form.name}
+        onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+        className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+        placeholder="Nom de la catégorie"
+      />
+    </div>
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
+      <input
+        type="text"
+        value={form.description}
+        onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+        className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+        placeholder="Description optionnelle"
+      />
+    </div>
+    <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-sm text-gray-600">Couleur:</span>
+      {COLOR_PRESETS.map(c => (
+        <button
+          key={c}
+          type="button"
+          onClick={() => setForm(f => ({ ...f, color: c }))}
+          className={`w-7 h-7 rounded-full border-2 transition-transform ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent hover:scale-105'}`}
+          style={{ backgroundColor: c }}
+        />
+      ))}
+    </div>
+    <div className="flex gap-2">
+      <button type="button" onClick={onCancel} className="flex-1 py-2 px-3 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Annuler</button>
+      <button type="button" onClick={onSave} disabled={isLoading}
+        className="flex-1 py-2 px-3 rounded-lg bg-amber-600 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-1 hover:bg-amber-700">
+        {isLoading ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />} {saveLabel}
+      </button>
+    </div>
+  </div>
+);
+
 const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange, showToast }) => {
   const [localCategories, setLocalCategories] = useState([]);
   const [editingId, setEditingId] = useState(null);
@@ -174,36 +219,6 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
     finally { setIsLoading(false); }
   };
 
-  const CategoryForm = ({ form, setForm, onSave, onCancel, saveLabel }) => (
-    <div className="bg-amber-50 rounded-xl p-4 space-y-3 border border-amber-200">
-      <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Nom *</label>
-        <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-500" placeholder="Nom de la catégorie" />
-      </div>
-      <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
-        <input type="text" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-500" placeholder="Description optionnelle" />
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-sm text-gray-600">Couleur:</span>
-        {COLOR_PRESETS.map(c => (
-          <button key={c} onClick={() => setForm(f => ({ ...f, color: c }))}
-            className={`w-7 h-7 rounded-full border-2 transition-transform ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent hover:scale-105'}`}
-            style={{ backgroundColor: c }} />
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <button onClick={onCancel} className="flex-1 py-2 px-3 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Annuler</button>
-        <button onClick={onSave} disabled={isLoading}
-          className="flex-1 py-2 px-3 rounded-lg bg-amber-600 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-1 hover:bg-amber-700">
-          {isLoading ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />} {saveLabel}
-        </button>
-      </div>
-    </div>
-  );
-
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
@@ -231,7 +246,7 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
           {showNewForm && (
             <CategoryForm form={newCategory} setForm={setNewCategory} onSave={handleCreate}
               onCancel={() => { setShowNewForm(false); setNewCategory({ name: '', description: '', color: '#F59E0B' }); }}
-              saveLabel="Créer" />
+              saveLabel="Créer" isLoading={isLoading} />
           )}
 
           <div className="space-y-2">
@@ -245,7 +260,7 @@ const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange,
               <div key={cat.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
                 {editingId === cat.id ? (
                   <CategoryForm form={editForm} setForm={setEditForm} onSave={() => handleUpdate(cat.id)}
-                    onCancel={() => setEditingId(null)} saveLabel="Sauvegarder" />
+                    onCancel={() => setEditingId(null)} saveLabel="Sauvegarder" isLoading={isLoading} />
                 ) : (
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -2873,6 +2888,9 @@ export default function Switchboards() {
               </button>
               <button onClick={() => setShowImportModal(true)} className="hidden md:flex p-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 items-center gap-1.5" title="Import Excel">
                 <FileSpreadsheet size={18} />
+              </button>
+              <button onClick={() => setShowCategoryManager(true)} className="hidden sm:flex p-2 bg-amber-100 text-amber-700 rounded-xl font-medium hover:bg-amber-200 items-center gap-1.5" title="Catégories">
+                <Palette size={18} />
               </button>
               <button onClick={() => setShowBoardForm(true)} className="p-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium hover:from-blue-600 hover:to-indigo-700 flex items-center gap-1.5" title="Nouveau tableau">
                 <Plus size={18} />
