@@ -1775,21 +1775,19 @@ router.get('/equipment/smart-search', async (req, res) => {
           let nameMatches = 0; // Track name-specific matches
           let locationMatches = 0; // Track building/floor matches
 
-          // Helper: pour les chiffres, utiliser word boundary pour éviter "5" matchant "35"
-          // Mais aussi fallback sur includes pour les cas spéciaux (ex: "convoyeur5", "convoyeur-5")
+          // Helper SIMPLIFIÉ: vérifie si un mot est présent dans le texte
           const wordMatches = (text, word) => {
             if (!text || !word) return false;
-            // Pour les chiffres purs, essayer word boundary d'abord
+
+            // Pour les chiffres: vérifier comme mot séparé (pas "5" dans "35")
             if (/^\d+$/.test(word)) {
-              // Word boundary strict: espaces ou début/fin, ou séparateurs comme - _
-              const regex = new RegExp(`(^|[^0-9a-z])${word}([^0-9a-z]|$)`, 'i');
-              if (regex.test(text)) return true;
-              // Fallback: le nombre apparaît dans le texte (ex: zone5, conv5)
-              // Mais seulement si c'est le bon contexte (pas au milieu d'un autre nombre)
-              const simpleRegex = new RegExp(`[a-z]${word}([^0-9]|$)|${word}[a-z]`, 'i');
-              return simpleRegex.test(text);
+              // Diviser le texte en mots et chercher une correspondance exacte
+              const textWords = text.split(/[\s\-_.,;:!?()[\]{}\/\\]+/).filter(w => w.length > 0);
+              // Match exact OU le nombre à la fin/début d'un mot (ex: "zone5", "5eme")
+              return textWords.some(tw => tw === word || tw.endsWith(word) || tw.startsWith(word));
             }
-            // Pour les mots normaux, simple includes
+
+            // Pour les mots normaux: simple includes
             return text.includes(word);
           };
 
@@ -1929,70 +1927,45 @@ router.get('/equipment/smart-search', async (req, res) => {
     }
 
     // ===============================================================
-    // FILTRAGE STRICT - Tous les mots importants doivent matcher
+    // FILTRAGE SIMPLIFIÉ - Privilégier les résultats avec plus de matchs
     // ===============================================================
     const queryWords = normalizeString(q).split(' ').filter(w => w.length > 0);
     const queryWordCount = queryWords.length;
 
-    // Identifier les mots principaux (non-numériques, non-étage)
-    const floorTerms = ['rdc', 'rez', 'ss', 'sous', 'sol', '1er', '2eme', '3eme', '4eme', '5eme'];
-    const mainQueryWords = queryWords.filter(w => {
-      const isNumber = /^\d+$/.test(w);
-      const isFloorTerm = floorTerms.includes(w);
-      return !isNumber && !isFloorTerm;
-    });
-    const hasPrimaryWord = mainQueryWords.length > 0;
-    const primaryWord = mainQueryWords[0];
-
     let filteredResults = results;
 
-    // RÈGLE : Pour 2+ mots, TOUS les mots doivent matcher quelque part
-    if (queryWordCount >= 2) {
-      if (hasPrimaryWord) {
-        // Ex: "convoyeur 5" → "convoyeur" dans le nom ET "5" quelque part
+    // Debug: afficher les premiers résultats avec leurs scores
+    console.log(`[SMART-SEARCH] Top 5 results before filtering:`);
+    results.slice(0, 5).forEach((r, i) => {
+      console.log(`  ${i+1}. "${r.name}" - score=${r.score}, matchCount=${r.matchCount}, exactPrimary=${r.exactPrimaryMatch}, synonymPrimary=${r.synonymPrimaryMatch}`);
+    });
 
-        // Niveau 1: match EXACT du mot principal + TOUS les mots matchent
-        const exactFullMatches = results.filter(r => r.exactPrimaryMatch && r.matchCount >= queryWordCount);
-        if (exactFullMatches.length > 0) {
-          filteredResults = exactFullMatches;
-          console.log(`[SMART-SEARCH] Using exact full matches: ${exactFullMatches.length} results`);
+    // RÈGLE SIMPLE: Filtrer les résultats avec au moins 1 match, préférer ceux avec plus de matchs
+    if (queryWordCount >= 2) {
+      // Essayer d'abord: tous les mots matchent
+      const fullMatches = results.filter(r => r.matchCount >= queryWordCount);
+      if (fullMatches.length > 0) {
+        filteredResults = fullMatches;
+        console.log(`[SMART-SEARCH] Full matches (${queryWordCount}+ words): ${fullMatches.length} results`);
+      } else {
+        // Sinon: au moins la moitié des mots matchent
+        const halfMatchCount = Math.ceil(queryWordCount / 2);
+        const partialMatches = results.filter(r => r.matchCount >= halfMatchCount);
+        if (partialMatches.length > 0) {
+          filteredResults = partialMatches;
+          console.log(`[SMART-SEARCH] Partial matches (${halfMatchCount}+ words): ${partialMatches.length} results`);
         } else {
-          // Niveau 2: match EXACT du mot principal + au moins 2 mots matchent
-          const exactPartialMatches = results.filter(r => r.exactPrimaryMatch && r.matchCount >= 2);
-          if (exactPartialMatches.length > 0) {
-            filteredResults = exactPartialMatches;
-            console.log(`[SMART-SEARCH] Using exact partial matches: ${exactPartialMatches.length} results`);
+          // Sinon: au moins 1 mot matche
+          const anyMatches = results.filter(r => r.matchCount >= 1);
+          if (anyMatches.length > 0) {
+            filteredResults = anyMatches;
+            console.log(`[SMART-SEARCH] Any matches (1+ words): ${anyMatches.length} results`);
           } else {
-            // Niveau 3: match EXACT du mot principal seulement (pas de synonyme)
-            const exactOnlyMatches = results.filter(r => r.exactPrimaryMatch);
-            if (exactOnlyMatches.length > 0) {
-              filteredResults = exactOnlyMatches;
-              console.log(`[SMART-SEARCH] Using exact primary only: ${exactOnlyMatches.length} results`);
-            } else {
-              // Niveau 4: synonyme + TOUS les mots matchent (ex: "luminaire b11" trouve "eclairage batiment 11")
-              const synonymFullMatches = results.filter(r => r.synonymPrimaryMatch && r.matchCount >= queryWordCount);
-              if (synonymFullMatches.length > 0) {
-                filteredResults = synonymFullMatches;
-                console.log(`[SMART-SEARCH] Using synonym full matches: ${synonymFullMatches.length} results`);
-              } else {
-                // Niveau 5: synonyme + au moins 2 mots matchent
-                const synonymPartialMatches = results.filter(r => r.synonymPrimaryMatch && r.matchCount >= 2);
-                if (synonymPartialMatches.length > 0) {
-                  filteredResults = synonymPartialMatches;
-                  console.log(`[SMART-SEARCH] Using synonym partial matches: ${synonymPartialMatches.length} results`);
-                } else {
-                  // Aucun résultat correspondant - retourner vide
-                  filteredResults = [];
-                  console.log(`[SMART-SEARCH] No matches found - returning empty`);
-                }
-              }
-            }
+            // Fallback: retourner tous les résultats triés par score
+            filteredResults = results;
+            console.log(`[SMART-SEARCH] Fallback to all results: ${results.length} results`);
           }
         }
-      } else {
-        // Requête sans mot principal (ex: "22 rdc") → tous les mots doivent matcher
-        const multiMatches = results.filter(r => r.matchCount >= queryWordCount);
-        filteredResults = multiMatches.length > 0 ? multiMatches : results.filter(r => r.matchCount >= 1);
       }
     }
     // Pour 1 seul mot, garder tous les résultats triés par score
