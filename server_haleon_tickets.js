@@ -744,6 +744,55 @@ export function createHaleonTicketsRouter(pool) {
     }
   });
 
+  // ============================================================
+  // CONFIG & TEST - DOIT ÊTRE AVANT /:ticketId !
+  // ============================================================
+
+  // GET /api/haleon-tickets/test - Test de connexion
+  router.get('/test', async (req, res) => {
+    try {
+      // Test DB
+      const dbTest = await pool.query('SELECT NOW() as time');
+
+      // Test Bubble API
+      let bubbleTest = { status: 'unknown' };
+      try {
+        const response = await bubbleFetch('/obj/TICKET?limit=1');
+        bubbleTest = {
+          status: 'ok',
+          tickets_count: response.response?.count || 0
+        };
+      } catch (e) {
+        bubbleTest = { status: 'error', message: e.message };
+      }
+
+      // Check unique index
+      let indexStatus = 'unknown';
+      try {
+        const indexCheck = await pool.query(`
+          SELECT indexname FROM pg_indexes
+          WHERE tablename = 'haleon_ticket_teams' AND indexname LIKE '%name%'
+        `);
+        indexStatus = indexCheck.rows.length > 0 ? 'exists: ' + indexCheck.rows.map(r => r.indexname).join(', ') : 'missing';
+      } catch (e) {
+        indexStatus = 'error: ' + e.message;
+      }
+
+      res.json({
+        status: 'ok',
+        database: { connected: true, time: dbTest.rows[0].time },
+        bubble: bubbleTest,
+        unique_index_on_name: indexStatus
+      });
+    } catch (error) {
+      res.status(500).json({ status: 'error', error: error.message });
+    }
+  });
+
+  // ============================================================
+  // TICKETS - Détail et Actions (routes avec paramètres EN DERNIER)
+  // ============================================================
+
   // GET /api/haleon-tickets/:ticketId - Détail d'un ticket
   router.get('/:ticketId', requireAuth, async (req, res) => {
     try {
@@ -920,38 +969,6 @@ export function createHaleonTicketsRouter(pool) {
     } catch (error) {
       console.error('[Haleon Tickets] Erreur fermeture:', error);
       res.status(500).json({ error: error.message });
-    }
-  });
-
-  // ============================================================
-  // CONFIG & TEST
-  // ============================================================
-
-  // GET /api/haleon-tickets/test - Test de connexion
-  router.get('/test', async (req, res) => {
-    try {
-      // Test DB
-      const dbTest = await pool.query('SELECT NOW() as time');
-
-      // Test Bubble API
-      let bubbleTest = { status: 'unknown' };
-      try {
-        const response = await bubbleFetch('/obj/TICKET?limit=1');
-        bubbleTest = {
-          status: 'ok',
-          tickets_count: response.response?.count || 0
-        };
-      } catch (e) {
-        bubbleTest = { status: 'error', message: e.message };
-      }
-
-      res.json({
-        status: 'ok',
-        database: { connected: true, time: dbTest.rows[0].time },
-        bubble: bubbleTest
-      });
-    } catch (error) {
-      res.status(500).json({ status: 'error', error: error.message });
     }
   });
 
