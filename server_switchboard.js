@@ -515,6 +515,24 @@ async function ensureSchema() {
     ALTER TABLE switchboards ADD COLUMN IF NOT EXISTS created_by_name TEXT;
 
     -- =======================================================
+    -- TABLE: Switchboard Categories (types de tableaux avec couleurs)
+    -- =======================================================
+    CREATE TABLE IF NOT EXISTS switchboard_categories (
+      id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      color TEXT NOT NULL DEFAULT '#F59E0B',
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_switchboard_categories_site ON switchboard_categories(site);
+
+    -- Add category_id to switchboards
+    ALTER TABLE switchboards ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES switchboard_categories(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_switchboards_category ON switchboards(category_id);
+
+    -- =======================================================
     -- TABLE: Devices
     -- =======================================================
     CREATE TABLE IF NOT EXISTS devices (
@@ -1523,15 +1541,19 @@ app.get('/api/switchboard/boards', async (req, res) => {
     const limit = Math.min(parseInt(pageSize, 10) || 100, 500);
     const offset = ((parseInt(page, 10) || 1) - 1) * limit;
 
-    // REQUÊTE OPTIMISÉE: inclut device_count, complete_count et photos_count directement
+    // REQUÊTE OPTIMISÉE: inclut device_count, complete_count, photos_count et category directement
     const sql = `
       SELECT s.id, s.site, s.name, s.code, s.building_code, s.floor, s.room, s.regime_neutral, s.is_principal,
              s.modes, s.quality, s.diagram_data, s.created_at, s.created_by_email, s.created_by_name,
+             s.category_id,
+             sc.name as category_name,
+             sc.color as category_color,
              (s.photo IS NOT NULL) as has_photo,
              COALESCE(s.device_count, 0) as device_count,
              COALESCE(s.complete_count, 0) as complete_count,
              COALESCE((SELECT COUNT(*) FROM switchboard_photos sp WHERE sp.switchboard_id = s.id), 0) as photos_count
       FROM switchboards s
+      LEFT JOIN switchboard_categories sc ON s.category_id = sc.id
       WHERE ${where.map(w => w.replace(/\b(id|site|name|code|building_code|floor|room)\b/g, 's.$1')).join(' AND ')}
       ORDER BY ${sortSafe(sort).replace(/^(id|name|code|created_at)$/, 's.$1')} ${dirSafe(dir)}
       LIMIT ${limit} OFFSET ${offset}
@@ -1549,6 +1571,9 @@ app.get('/api/switchboard/boards', async (req, res) => {
       code: r.code,
       regime_neutral: r.regime_neutral,
       is_principal: r.is_principal,
+      category_id: r.category_id,
+      category_name: r.category_name,
+      category_color: r.category_color,
       has_photo: r.has_photo,
       photos_count: parseInt(r.photos_count, 10) || 0,
       diagram_data: r.diagram_data || {},
@@ -1578,13 +1603,18 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
     if (!id || isNaN(id)) return res.status(400).json({ error: 'Invalid board ID' });
 
     const r = await quickQuery(
-      `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal,
-              modes, quality, diagram_data, created_at, created_by_email, created_by_name,
-              (photo IS NOT NULL) as has_photo,
-              COALESCE(device_count, 0) as device_count,
-              COALESCE(complete_count, 0) as complete_count,
-              COALESCE((SELECT COUNT(*) FROM switchboard_photos sp WHERE sp.switchboard_id = switchboards.id), 0) as photos_count
-       FROM switchboards WHERE id=$1 AND site=$2`, [id, site]
+      `SELECT s.id, s.site, s.name, s.code, s.building_code, s.floor, s.room, s.regime_neutral, s.is_principal,
+              s.modes, s.quality, s.diagram_data, s.created_at, s.created_by_email, s.created_by_name,
+              s.category_id,
+              sc.name as category_name,
+              sc.color as category_color,
+              (s.photo IS NOT NULL) as has_photo,
+              COALESCE(s.device_count, 0) as device_count,
+              COALESCE(s.complete_count, 0) as complete_count,
+              COALESCE((SELECT COUNT(*) FROM switchboard_photos sp WHERE sp.switchboard_id = s.id), 0) as photos_count
+       FROM switchboards s
+       LEFT JOIN switchboard_categories sc ON s.category_id = sc.id
+       WHERE s.id=$1 AND s.site=$2`, [id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Board not found' });
     const sb = r.rows[0];
@@ -1640,12 +1670,13 @@ app.post('/api/switchboard/boards', async (req, res) => {
     if (!name) return res.status(400).json({ error: 'Missing name' });
     if (!code) return res.status(400).json({ error: 'Missing code' });
 
+    const categoryId = b?.category_id ? Number(b.category_id) : null;
     const r = await quickQuery(
-      `INSERT INTO switchboards (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data, device_count, complete_count, created_by_email, created_by_name)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, 0, $12, $13)
-       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data, created_at, device_count, complete_count, created_by_email, created_by_name`,
+      `INSERT INTO switchboards (site, name, code, building_code, floor, room, regime_neutral, is_principal, category_id, modes, quality, diagram_data, device_count, complete_count, created_by_email, created_by_name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, 0, $13, $14)
+       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, category_id, modes, quality, diagram_data, created_at, device_count, complete_count, created_by_email, created_by_name`,
       [site, name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
-       b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
+       b?.regime_neutral || null, !!b?.is_principal, categoryId, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
        u.email || null, u.name || null]
     );
     const sb = r.rows[0];
@@ -1666,6 +1697,7 @@ app.post('/api/switchboard/boards', async (req, res) => {
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
       name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal, has_photo: false,
+      category_id: sb.category_id,
       modes: sb.modes || {}, quality: sb.quality || {}, diagram_data: sb.diagram_data,
       created_at: sb.created_at,
       created_by_email: sb.created_by_email,
@@ -1713,18 +1745,22 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
 
     console.log(`[UPDATE BOARD] Starting update for id=${id}, site=${site}`);
 
+    // Handle category_id - allow setting to null by passing null or 0
+    const categoryId = b?.category_id === null || b?.category_id === 0 ? null : (b?.category_id ? Number(b.category_id) : undefined);
+
     // ✅ quickQuery avec retry intégré (timeout 10s, 1 retry)
     const r = await quickQuery(
       `UPDATE switchboards SET
         name=$1, code=$2, building_code=$3, floor=$4, room=$5,
-        regime_neutral=$6, is_principal=$7, modes=$8, quality=$9, diagram_data=$10
-      WHERE id=$11 AND site=$12
-      RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal,
+        regime_neutral=$6, is_principal=$7, modes=$8, quality=$9, diagram_data=$10,
+        category_id = CASE WHEN $11::int IS NULL AND $13 THEN NULL WHEN $11::int IS NOT NULL THEN $11::int ELSE category_id END
+      WHERE id=$12 AND site=$14
+      RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, category_id,
                 modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo,
                 device_count, complete_count`,
       [name, code, b?.meta?.building_code || null, b?.meta?.floor || null, b?.meta?.room || null,
        b?.regime_neutral || null, !!b?.is_principal, b?.modes || {}, b?.quality || {}, b?.diagram_data || {},
-       id, site],
+       categoryId !== undefined ? categoryId : null, id, categoryId !== undefined, site],
       10000, // 10s timeout SQL
       1      // 1 retry si erreur transitoire
     );
@@ -1775,6 +1811,7 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
       name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal, has_photo: sb.has_photo,
+      category_id: sb.category_id,
       modes: sb.modes || {}, quality: sb.quality || {}, diagram_data: sb.diagram_data,
       created_at: sb.created_at,
       device_count: sb.device_count, complete_count: sb.complete_count
@@ -2017,6 +2054,102 @@ app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
   } catch (e) {
     console.error('[BOARD PHOTO GET]', e.message);
     res.status(500).json({ error: 'Get photo failed' });
+  }
+});
+
+// ============================================================
+// SWITCHBOARD CATEGORIES CRUD
+// ============================================================
+
+// GET /api/switchboard/categories - List all categories
+app.get('/api/switchboard/categories', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { rows } = await quickQuery(`
+      SELECT c.*,
+             (SELECT COUNT(*) FROM switchboards s WHERE s.category_id = c.id AND s.site = c.site) as switchboard_count
+        FROM switchboard_categories c
+       WHERE c.site = $1
+       ORDER BY c.sort_order, c.name
+    `, [site]);
+
+    res.json({ ok: true, categories: rows });
+  } catch (e) {
+    console.error('[SWITCHBOARD CATEGORIES] List error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/switchboard/categories - Create category
+app.post('/api/switchboard/categories', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { name, description, color, sort_order } = req.body;
+    if (!name?.trim()) return res.status(400).json({ ok: false, error: 'Name required' });
+
+    const { rows } = await quickQuery(`
+      INSERT INTO switchboard_categories (site, name, description, color, sort_order)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `, [site, name.trim(), description || null, color || '#F59E0B', sort_order || 0]);
+
+    await audit.log(req, AUDIT_ACTIONS.CREATED, { entityType: 'switchboard_category', entityId: rows[0].id, details: { name } });
+    res.json({ ok: true, category: rows[0] });
+  } catch (e) {
+    console.error('[SWITCHBOARD CATEGORIES] Create error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// PUT /api/switchboard/categories/:id - Update category
+app.put('/api/switchboard/categories/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+    const { name, description, color, sort_order } = req.body;
+
+    const { rows } = await quickQuery(`
+      UPDATE switchboard_categories
+         SET name = COALESCE($1, name),
+             description = COALESCE($2, description),
+             color = COALESCE($3, color),
+             sort_order = COALESCE($4, sort_order)
+       WHERE id = $5 AND site = $6
+       RETURNING *
+    `, [name, description, color, sort_order, id, site]);
+
+    if (rows.length === 0) return res.status(404).json({ ok: false, error: 'Category not found' });
+
+    await audit.log(req, AUDIT_ACTIONS.UPDATED, { entityType: 'switchboard_category', entityId: id, details: { name } });
+    res.json({ ok: true, category: rows[0] });
+  } catch (e) {
+    console.error('[SWITCHBOARD CATEGORIES] Update error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// DELETE /api/switchboard/categories/:id - Delete category
+app.delete('/api/switchboard/categories/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site header' });
+
+    const { id } = req.params;
+    const { rowCount } = await quickQuery(`DELETE FROM switchboard_categories WHERE id = $1 AND site = $2`, [id, site]);
+
+    if (rowCount === 0) return res.status(404).json({ ok: false, error: 'Category not found' });
+
+    await audit.log(req, AUDIT_ACTIONS.DELETED, { entityType: 'switchboard_category', entityId: id });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[SWITCHBOARD CATEGORIES] Delete error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

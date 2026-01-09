@@ -469,12 +469,12 @@ const UnifiedLeafletViewer = forwardRef(({
     }
   }, [selectedId, selectedType, controlStatuses, visibleTypes, equipmentTypes]);
 
-  function makeIcon(equipmentType, isSelected = false, controlStatus = "none") {
+  function makeIcon(equipmentType, isSelected = false, controlStatus = "none", categoryColor = null) {
     const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
     const typeConfig = equipmentTypes[equipmentType] || BASE_EQUIPMENT_TYPES[equipmentType] || {};
     const statusConfig = STATUS_COLORS[controlStatus] || STATUS_COLORS.none;
 
-    // Determine background: selected > control status > equipment type default
+    // Determine background: selected > control status > category color > equipment type default
     let bgGradient;
     let borderColor;
     let shouldPulse = false;
@@ -489,6 +489,10 @@ const UnifiedLeafletViewer = forwardRef(({
       borderColor = statusConfig.border;
       shouldPulse = statusConfig.pulse;
       if (shouldPulse) animClass = "unified-marker-overdue";
+    } else if (categoryColor) {
+      // Use category color for switchboards with categories
+      bgGradient = `radial-gradient(circle at 30% 30%, ${categoryColor}cc, ${categoryColor})`;
+      borderColor = "white";
     } else {
       bgGradient = typeConfig.gradient || `radial-gradient(circle at 30% 30%, ${typeConfig.color}, ${typeConfig.color})`;
       borderColor = "white";
@@ -562,7 +566,9 @@ const UnifiedLeafletViewer = forwardRef(({
       const latlng = L.latLng(y, x);
       const isSelected = p.equipment_id === selectedIdRef.current && p.equipment_type === selectedTypeRef.current;
       const controlStatus = controlStatusesRef.current[`${p.equipment_type}_${p.equipment_id}`] || "none";
-      const icon = makeIcon(p.equipment_type, isSelected, controlStatus);
+      // Pass category_color for switchboards with category
+      const categoryColor = p.equipment_type === "switchboard" ? p.category_color : null;
+      const icon = makeIcon(p.equipment_type, isSelected, controlStatus, categoryColor);
 
       const mk = L.marker(latlng, {
         icon,
@@ -583,6 +589,9 @@ const UnifiedLeafletViewer = forwardRef(({
         building: p.building,
         control_status: controlStatus,
         next_due_date: p.next_due_date,
+        category_id: p.category_id,
+        category_name: p.category_name,
+        category_color: p.category_color,
       };
 
       mk.on("click", (e) => {
