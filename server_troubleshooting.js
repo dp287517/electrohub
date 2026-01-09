@@ -250,7 +250,8 @@ async function generateMiniPlanImage(planData, markerColor = '#3b82f6') {
 // ============================================================
 
 // Create new troubleshooting record (supports multiple equipment)
-router.post('/create', async (req, res) => {
+// Note: Higher body limit (50mb) to support photos in base64 format
+router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
   try {
     const site = req.headers['x-site'] || 'default';
     const {
