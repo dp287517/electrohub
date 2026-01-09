@@ -1679,7 +1679,8 @@ router.get('/equipment/smart-search', async (req, res) => {
           const floorNorm = normalizeString(row.floor || '');
           const codeNorm = normalizeString(row.code || '');
           const queryNorm = normalizeString(q);
-          const originalWords = queryNorm.split(' ').filter(w => w.length > 1);
+          // Garder les mots de 2+ caractères OU les chiffres (même à 1 caractère comme "5")
+          const originalWords = queryNorm.split(' ').filter(w => w.length > 1 || /^\d+$/.test(w));
           let score = 0;
 
           // Match exact = score élevé
@@ -1742,15 +1743,18 @@ router.get('/equipment/smart-search', async (req, res) => {
             return !isNumber && !isFloorTerm;
           });
           const primaryWord = mainWords[0];
-          const primaryWordMatchesName = primaryWord && (
-            wordMatches(nameNorm, primaryWord) ||
-            expandedTerms.some(term => {
-              // Check if this expanded term comes from the primary word and matches name
-              const termFromPrimary = EQUIPMENT_SYNONYMS[primaryWord]?.includes(term) ||
-                                       normalizeString(primaryWord) === term;
-              return termFromPrimary && wordMatches(nameNorm, term);
-            })
-          );
+
+          // Match EXACT du mot principal (pas via synonymes)
+          const exactPrimaryMatch = primaryWord && wordMatches(nameNorm, primaryWord);
+
+          // Match via synonymes
+          const synonymPrimaryMatch = primaryWord && !exactPrimaryMatch && expandedTerms.some(term => {
+            const termFromPrimary = EQUIPMENT_SYNONYMS[primaryWord]?.includes(term) ||
+                                     normalizeString(primaryWord) === term;
+            return termFromPrimary && wordMatches(nameNorm, term);
+          });
+
+          const primaryWordMatchesName = exactPrimaryMatch || synonymPrimaryMatch;
 
           // GROS bonus pour les matchs multiples (AND logic reward)
           if (originalWordMatches >= 2) score += originalWordMatches * 40;
@@ -1771,7 +1775,7 @@ router.get('/equipment/smart-search', async (req, res) => {
 
           // Debug log for first few results
           if (results.length < 5) {
-            console.log(`[SMART-SEARCH] Match: "${row.name}" - score=${score}, matchCount=${originalWordMatches}, nameMatches=${nameMatches}, primaryMatch=${primaryWordMatchesName}, primaryWord="${primaryWord}"`);
+            console.log(`[SMART-SEARCH] Match: "${row.name}" - score=${score}, matchCount=${originalWordMatches}, nameMatches=${nameMatches}, exactPrimary=${exactPrimaryMatch}, synonymPrimary=${synonymPrimaryMatch}, primaryWord="${primaryWord}"`);
           }
 
           results.push({
@@ -1790,7 +1794,9 @@ router.get('/equipment/smart-search', async (req, res) => {
             score,
             matchCount: originalWordMatches,
             nameMatches,
-            primaryWordMatch: primaryWordMatchesName
+            primaryWordMatch: primaryWordMatchesName,
+            exactPrimaryMatch,
+            synonymPrimaryMatch
           });
         }
       } catch (err) {
@@ -1817,39 +1823,53 @@ router.get('/equipment/smart-search', async (req, res) => {
 
     let filteredResults = results;
 
-    // RÈGLE : Pour 2+ mots, essayer de matcher tous les mots avec fallback progressif
+    // RÈGLE : Pour 2+ mots, TOUS les mots doivent matcher quelque part
     if (queryWordCount >= 2) {
       if (hasPrimaryWord) {
-        // Ex: "convoyeur 5" → "convoyeur" DOIT être dans le nom
-        // Niveau 1: strict - primaryWord + 2 matchs
-        const strictMatches = results.filter(r => r.primaryWordMatch && r.matchCount >= 2);
+        // Ex: "convoyeur 5" → "convoyeur" dans le nom ET "5" quelque part
 
-        if (strictMatches.length > 0) {
-          filteredResults = strictMatches;
-          console.log(`[SMART-SEARCH] Using strict matches: ${strictMatches.length} results`);
+        // Niveau 1: match EXACT du mot principal + TOUS les mots matchent
+        const exactFullMatches = results.filter(r => r.exactPrimaryMatch && r.matchCount >= queryWordCount);
+        if (exactFullMatches.length > 0) {
+          filteredResults = exactFullMatches;
+          console.log(`[SMART-SEARCH] Using exact full matches: ${exactFullMatches.length} results`);
         } else {
-          // Niveau 2: fallback - primaryWord uniquement
-          const primaryMatches = results.filter(r => r.primaryWordMatch);
-          if (primaryMatches.length > 0) {
-            filteredResults = primaryMatches;
-            console.log(`[SMART-SEARCH] Fallback to primary matches: ${primaryMatches.length} results`);
+          // Niveau 2: match EXACT du mot principal + au moins 2 mots matchent
+          const exactPartialMatches = results.filter(r => r.exactPrimaryMatch && r.matchCount >= 2);
+          if (exactPartialMatches.length > 0) {
+            filteredResults = exactPartialMatches;
+            console.log(`[SMART-SEARCH] Using exact partial matches: ${exactPartialMatches.length} results`);
           } else {
-            // Niveau 3: fallback ultime - au moins 1 match dans le nom
-            const nameMatches = results.filter(r => r.nameMatches > 0);
-            if (nameMatches.length > 0) {
-              filteredResults = nameMatches;
-              console.log(`[SMART-SEARCH] Fallback to name matches: ${nameMatches.length} results`);
+            // Niveau 3: match EXACT du mot principal seulement (pas de synonyme)
+            const exactOnlyMatches = results.filter(r => r.exactPrimaryMatch);
+            if (exactOnlyMatches.length > 0) {
+              filteredResults = exactOnlyMatches;
+              console.log(`[SMART-SEARCH] Using exact primary only: ${exactOnlyMatches.length} results`);
             } else {
-              // Garder les résultats les mieux scorés
-              filteredResults = results.filter(r => r.score > 0);
-              console.log(`[SMART-SEARCH] Fallback to scored results: ${filteredResults.length} results`);
+              // Niveau 4: synonyme + TOUS les mots matchent (ex: "luminaire b11" trouve "eclairage batiment 11")
+              const synonymFullMatches = results.filter(r => r.synonymPrimaryMatch && r.matchCount >= queryWordCount);
+              if (synonymFullMatches.length > 0) {
+                filteredResults = synonymFullMatches;
+                console.log(`[SMART-SEARCH] Using synonym full matches: ${synonymFullMatches.length} results`);
+              } else {
+                // Niveau 5: synonyme + au moins 2 mots matchent
+                const synonymPartialMatches = results.filter(r => r.synonymPrimaryMatch && r.matchCount >= 2);
+                if (synonymPartialMatches.length > 0) {
+                  filteredResults = synonymPartialMatches;
+                  console.log(`[SMART-SEARCH] Using synonym partial matches: ${synonymPartialMatches.length} results`);
+                } else {
+                  // Aucun résultat correspondant - retourner vide
+                  filteredResults = [];
+                  console.log(`[SMART-SEARCH] No matches found - returning empty`);
+                }
+              }
             }
           }
         }
       } else {
-        // Requête sans mot principal (ex: "22 rdc") → au moins 1 match
-        const multiMatches = results.filter(r => r.matchCount >= 1);
-        filteredResults = multiMatches.length > 0 ? multiMatches : results;
+        // Requête sans mot principal (ex: "22 rdc") → tous les mots doivent matcher
+        const multiMatches = results.filter(r => r.matchCount >= queryWordCount);
+        filteredResults = multiMatches.length > 0 ? multiMatches : results.filter(r => r.matchCount >= 1);
       }
     }
     // Pour 1 seul mot, garder tous les résultats triés par score
