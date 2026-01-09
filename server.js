@@ -3514,9 +3514,10 @@ app.use(helmet({
 }));
 app.use(cookieParser());
 
-// 🔧 EARLY body parser for troubleshooting create (photos in base64 need 50mb limit)
+// 🔧 EARLY body parser for routes with photos in base64 (need 50mb limit)
 // Must be BEFORE switchboardMapApp which has a 10mb limit
 app.use("/api/troubleshooting/create", express.json({ limit: "50mb" }));
+app.use("/api/ai-assistant/analyze-troubleshooting", express.json({ limit: "50mb" }));
 
 // ⚠️ NOTE: switchboardMapApp a un body-parser qui parse TOUS les bodies AVANT les proxies.
 // C'est pour ça que les proxies avec PUT/POST doivent utiliser withRestream: true
