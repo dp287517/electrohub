@@ -1744,9 +1744,11 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     if (!code) return res.status(400).json({ error: 'Missing code' });
 
     console.log(`[UPDATE BOARD] Starting update for id=${id}, site=${site}`);
+    console.log(`[UPDATE BOARD] Received category_id:`, b?.category_id, 'type:', typeof b?.category_id);
 
     // Handle category_id - allow setting to null by passing null or 0
     const categoryId = b?.category_id === null || b?.category_id === 0 ? null : (b?.category_id ? Number(b.category_id) : undefined);
+    console.log(`[UPDATE BOARD] Computed categoryId:`, categoryId, 'type:', typeof categoryId);
 
     // ✅ quickQuery avec retry intégré (timeout 10s, 1 retry)
     const r = await quickQuery(
@@ -2074,6 +2076,11 @@ app.get('/api/switchboard/categories', async (req, res) => {
        WHERE c.site = $1
        ORDER BY c.sort_order, c.name
     `, [site]);
+
+    console.log(`[SWITCHBOARD CATEGORIES] Listing for site=${site}: found ${rows.length} categories`);
+    if (rows.length > 0) {
+      console.log('[SWITCHBOARD CATEGORIES] Categories:', rows.map(r => ({ id: r.id, name: r.name, color: r.color })));
+    }
 
     res.json({ ok: true, categories: rows });
   } catch (e) {
