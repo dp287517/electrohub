@@ -7299,30 +7299,28 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
     `, [site]);
 
     // === MOBILE EQUIPMENT CONTROLS (me_checks) ===
+    // Note: me_equipments table doesn't have site column - counts are global
     const mobileOverdue = await quickQuery(`
       SELECT COUNT(*) as count FROM me_checks c
-      JOIN me_equipments e ON c.equipment_id = e.id
-      WHERE e.site = $1 AND c.due_date < CURRENT_DATE AND c.closed_at IS NULL
-    `, [site]).catch(() => ({ rows: [{ count: 0 }] }));
+      WHERE c.due_date < CURRENT_DATE AND c.closed_at IS NULL
+    `, []).catch(() => ({ rows: [{ count: 0 }] }));
 
     const mobilePending = await quickQuery(`
       SELECT COUNT(*) as count FROM me_checks c
-      JOIN me_equipments e ON c.equipment_id = e.id
-      WHERE e.site = $1 AND c.due_date >= CURRENT_DATE AND c.closed_at IS NULL
-    `, [site]).catch(() => ({ rows: [{ count: 0 }] }));
+      WHERE c.due_date >= CURRENT_DATE AND c.closed_at IS NULL
+    `, []).catch(() => ({ rows: [{ count: 0 }] }));
 
     // === FIRE DOOR CONTROLS (fd_checks) ===
+    // Note: fd_doors table doesn't have site column - counts are global
     const doorsOverdue = await quickQuery(`
       SELECT COUNT(*) as count FROM fd_checks c
-      JOIN fd_doors d ON c.door_id = d.id
-      WHERE d.site = $1 AND c.due_date < CURRENT_DATE AND c.closed_at IS NULL
-    `, [site]).catch(() => ({ rows: [{ count: 0 }] }));
+      WHERE c.due_date < CURRENT_DATE AND c.closed_at IS NULL
+    `, []).catch(() => ({ rows: [{ count: 0 }] }));
 
     const doorsPending = await quickQuery(`
       SELECT COUNT(*) as count FROM fd_checks c
-      JOIN fd_doors d ON c.door_id = d.id
-      WHERE d.site = $1 AND c.due_date >= CURRENT_DATE AND c.closed_at IS NULL
-    `, [site]).catch(() => ({ rows: [{ count: 0 }] }));
+      WHERE c.due_date >= CURRENT_DATE AND c.closed_at IS NULL
+    `, []).catch(() => ({ rows: [{ count: 0 }] }));
 
     // Recent completions (last 30 days) - from control_records
     const recent = await quickQuery(`
