@@ -1374,18 +1374,25 @@ export default function AtexMap({
       return;
     }
 
+    // Normalize query: remove spaces for matching fragmented text
     const q = query.toLowerCase().trim();
+    const qNoSpaces = q.replace(/\s+/g, '');
     const results = [];
+    const seenPositions = new Set(); // Avoid duplicates
 
     // Search through all text items
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const text = item.str.toLowerCase();
-      let startIndex = 0;
-      let matchIndex;
+      const textNoSpaces = text.replace(/\s+/g, '');
 
-      // Find all occurrences in this item
-      while ((matchIndex = text.indexOf(q, startIndex)) !== -1) {
+      // Create position key to avoid duplicates
+      const posKey = `${Math.round(item.x)}-${Math.round(item.y)}`;
+
+      // Try normal search first
+      let matchIndex = text.indexOf(q);
+      if (matchIndex !== -1 && !seenPositions.has(posKey)) {
+        seenPositions.add(posKey);
         results.push({
           itemIndex: i,
           matchIndex,
@@ -1395,13 +1402,32 @@ export default function AtexMap({
           width: item.width,
           height: item.height,
         });
-        startIndex = matchIndex + 1;
+        continue;
+      }
+
+      // Try search without spaces (for fragmented text like "H 2 7 0" -> "H270")
+      matchIndex = textNoSpaces.indexOf(qNoSpaces);
+      if (matchIndex !== -1 && !seenPositions.has(posKey)) {
+        seenPositions.add(posKey);
+        results.push({
+          itemIndex: i,
+          matchIndex: 0,
+          text: item.str,
+          x: item.x,
+          y: item.y,
+          width: item.width,
+          height: item.height,
+        });
       }
     }
 
     console.log("[ATEX Search] Found results:", results.length);
     if (results.length > 0) {
-      console.log("[ATEX Search] First result:", results[0]);
+      console.log("[ATEX Search] First 3 results:", results.slice(0, 3));
+    } else {
+      // Debug: show what text contains to help troubleshoot
+      const sampleTexts = items.slice(0, 20).map(i => i.str);
+      console.log("[ATEX Search] No results. Sample texts in PDF:", sampleTexts);
     }
 
     setSearchResults(results);
