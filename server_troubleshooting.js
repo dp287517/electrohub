@@ -107,10 +107,26 @@ export async function initTroubleshootingTables(poolInstance) {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_troubleshooting_original_id ON troubleshooting_records(equipment_type, equipment_original_id)`);
 
     // Migration: Backfill equipment_original_id for existing records that don't have it
-    // This finds the equipment ID by matching equipment_name and equipment_type
+    // This finds the equipment ID by matching equipment_name, equipment_type, and building_code
     console.log('[TROUBLESHOOTING] 🔄 Checking for records needing equipment_original_id backfill...');
+
+    // First, reset equipment_original_id for records that were backfilled incorrectly
+    // (records where equipment_id is NULL but equipment_original_id was set by previous migration)
+    // This allows re-processing with the improved multi-strategy search
+    const resetResult = await pool.query(`
+      UPDATE troubleshooting_records
+      SET equipment_original_id = NULL
+      WHERE equipment_id IS NULL
+        AND equipment_original_id IS NOT NULL
+        AND equipment_name IS NOT NULL
+      RETURNING id
+    `);
+    if (resetResult.rows.length > 0) {
+      console.log(`[TROUBLESHOOTING] 🔄 Reset ${resetResult.rows.length} records for re-backfill with improved search`);
+    }
+
     const recordsToFix = await pool.query(`
-      SELECT id, equipment_type, equipment_name, equipment_id, site
+      SELECT id, equipment_type, equipment_name, equipment_code, equipment_id, site, building_code
       FROM troubleshooting_records
       WHERE equipment_original_id IS NULL
         AND equipment_name IS NOT NULL
@@ -122,43 +138,81 @@ export async function initTroubleshootingTables(poolInstance) {
       for (const record of recordsToFix.rows) {
         try {
           let foundId = null;
-          const { equipment_type, equipment_name, equipment_id, site } = record;
-          console.log(`[TROUBLESHOOTING] Processing record ${record.id}: type=${equipment_type}, name="${equipment_name}", site=${site}`);
+          const { equipment_type, equipment_name, equipment_code, equipment_id, site, building_code } = record;
+          console.log(`[TROUBLESHOOTING] Processing record ${record.id}: type=${equipment_type}, name="${equipment_name}", code="${equipment_code}", building="${building_code}", site=${site}`);
 
           // If equipment_id is already set (UUID), use it as original_id
           if (equipment_id) {
             foundId = equipment_id;
             console.log(`[TROUBLESHOOTING] Using existing equipment_id: ${foundId}`);
           } else {
-            // Look up ID from source table by name (case-insensitive with ILIKE)
+            // Look up ID from source table by name + building_code (case-insensitive)
             const tableMap = {
-              switchboard: { table: 'switchboards', nameCol: 'name', siteCol: 'site' },
-              vsd: { table: 'vsd_equipments', nameCol: 'name', siteCol: 'site' },
-              meca: { table: 'meca_equipments', nameCol: 'name', siteCol: null },
-              mobile: { table: 'me_equipments', nameCol: 'name', siteCol: null },
-              hv: { table: 'hv_equipments', nameCol: 'name', siteCol: 'site' },
-              glo: { table: 'glo_equipments', nameCol: 'name', siteCol: null },
-              datahub: { table: 'dh_items', nameCol: 'name', siteCol: null }
+              switchboard: { table: 'switchboards', nameCol: 'name', codeCol: 'code', siteCol: 'site', buildingCol: 'building_code' },
+              vsd: { table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', siteCol: 'site', buildingCol: 'building' },
+              meca: { table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', siteCol: null, buildingCol: 'building' },
+              mobile: { table: 'me_equipments', nameCol: 'name', codeCol: 'code', siteCol: null, buildingCol: 'building' },
+              hv: { table: 'hv_equipments', nameCol: 'name', codeCol: 'code', siteCol: 'site', buildingCol: 'building_code' },
+              glo: { table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', siteCol: null, buildingCol: 'building' },
+              datahub: { table: 'dh_items', nameCol: 'name', codeCol: 'code', siteCol: null, buildingCol: 'building' }
             };
 
             const config = tableMap[equipment_type];
             if (config) {
-              let query, params;
-              // Use ILIKE for case-insensitive matching
-              if (config.siteCol) {
-                query = `SELECT id, ${config.nameCol} as name FROM ${config.table} WHERE LOWER(TRIM(${config.nameCol})) = LOWER(TRIM($1)) AND ${config.siteCol} = $2 LIMIT 1`;
-                params = [equipment_name, site];
-              } else {
-                query = `SELECT id, ${config.nameCol} as name FROM ${config.table} WHERE LOWER(TRIM(${config.nameCol})) = LOWER(TRIM($1)) LIMIT 1`;
-                params = [equipment_name];
+              // Strategy 1: Try to find by equipment_code (most precise)
+              if (equipment_code && !foundId) {
+                let query, params;
+                if (config.siteCol) {
+                  query = `SELECT id, ${config.nameCol} as name, ${config.codeCol} as code FROM ${config.table} WHERE LOWER(TRIM(${config.codeCol})) = LOWER(TRIM($1)) AND ${config.siteCol} = $2 LIMIT 1`;
+                  params = [equipment_code, site];
+                } else {
+                  query = `SELECT id, ${config.nameCol} as name, ${config.codeCol} as code FROM ${config.table} WHERE LOWER(TRIM(${config.codeCol})) = LOWER(TRIM($1)) LIMIT 1`;
+                  params = [equipment_code];
+                }
+                console.log(`[TROUBLESHOOTING] Strategy 1: Searching by code="${equipment_code}"`);
+                const result = await pool.query(query, params);
+                if (result.rows.length > 0) {
+                  foundId = String(result.rows[0].id);
+                  console.log(`[TROUBLESHOOTING] Found by code: id=${foundId}, name="${result.rows[0].name}"`);
+                }
               }
-              console.log(`[TROUBLESHOOTING] Searching in ${config.table} with name="${equipment_name}"`);
-              const result = await pool.query(query, params);
-              if (result.rows.length > 0) {
-                foundId = String(result.rows[0].id);
-                console.log(`[TROUBLESHOOTING] Found equipment: id=${foundId}, name="${result.rows[0].name}"`);
-              } else {
-                console.log(`[TROUBLESHOOTING] No match found in ${config.table} for name="${equipment_name}"`);
+
+              // Strategy 2: Try to find by name + building_code (more precise than name alone)
+              if (building_code && !foundId) {
+                let query, params;
+                if (config.siteCol) {
+                  query = `SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building FROM ${config.table} WHERE LOWER(TRIM(${config.nameCol})) = LOWER(TRIM($1)) AND LOWER(TRIM(${config.buildingCol})) = LOWER(TRIM($2)) AND ${config.siteCol} = $3 LIMIT 1`;
+                  params = [equipment_name, building_code, site];
+                } else {
+                  query = `SELECT id, ${config.nameCol} as name, ${config.buildingCol} as building FROM ${config.table} WHERE LOWER(TRIM(${config.nameCol})) = LOWER(TRIM($1)) AND LOWER(TRIM(${config.buildingCol})) = LOWER(TRIM($2)) LIMIT 1`;
+                  params = [equipment_name, building_code];
+                }
+                console.log(`[TROUBLESHOOTING] Strategy 2: Searching by name="${equipment_name}" + building="${building_code}"`);
+                const result = await pool.query(query, params);
+                if (result.rows.length > 0) {
+                  foundId = String(result.rows[0].id);
+                  console.log(`[TROUBLESHOOTING] Found by name+building: id=${foundId}, name="${result.rows[0].name}", building="${result.rows[0].building}"`);
+                }
+              }
+
+              // Strategy 3: Fallback to name only (less precise)
+              if (!foundId) {
+                let query, params;
+                if (config.siteCol) {
+                  query = `SELECT id, ${config.nameCol} as name FROM ${config.table} WHERE LOWER(TRIM(${config.nameCol})) = LOWER(TRIM($1)) AND ${config.siteCol} = $2 LIMIT 1`;
+                  params = [equipment_name, site];
+                } else {
+                  query = `SELECT id, ${config.nameCol} as name FROM ${config.table} WHERE LOWER(TRIM(${config.nameCol})) = LOWER(TRIM($1)) LIMIT 1`;
+                  params = [equipment_name];
+                }
+                console.log(`[TROUBLESHOOTING] Strategy 3: Searching by name only="${equipment_name}"`);
+                const result = await pool.query(query, params);
+                if (result.rows.length > 0) {
+                  foundId = String(result.rows[0].id);
+                  console.log(`[TROUBLESHOOTING] Found by name only: id=${foundId}, name="${result.rows[0].name}"`);
+                } else {
+                  console.log(`[TROUBLESHOOTING] No match found in ${config.table}`);
+                }
               }
             } else {
               console.log(`[TROUBLESHOOTING] No config for equipment_type="${equipment_type}"`);
