@@ -16,6 +16,16 @@ function isAdmin(email) {
   return ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === email.toLowerCase());
 }
 
+// Format duration in minutes to human-readable format (e.g., "1h 30min" or "45 min")
+function formatDuration(minutes) {
+  if (!minutes || minutes <= 0) return '0 min';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}min`;
+}
+
 // Get database pool from main server
 let pool;
 export function setPool(p) {
@@ -76,10 +86,34 @@ export async function initTroubleshootingTables(poolInstance) {
         -- Status
         status VARCHAR(50) DEFAULT 'completed', -- 'in_progress', 'completed', 'pending_review'
 
+        -- Sequential report number (per site)
+        report_number INTEGER,
+
         -- Metadata
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
+    `);
+
+    // Add report_number column if it doesn't exist (migration)
+    await pool.query(`
+      ALTER TABLE troubleshooting_records
+      ADD COLUMN IF NOT EXISTS report_number INTEGER
+    `);
+
+    // Migrate existing records without report_number
+    // Assign sequential numbers based on created_at order, per site
+    await pool.query(`
+      WITH numbered AS (
+        SELECT id, site,
+               ROW_NUMBER() OVER (PARTITION BY site ORDER BY created_at ASC) as rn
+        FROM troubleshooting_records
+        WHERE report_number IS NULL
+      )
+      UPDATE troubleshooting_records tr
+      SET report_number = numbered.rn
+      FROM numbered
+      WHERE tr.id = numbered.id AND tr.report_number IS NULL
     `);
 
     // Photos table for troubleshooting
@@ -420,6 +454,13 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
       return res.status(400).json({ error: 'Le titre est requis' });
     }
 
+    // Get the next report number for this site
+    const reportNumberResult = await pool.query(
+      'SELECT COALESCE(MAX(report_number), 0) + 1 as next_number FROM troubleshooting_records WHERE site = $1',
+      [site]
+    );
+    const nextReportNumber = reportNumberResult.rows[0]?.next_number || 1;
+
     // Insert main record (equipment_original_id stores the original ID for position lookups)
     const result = await pool.query(`
       INSERT INTO troubleshooting_records (
@@ -430,8 +471,8 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
         started_at, completed_at, duration_minutes, downtime_minutes,
         technician_name, technician_email,
         ai_diagnosis, ai_recommendations,
-        status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, 'completed')
+        status, report_number
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, 'completed', $27)
       RETURNING *
     `, [
       site, finalEquipmentType, finalEquipmentId, equipment_id || null, equipment_name, equipment_code,
@@ -440,7 +481,8 @@ router.post('/create', express.json({ limit: '50mb' }), async (req, res) => {
       category, severity || 'minor', fault_type,
       started_at || new Date(), completed_at || new Date(), duration_minutes || 0, downtime_minutes || 0,
       finalTechnicianName, finalTechnicianEmail,
-      ai_diagnosis, ai_recommendations
+      ai_diagnosis, ai_recommendations,
+      nextReportNumber
     ]);
 
     const record = result.rows[0];
@@ -542,14 +584,15 @@ router.get('/list', async (req, res) => {
       console.log(`[TROUBLESHOOTING] Non-UUID equipment_id=${equipment_id}, looked up name: "${equipmentNameFromSource}"`);
     }
 
-    // Use subquery to calculate global row_number BEFORE filtering
-    // This ensures report numbers are consistent regardless of filters
+    // Use persistent report_number if available, otherwise fall back to ROW_NUMBER()
+    // This ensures report numbers are unique and persistent
     let sql = `
       SELECT tr.*,
+             COALESCE(tr.report_number, tr.fallback_row_number) as row_number,
              (SELECT COUNT(*) FROM troubleshooting_photos WHERE troubleshooting_id = tr.id) as photo_count
       FROM (
         SELECT *,
-               ROW_NUMBER() OVER (ORDER BY created_at DESC) as row_number
+               ROW_NUMBER() OVER (ORDER BY created_at ASC) as fallback_row_number
         FROM troubleshooting_records
         WHERE site = $1
       ) tr
@@ -647,7 +690,7 @@ router.get('/list', async (req, res) => {
     if (date_to) { countSql += ` AND tr.created_at <= $${countParamIndex++}`; countParams.push(date_to); }
     if (search) { countSql += ` AND (tr.title ILIKE $${countParamIndex} OR tr.description ILIKE $${countParamIndex} OR tr.equipment_name ILIKE $${countParamIndex} OR tr.technician_name ILIKE $${countParamIndex})`; countParams.push(`%${search}%`); }
 
-    sql += ` ORDER BY tr.row_number ASC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
+    sql += ` ORDER BY COALESCE(tr.report_number, tr.fallback_row_number) DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
     params.push(parseInt(limit), parseInt(offset));
 
     const result = await pool.query(sql, params);
@@ -1119,10 +1162,10 @@ router.get('/:id/pdf', async (req, res) => {
 
     // Right column
     doc.font('Helvetica-Bold').text('Durée intervention:', 320, y + 12);
-    doc.font('Helvetica').text(`${record.duration_minutes || 0} min`, 430, y + 12);
+    doc.font('Helvetica').text(formatDuration(record.duration_minutes), 430, y + 12);
 
     doc.font('Helvetica-Bold').text('Temps d\'arrêt:', 320, y + 28);
-    doc.font('Helvetica').text(`${record.downtime_minutes || 0} min`, 430, y + 28);
+    doc.font('Helvetica').text(formatDuration(record.downtime_minutes), 430, y + 28);
 
     doc.font('Helvetica-Bold').text('Catégorie:', 320, y + 44);
     doc.font('Helvetica').text(record.category || 'N/A', 430, y + 44);
@@ -1462,8 +1505,8 @@ router.get('/report/pdf', async (req, res) => {
       // Severity dot
       doc.circle(410, y + 11, 5).fill(severityColors[record.severity] || '#6b7280');
 
-      doc.text(`${record.duration_minutes || 0}m`, 445, y + 7, { width: 40 });
-      doc.text(`${record.downtime_minutes || 0}m`, 490, y + 7, { width: 50 });
+      doc.text(formatDuration(record.duration_minutes), 440, y + 7, { width: 50 });
+      doc.text(formatDuration(record.downtime_minutes), 490, y + 7, { width: 55 });
 
       y += 22;
     });
