@@ -920,36 +920,38 @@ function calculateRiskScores(equipmentBreakdown, totalIncidents) {
 
 /**
  * Generate incidents per day bar chart URL
- * Uses simple labels to avoid encoding issues
+ * Clear labels with weekday names
  */
 function generateIncidentsChart(dailyData, width = 600, height = 250) {
-  // Use simple day/month format to avoid encoding issues
+  // Use weekday + day format for clarity (Lun 5, Mar 6, etc.)
+  const joursSemaine = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
   const labels = dailyData.map(d => {
     const date = new Date(d.date);
+    const jour = joursSemaine[date.getDay()];
     const day = date.getDate();
-    const month = date.getMonth() + 1;
-    return `${day}/${month}`;
+    return jour + ' ' + day;
   });
 
-  // Simplify config for better URL encoding
   const config = {
     type: 'bar',
     data: {
       labels: labels,
-      datasets: [
-        {
-          label: 'Total',
-          data: dailyData.map(d => parseInt(d.total) || 0),
-          backgroundColor: '#3B82F6'
-        }
-      ]
+      datasets: [{
+        label: 'Depannages',
+        data: dailyData.map(d => parseInt(d.total) || 0),
+        backgroundColor: 'rgba(59,130,246,0.8)',
+        borderColor: 'rgb(37,99,235)',
+        borderWidth: 1,
+        borderRadius: 4
+      }]
     },
     options: {
       plugins: {
-        legend: { display: false }
+        legend: { display: false },
+        title: { display: true, text: 'Nombre de depannages par jour', font: { size: 14 } }
       },
       scales: {
-        y: { beginAtZero: true }
+        y: { beginAtZero: true, ticks: { stepSize: 1 } }
       }
     }
   };
@@ -1544,6 +1546,21 @@ function generateWeeklyReportEmail(site, dateRange, stats, dailyBreakdown, equip
       </table>
     </div>
 
+    <!-- Quick Access Links -->
+    <div style="padding: 25px; border-bottom: 1px solid #e5e7eb; text-align: center;">
+      <h2 style="font-size: 16px; font-weight: 700; color: #1f2937; margin: 0 0 20px;">🔗 Accès rapide</h2>
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="padding: 10px; text-align: center;">
+            <a href="${APP_URL}/troubleshooting" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #3B82F6, #2563EB); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📋 Voir tous les dépannages</a>
+          </td>
+          <td style="padding: 10px; text-align: center;">
+            <a href="${APP_URL}/switchboards/controls" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #22C55E, #16A34A); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">🔧 Voir les maintenances</a>
+          </td>
+        </tr>
+      </table>
+    </div>
+
     <!-- Footer -->
     <div style="background: #1f2937; padding: 25px; text-align: center; color: #9ca3af; font-size: 12px;">
       <p style="margin: 0;">Ce rapport a été généré automatiquement par Haleon-tool</p>
@@ -1723,6 +1740,21 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equi
         <tbody>
           ${generateAgentTableRows()}
         </tbody>
+      </table>
+    </div>
+
+    <!-- Quick Access Links -->
+    <div style="padding: 25px; border-bottom: 1px solid #e5e7eb; text-align: center;">
+      <h2 style="font-size: 16px; font-weight: 700; color: #1f2937; margin: 0 0 20px;">🔗 Accès rapide</h2>
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="padding: 10px; text-align: center;">
+            <a href="${APP_URL}/troubleshooting" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #3B82F6, #2563EB); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📋 Voir tous les dépannages</a>
+          </td>
+          <td style="padding: 10px; text-align: center;">
+            <a href="${APP_URL}/switchboards/controls" style="display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #22C55E, #16A34A); color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">🔧 Voir les maintenances</a>
+          </td>
+        </tr>
       </table>
     </div>
 
