@@ -852,7 +852,7 @@ const SwitchboardLeafletViewer = forwardRef(
       drawConnections();
     }, [links, selectedId, drawConnections]);
 
-    function makeSwitchboardIcon(isPrincipal = false, isSelected = false, switchboardId = null) {
+    function makeSwitchboardIcon(isPrincipal = false, isSelected = false, switchboardId = null, categoryColor = null) {
       const s = isSelected ? ICON_PX_SELECTED : ICON_PX;
 
       // Check control status for this switchboard
@@ -872,6 +872,10 @@ const SwitchboardLeafletViewer = forwardRef(
         animClass = "sb-marker-overdue";
       } else if (isUpcoming) {
         bg = "background: radial-gradient(circle at 30% 30%, #f59e0b, #d97706);"; // Amber - upcoming
+      } else if (categoryColor) {
+        // Use category color with darker shade for gradient
+        const darkerColor = categoryColor.replace(/^#/, '');
+        bg = `background: radial-gradient(circle at 30% 30%, ${categoryColor}cc, ${categoryColor});`; // Category color
       } else if (isPrincipal) {
         bg = "background: radial-gradient(circle at 30% 30%, #10b981, #059669);"; // Emerald - principal
       } else {
@@ -910,7 +914,7 @@ const SwitchboardLeafletViewer = forwardRef(
 
           const latlng = L.latLng(y, x);
           const isSelected = p.switchboard_id === selectedIdRef.current;
-          const icon = makeSwitchboardIcon(!!p.is_principal, isSelected, p.switchboard_id);
+          const icon = makeSwitchboardIcon(!!p.is_principal, isSelected, p.switchboard_id, p.category_color);
 
           const wantsDraggable = !disabled && !placementActiveRef.current;
           const mk = L.marker(latlng, {
@@ -930,6 +934,9 @@ const SwitchboardLeafletViewer = forwardRef(
             x_frac: p.x_frac,
             y_frac: p.y_frac,
             is_principal: p.is_principal,
+            category_id: p.category_id,
+            category_name: p.category_name,
+            category_color: p.category_color,
             building: p.building,
             floor: p.floor,
             room: p.room,
@@ -1470,6 +1477,9 @@ function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
               room: item.room || "",
               is_principal: item.is_principal || false,
               regime_neutral: item.regime_neutral || "",
+              category_id: item.category_id,
+              category_name: item.category_name || "",
+              category_color: item.category_color || "",
             }))
           : [];
 

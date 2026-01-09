@@ -6,7 +6,8 @@ import {
   Camera, Sparkles, Shield, Upload, FileSpreadsheet, ArrowRight, ArrowLeft,
   Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle,
   Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch, ArrowUpRight,
-  MapPin, Database, History, Star, ClipboardCheck, Calendar, Clock, Flame
+  MapPin, Database, History, Star, ClipboardCheck, Calendar, Clock, Flame,
+  Palette, Tag
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { getUserPermissions } from '../lib/permissions';
@@ -114,6 +115,169 @@ const Toast = ({ message, type = 'success', onClose }) => {
 const inputBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400";
 const selectBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900";
 const inputSmallClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900 placeholder-gray-400";
+
+// ==================== CATEGORY COLOR PRESETS ====================
+
+const COLOR_PRESETS = [
+  '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899',
+  '#06B6D4', '#84CC16', '#F97316', '#6366F1', '#14B8A6', '#A855F7'
+];
+
+// ==================== CATEGORY MANAGER MODAL ====================
+
+const CategoryManagerModal = ({ isOpen, onClose, categories, onCategoriesChange, showToast }) => {
+  const [localCategories, setLocalCategories] = useState([]);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ name: '', description: '', color: '#F59E0B' });
+  const [isLoading, setIsLoading] = useState(false);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newCategory, setNewCategory] = useState({ name: '', description: '', color: '#F59E0B' });
+
+  useEffect(() => { if (categories) setLocalCategories([...categories]); }, [categories]);
+  useEffect(() => { if (!isOpen) { setEditingId(null); setShowNewForm(false); } }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const handleCreate = async () => {
+    if (!newCategory.name.trim()) { showToast('Le nom est requis', 'error'); return; }
+    setIsLoading(true);
+    try {
+      await api.switchboard.createCategory(newCategory);
+      showToast('Catégorie créée', 'success');
+      setNewCategory({ name: '', description: '', color: '#F59E0B' });
+      setShowNewForm(false);
+      onCategoriesChange();
+    } catch { showToast('Erreur', 'error'); }
+    finally { setIsLoading(false); }
+  };
+
+  const handleUpdate = async (id) => {
+    if (!editForm.name.trim()) { showToast('Le nom est requis', 'error'); return; }
+    setIsLoading(true);
+    try {
+      await api.switchboard.updateCategory(id, editForm);
+      showToast('Catégorie mise à jour', 'success');
+      setEditingId(null);
+      onCategoriesChange();
+    } catch { showToast('Erreur', 'error'); }
+    finally { setIsLoading(false); }
+  };
+
+  const handleDelete = async (id, name) => {
+    if (!window.confirm(`Supprimer "${name}" ?`)) return;
+    setIsLoading(true);
+    try {
+      await api.switchboard.deleteCategory(id);
+      showToast('Catégorie supprimée', 'success');
+      onCategoriesChange();
+    } catch { showToast('Erreur', 'error'); }
+    finally { setIsLoading(false); }
+  };
+
+  const CategoryForm = ({ form, setForm, onSave, onCancel, saveLabel }) => (
+    <div className="bg-amber-50 rounded-xl p-4 space-y-3 border border-amber-200">
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">Nom *</label>
+        <input type="text" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-500" placeholder="Nom de la catégorie" />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">Description</label>
+        <input type="text" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-500" placeholder="Description optionnelle" />
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-sm text-gray-600">Couleur:</span>
+        {COLOR_PRESETS.map(c => (
+          <button key={c} onClick={() => setForm(f => ({ ...f, color: c }))}
+            className={`w-7 h-7 rounded-full border-2 transition-transform ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent hover:scale-105'}`}
+            style={{ backgroundColor: c }} />
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onCancel} className="flex-1 py-2 px-3 rounded-lg border border-gray-300 text-gray-600 text-sm hover:bg-gray-50">Annuler</button>
+        <button onClick={onSave} disabled={isLoading}
+          className="flex-1 py-2 px-3 rounded-lg bg-amber-600 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-1 hover:bg-amber-700">
+          {isLoading ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />} {saveLabel}
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-6 text-white">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-white/20 rounded-xl"><Palette size={24} /></div>
+              <div>
+                <h2 className="text-xl font-bold">Catégories de tableaux</h2>
+                <p className="text-amber-100 text-sm">Personnaliser les couleurs des marqueurs</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg"><X size={20} /></button>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
+          {!showNewForm && (
+            <button onClick={() => setShowNewForm(true)}
+              className="w-full py-3 px-4 rounded-xl border-2 border-dashed border-amber-300 text-amber-600 font-medium hover:bg-amber-50 flex items-center justify-center gap-2">
+              <Plus size={18} /> Ajouter une catégorie
+            </button>
+          )}
+
+          {showNewForm && (
+            <CategoryForm form={newCategory} setForm={setNewCategory} onSave={handleCreate}
+              onCancel={() => { setShowNewForm(false); setNewCategory({ name: '', description: '', color: '#F59E0B' }); }}
+              saveLabel="Créer" />
+          )}
+
+          <div className="space-y-2">
+            {localCategories.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <Tag size={32} className="mx-auto mb-2 opacity-30" />
+                <p>Aucune catégorie</p>
+                <p className="text-xs mt-1">Les tableaux utiliseront la couleur par défaut</p>
+              </div>
+            ) : localCategories.map(cat => (
+              <div key={cat.id} className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                {editingId === cat.id ? (
+                  <CategoryForm form={editForm} setForm={setEditForm} onSave={() => handleUpdate(cat.id)}
+                    onCancel={() => setEditingId(null)} saveLabel="Sauvegarder" />
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center shadow-sm" style={{ backgroundColor: cat.color }}>
+                        <Zap size={18} className="text-white" />
+                      </div>
+                      <div>
+                        <h4 className="font-medium text-gray-900">{cat.name}</h4>
+                        {cat.description && <p className="text-sm text-gray-500">{cat.description}</p>}
+                        <span className="text-xs text-gray-400">{cat.switchboard_count || 0} tableaux</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => { setEditingId(cat.id); setEditForm({ name: cat.name, description: cat.description || '', color: cat.color }); }}
+                        className="p-2 hover:bg-white rounded-lg text-gray-500 hover:text-amber-600"><Edit3 size={16} /></button>
+                      <button onClick={() => handleDelete(cat.id, cat.name)}
+                        className="p-2 hover:bg-white rounded-lg text-gray-500 hover:text-red-600"><Trash2 size={16} /></button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="border-t p-4">
+          <button onClick={onClose} className="w-full py-3 px-4 rounded-xl bg-gray-100 text-gray-700 font-medium hover:bg-gray-200">Fermer</button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ==================== IMPORT RESULT MODAL ====================
 
@@ -1067,7 +1231,7 @@ const MobileTreeDrawer = React.memo(({ isOpen, onClose, tree, expandedBuildings,
                                 className={`w-full flex items-center gap-2 px-3 py-2.5 text-left rounded-lg
                                   ${selectedBoard?.id === board.id ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
                               >
-                                <Zap size={14} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
+                                <Zap size={14} style={board.category_color ? { color: board.category_color } : undefined} className={!board.category_color ? (board.is_principal ? 'text-emerald-500' : 'text-gray-400') : ''} />
                                 <span className="text-sm font-mono truncate flex-1">{board.code}</span>
                                 {!isBoardPlaced(board.id) && (
                                   <span className="px-1.5 py-0.5 bg-red-100 text-red-600 text-[9px] rounded-full flex items-center gap-0.5">
@@ -1143,12 +1307,16 @@ export default function Switchboards() {
   // Lightbox for image enlargement
   const { lightbox, openLightbox, closeLightbox } = useLightbox();
 
+  // Category state
+  const [categories, setCategories] = useState([]);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+
   // Form state
   const [showBoardForm, setShowBoardForm] = useState(false);
   const [showDeviceForm, setShowDeviceForm] = useState(false);
   const [showPanelScan, setShowPanelScan] = useState(false);
   const [preloadedScanResult, setPreloadedScanResult] = useState(null);
-  const [boardForm, setBoardForm] = useState({ name: '', code: '', building_code: '', floor: '', room: '', regime_neutral: 'TN-S', is_principal: false, fire_interlock: false });
+  const [boardForm, setBoardForm] = useState({ name: '', code: '', building_code: '', floor: '', room: '', regime_neutral: 'TN-S', is_principal: false, fire_interlock: false, category_id: null });
   const [deviceForm, setDeviceForm] = useState({
     name: '', device_type: 'Low Voltage Circuit Breaker', manufacturer: '', reference: '',
     in_amps: '', icu_ka: '', ics_ka: '', poles: 3, voltage_v: 400, trip_unit: '',
@@ -1433,6 +1601,16 @@ export default function Switchboards() {
     }
   }, []);
 
+  // Load categories
+  const loadCategories = useCallback(async () => {
+    try {
+      const res = await api.switchboard.listCategories();
+      setCategories(res?.categories || []);
+    } catch (err) {
+      console.error('Load categories error:', err);
+    }
+  }, []);
+
   // Load boards
   const loadBoards = async () => {
     setIsLoading(true);
@@ -1441,6 +1619,7 @@ export default function Switchboards() {
       setBoards(res.data || []);
       loadPlacements().catch(console.warn);
       loadControlStatuses().catch(console.warn);
+      loadCategories().catch(console.warn);
     } catch (err) {
       console.error('Load boards error:', err);
       showToast('Erreur lors du chargement', 'error');
@@ -1509,7 +1688,8 @@ export default function Switchboards() {
         meta: { building_code: boardForm.building_code, floor: boardForm.floor, room: boardForm.room },
         regime_neutral: boardForm.regime_neutral,
         is_principal: boardForm.is_principal,
-        fire_interlock: boardForm.fire_interlock
+        fire_interlock: boardForm.fire_interlock,
+        category_id: boardForm.category_id || null
       };
       
       let savedBoard;
@@ -1766,7 +1946,7 @@ export default function Switchboards() {
 
   // Form reset
   const resetBoardForm = () => {
-    setBoardForm({ name: '', code: '', building_code: '', floor: '', room: '', regime_neutral: 'TN-S', is_principal: false, fire_interlock: false });
+    setBoardForm({ name: '', code: '', building_code: '', floor: '', room: '', regime_neutral: 'TN-S', is_principal: false, fire_interlock: false, category_id: null });
     setEditingBoardId(null);
     setShowBoardForm(false);
   };
@@ -1796,7 +1976,8 @@ export default function Switchboards() {
       room: board.meta?.room || '',
       regime_neutral: board.regime_neutral || 'TN-S',
       is_principal: board.is_principal || false,
-      fire_interlock: board.fire_interlock || false
+      fire_interlock: board.fire_interlock || false,
+      category_id: board.category_id || null
     });
     setEditingBoardId(board.id);
     setShowBoardForm(true);
@@ -1933,7 +2114,7 @@ export default function Switchboards() {
                           className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg
                             ${selectedBoard?.id === board.id ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
                         >
-                          <Zap size={14} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
+                          <Zap size={14} style={board.category_color ? { color: board.category_color } : undefined} className={!board.category_color ? (board.is_principal ? 'text-emerald-500' : 'text-gray-400') : ''} />
                           <span className="text-sm font-mono truncate flex-1">{board.code}</span>
                           {!isBoardPlacedOnMap(board) && (
                             <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[9px] rounded-full">
@@ -2241,7 +2422,44 @@ export default function Switchboards() {
               <option value="IT">IT</option>
             </select>
           </div>
-          
+
+          {/* Category selector */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-medium text-gray-500">Catégorie</label>
+              <button
+                type="button"
+                onClick={() => setShowCategoryManager(true)}
+                className="text-xs text-amber-600 hover:text-amber-700 flex items-center gap-1"
+              >
+                <Palette size={12} /> Gérer
+              </button>
+            </div>
+            <select
+              value={boardForm.category_id || ''}
+              onChange={(e) => setBoardForm(prev => ({ ...prev, category_id: e.target.value ? Number(e.target.value) : null }))}
+              className={selectBaseClass}
+            >
+              <option value="">Aucune catégorie</option>
+              {categories.map(cat => (
+                <option key={cat.id} value={cat.id}>{cat.name}</option>
+              ))}
+            </select>
+            {boardForm.category_id && categories.find(c => c.id === boardForm.category_id) && (
+              <div className="mt-2 flex items-center gap-2">
+                <div
+                  className="w-5 h-5 rounded-full flex items-center justify-center"
+                  style={{ backgroundColor: categories.find(c => c.id === boardForm.category_id)?.color }}
+                >
+                  <Zap size={10} className="text-white" />
+                </div>
+                <span className="text-xs text-gray-500">
+                  Couleur du marqueur: {categories.find(c => c.id === boardForm.category_id)?.name}
+                </span>
+              </div>
+            )}
+          </div>
+
           <label className="flex items-center gap-3 p-3 bg-emerald-50 rounded-xl cursor-pointer">
             <input
               type="checkbox"
@@ -2849,7 +3067,7 @@ export default function Switchboards() {
                                   onClick={() => handleSelectBoard(board)}
                                   className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-blue-50 transition-colors"
                                 >
-                                  <Zap size={16} className={board.is_principal ? 'text-emerald-500' : 'text-gray-400'} />
+                                  <Zap size={16} style={board.category_color ? { color: board.category_color } : undefined} className={!board.category_color ? (board.is_principal ? 'text-emerald-500' : 'text-gray-400') : ''} />
                                   <div className="flex-1 min-w-0">
                                     <span className="text-sm font-mono font-semibold text-gray-900 block truncate">{board.code}</span>
                                     <span className="text-xs text-gray-500 truncate block">{board.name}</span>
@@ -3448,6 +3666,13 @@ export default function Switchboards() {
 
       <ImportExcelModal isOpen={showImportModal} onClose={() => setShowImportModal(false)} onImport={handleImportExcel} isLoading={isImporting} />
       <ImportResultModal isOpen={showImportResult} onClose={() => { setShowImportResult(false); setImportResult(null); }} result={importResult} />
+      <CategoryManagerModal
+        isOpen={showCategoryManager}
+        onClose={() => setShowCategoryManager(false)}
+        categories={categories}
+        onCategoriesChange={() => { loadCategories(); loadBoards(); }}
+        showToast={showToast}
+      />
       <SiteSettingsModal isOpen={showSettingsModal} onClose={() => setShowSettingsModal(false)} showToast={showToast} />
       <DeleteConfirmModal isOpen={showDeleteModal} onClose={() => { setShowDeleteModal(false); setDeleteTarget(null); }} onConfirm={handleDeleteBoard} itemName={deleteTarget?.code} itemType="tableau" isLoading={isDeleting} deviceCount={deleteTarget?.device_count || 0} />
       <ShareLinkModal isOpen={showShareModal} onClose={() => setShowShareModal(false)} board={selectedBoard} />

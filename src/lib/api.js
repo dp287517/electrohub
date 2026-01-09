@@ -2015,6 +2015,25 @@ export const api = {
     duplicateBoard: (id) =>
       post(`/api/switchboard/boards/${encodeURIComponent(id)}/duplicate`, {}),
 
+    // ========================= CATEGORIES =========================
+
+    /** Liste toutes les catégories de tableaux */
+    listCategories: () => get("/api/switchboard/categories"),
+
+    /** Crée une nouvelle catégorie */
+    createCategory: (payload) => post("/api/switchboard/categories", payload),
+
+    /** Met à jour une catégorie */
+    updateCategory: (id, payload) =>
+      jsonFetch(`/api/switchboard/categories/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      }),
+
+    /** Supprime une catégorie */
+    deleteCategory: (id) =>
+      del(`/api/switchboard/categories/${encodeURIComponent(id)}`),
+
     // ========================= PHOTO TABLEAU =========================
 
     /** URL de la photo du tableau (pour affichage <img>) */

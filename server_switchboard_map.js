@@ -485,6 +485,10 @@ app.get("/api/switchboard/maps/positions", async (req, res) => {
         room: sb?.meta?.room || "",
         is_principal: sb?.is_principal || false,
         regime_neutral: sb?.regime_neutral || "",
+        // Category info
+        category_id: sb?.category_id || null,
+        category_name: sb?.category_name || "",
+        category_color: sb?.category_color || "",
       };
     });
 
