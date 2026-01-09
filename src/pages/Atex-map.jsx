@@ -1230,39 +1230,127 @@ export default function AtexMap({
 
   // 🔍 PDF Text Search Functions
   async function extractPdfText() {
-    if (!fileUrl) return [];
+    if (!fileUrl) {
+      console.warn("[ATEX Search] No fileUrl available");
+      return [];
+    }
     if (pdfTextItems.length > 0) return pdfTextItems; // Already extracted
 
     setSearchLoading(true);
     try {
+      console.log("[ATEX Search] Starting text extraction from:", fileUrl);
       const loadingTask = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
       const pdf = await loadingTask.promise;
       const page = await pdf.getPage(Number(pageIndex) + 1);
       const viewport = page.getViewport({ scale: 1 });
       const textContent = await page.getTextContent();
 
+      console.log("[ATEX Search] Raw textContent items:", textContent.items.length);
+
+      // Debug: show first 10 items
+      if (textContent.items.length > 0) {
+        console.log("[ATEX Search] Sample items:", textContent.items.slice(0, 10).map(i => ({
+          str: i.str,
+          transform: i.transform,
+          width: i.width,
+          height: i.height
+        })));
+      }
+
       // Store viewport dimensions for coordinate conversion
       pdfViewportRef.current = { width: viewport.width, height: viewport.height };
 
       // Extract text items with their positions
-      const items = textContent.items
-        .filter(item => item.str && item.str.trim())
+      // Group nearby text items on the same line to form complete words/phrases
+      const rawItems = textContent.items
+        .filter(item => item.str) // Keep even whitespace for grouping
         .map(item => ({
           str: item.str,
-          // PDF coordinates: origin at bottom-left, we need to flip Y
           x: item.transform[4],
-          y: viewport.height - item.transform[5], // Flip Y for Leaflet (origin at top-left)
-          width: item.width || (item.str.length * 6), // Estimate width if not provided
-          height: item.height || 12, // Estimate height
+          y: item.transform[5], // Keep original Y for grouping
+          yFlipped: viewport.height - item.transform[5], // Flipped Y for Leaflet
+          width: item.width || (item.str.length * 6),
+          height: item.height || Math.abs(item.transform[0]) || 12,
           transform: item.transform,
         }));
 
+      // Group items that are on the same line (similar Y) and close horizontally
+      const lineGroups = [];
+      const Y_TOLERANCE = 5; // Items within 5 units of Y are on same line
+
+      for (const item of rawItems) {
+        if (!item.str.trim()) continue; // Skip empty items for final results
+
+        // Find existing group on same line
+        let foundGroup = lineGroups.find(g =>
+          Math.abs(g.y - item.y) < Y_TOLERANCE &&
+          item.x >= g.minX - 50 && item.x <= g.maxX + 50
+        );
+
+        if (foundGroup) {
+          foundGroup.items.push(item);
+          foundGroup.minX = Math.min(foundGroup.minX, item.x);
+          foundGroup.maxX = Math.max(foundGroup.maxX, item.x + item.width);
+        } else {
+          lineGroups.push({
+            y: item.y,
+            minX: item.x,
+            maxX: item.x + item.width,
+            items: [item]
+          });
+        }
+      }
+
+      // Create consolidated items from groups
+      const items = [];
+      for (const group of lineGroups) {
+        // Sort items by X position
+        group.items.sort((a, b) => a.x - b.x);
+
+        // Concatenate text
+        const fullText = group.items.map(i => i.str).join('');
+        if (!fullText.trim()) continue;
+
+        const firstItem = group.items[0];
+        const lastItem = group.items[group.items.length - 1];
+
+        items.push({
+          str: fullText,
+          x: firstItem.x,
+          y: firstItem.yFlipped,
+          width: (lastItem.x + lastItem.width) - firstItem.x,
+          height: firstItem.height,
+          // Keep individual items for precise highlighting later
+          subItems: group.items,
+        });
+      }
+
+      // Also add individual items for single-word searches
+      for (const item of rawItems) {
+        if (item.str.trim() && item.str.trim().length > 1) {
+          items.push({
+            str: item.str,
+            x: item.x,
+            y: item.yFlipped,
+            width: item.width,
+            height: item.height,
+          });
+        }
+      }
+
+      console.log("[ATEX Search] Processed items:", items.length);
+      console.log("[ATEX Search] Sample processed:", items.slice(0, 5).map(i => i.str));
+
+      // Build full text for debugging
+      const allText = items.map(i => i.str).join(' ');
+      console.log("[ATEX Search] All text preview (first 500 chars):", allText.substring(0, 500));
+
       setPdfTextItems(items);
-      await pdf.cleanup?.();
+      try { await pdf.cleanup?.(); } catch {}
       log("PDF text extracted", { itemCount: items.length });
       return items;
     } catch (err) {
-      console.error("[ATEX] extractPdfText error:", err);
+      console.error("[ATEX Search] extractPdfText error:", err);
       return [];
     } finally {
       setSearchLoading(false);
@@ -1270,15 +1358,21 @@ export default function AtexMap({
   }
 
   async function performSearch(query) {
-    if (!query || query.trim().length < 2) {
+    if (!query || query.trim().length < 1) {
       setSearchResults([]);
       setCurrentResultIndex(0);
       clearSearchHighlight();
       return;
     }
 
+    console.log("[ATEX Search] Searching for:", query);
     const items = await extractPdfText();
-    if (items.length === 0) return;
+    console.log("[ATEX Search] Items to search:", items.length);
+
+    if (items.length === 0) {
+      console.warn("[ATEX Search] No text items found in PDF");
+      return;
+    }
 
     const q = query.toLowerCase().trim();
     const results = [];
@@ -1305,6 +1399,11 @@ export default function AtexMap({
       }
     }
 
+    console.log("[ATEX Search] Found results:", results.length);
+    if (results.length > 0) {
+      console.log("[ATEX Search] First result:", results[0]);
+    }
+
     setSearchResults(results);
     setCurrentResultIndex(0);
 
@@ -1320,14 +1419,30 @@ export default function AtexMap({
   function highlightSearchResult(result) {
     const m = mapRef.current;
     const base = baseLayerRef.current;
-    if (!m || !base || !result || !pdfViewportRef.current) return;
+
+    console.log("[ATEX Search] highlightSearchResult called", {
+      hasMap: !!m,
+      hasBase: !!base,
+      result,
+      pdfViewport: pdfViewportRef.current
+    });
+
+    if (!m || !base || !result || !pdfViewportRef.current) {
+      console.warn("[ATEX Search] Missing required refs for highlighting");
+      return;
+    }
 
     // Get plan dimensions
     const dims = getPlanDims(base);
-    if (!dims) return;
+    if (!dims) {
+      console.warn("[ATEX Search] Could not get plan dimensions");
+      return;
+    }
 
     const { W: planW, H: planH, bounds } = dims;
     const pdfVp = pdfViewportRef.current;
+
+    console.log("[ATEX Search] Dimensions:", { planW, planH, pdfVpWidth: pdfVp.width, pdfVpHeight: pdfVp.height });
 
     // Convert PDF coordinates to Leaflet coordinates
     // PDF viewport size -> Plan canvas size (which is used as Leaflet bounds)
