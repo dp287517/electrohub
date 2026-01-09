@@ -1463,24 +1463,26 @@ function useMapUpdateLogic(stableSelectedPlan, pageIndex, viewerRef) {
           .positionsAuto(key, pageIdx)
           .catch(() => ({}));
         const list = Array.isArray(r?.positions)
-          ? r.positions.map((item) => ({
-              id: item.id,
-              switchboard_id: item.switchboard_id,
-              name: item.name || `Tableau #${item.switchboard_id}`,
-              code: item.code || "",
-              x_frac: Number(item.x_frac ?? item.x ?? 0),
-              y_frac: Number(item.y_frac ?? item.y ?? 0),
-              x: Number(item.x_frac ?? item.x ?? 0),
-              y: Number(item.y_frac ?? item.y ?? 0),
-              building: item.building || "",
-              floor: item.floor || "",
-              room: item.room || "",
-              is_principal: item.is_principal || false,
-              regime_neutral: item.regime_neutral || "",
-              category_id: item.category_id,
-              category_name: item.category_name || "",
-              category_color: item.category_color || "",
-            }))
+          ? r.positions.map((item) => {
+              return {
+                id: item.id,
+                switchboard_id: item.switchboard_id,
+                name: item.name || `Tableau #${item.switchboard_id}`,
+                code: item.code || "",
+                x_frac: Number(item.x_frac ?? item.x ?? 0),
+                y_frac: Number(item.y_frac ?? item.y ?? 0),
+                x: Number(item.x_frac ?? item.x ?? 0),
+                y: Number(item.y_frac ?? item.y ?? 0),
+                building: item.building || "",
+                floor: item.floor || "",
+                room: item.room || "",
+                is_principal: item.is_principal || false,
+                regime_neutral: item.regime_neutral || "",
+                category_id: item.category_id,
+                category_name: item.category_name || "",
+                category_color: item.category_color || "",
+              };
+            })
           : [];
 
         latestPositionsRef.current = list;

@@ -1,5 +1,5 @@
 // src/App.jsx
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Navbar from './components/Navbar.jsx';
 import SignIn from './pages/SignIn.jsx';
 import SignUp from './pages/SignUp.jsx';
@@ -49,6 +49,7 @@ import FireControl from './pages/FireControl.jsx';
 import FireControlMap from './pages/FireControl_map.jsx';
 import TroubleshootingDashboard from './pages/TroubleshootingDashboard.jsx';
 import TroubleshootingDetail from './pages/TroubleshootingDetail.jsx';
+import SharedTroubleshootingView from './pages/SharedTroubleshootingView.jsx';
 // FloatingAssistant removed from global - now only in Dashboard for mobile
 
 // Component to redirect authenticated users to dashboard
@@ -61,16 +62,24 @@ function AuthRedirect({ children }) {
 }
 
 export default function App() {
+  const location = useLocation();
+
+  // Hide navbar for public shared views
+  const hideNavbar = location.pathname.startsWith('/shared/');
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <div className="max-w-[95vw] mx-auto px-4 py-6">
+      {!hideNavbar && <Navbar />}
+      <div className={hideNavbar ? '' : 'max-w-[95vw] mx-auto px-4 py-6'}>
         <Routes>
           {/* Public - redirect to dashboard if already logged in */}
           <Route path="/" element={<AuthRedirect><SignIn /></AuthRedirect>} />
           <Route path="/signin" element={<AuthRedirect><SignIn /></AuthRedirect>} />
           <Route path="/signup" element={<AuthRedirect><SignUp /></AuthRedirect>} />
           <Route path="/lost-password" element={<LostPassword />} />
+
+          {/* Public - Shared Troubleshooting View (no auth required) */}
+          <Route path="/shared/troubleshooting/:token" element={<SharedTroubleshootingView />} />
 
           {/* Dashboard */}
           <Route

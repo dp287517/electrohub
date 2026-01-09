@@ -459,7 +459,7 @@ app.get("/api/switchboard/maps/positions", async (req, res) => {
         "X-User-Email": req.header("X-User-Email") || "",
         "X-User-Name": req.header("X-User-Name") || "",
       });
-      
+
       allSwitchboards.forEach(sb => {
         switchboardsMap.set(sb.id, sb);
       });

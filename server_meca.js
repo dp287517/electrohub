@@ -1356,13 +1356,31 @@ app.get("/api/meca/maps/positions", async (req, res) => {
               e.building,
               e.zone,
               e.floor,
-              e.location
+              e.location,
+              e.category_id,
+              c.name as category_name,
+              c.color as category_color,
+              c.icon as category_icon
          FROM meca_positions pos
          JOIN meca_equipments e ON e.id = pos.equipment_id
+         LEFT JOIN meca_equipment_categories c ON c.id = e.category_id
         WHERE pos.logical_name=$1
           AND pos.page_index=$2`,
       [planKey, Number(page_index)]
     );
+
+    // Debug: log category info for positions
+    if (rows.length > 0) {
+      console.log('[MECA-MAP] Positions with categories:', rows.filter(r => r.category_id).length, 'of', rows.length);
+      const sample = rows[0];
+      console.log('[MECA-MAP] Sample position:', {
+        equipment_id: sample.equipment_id,
+        name: sample.name,
+        category_id: sample.category_id,
+        category_color: sample.category_color,
+        category_icon: sample.category_icon
+      });
+    }
 
     res.json({ ok: true, positions: rows });
   } catch (e) {

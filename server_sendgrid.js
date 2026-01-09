@@ -236,6 +236,23 @@ async function initEmailTables() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_subs_site ON email_subscriptions(site)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_history_date ON email_history(sent_at)`);
 
+    // Table for share tokens (public access to troubleshooting)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS troubleshooting_share_tokens (
+        id SERIAL PRIMARY KEY,
+        token VARCHAR(64) NOT NULL UNIQUE,
+        troubleshooting_id UUID NOT NULL,
+        created_by_email VARCHAR(255),
+        shared_with_emails TEXT[],
+        expires_at TIMESTAMP,
+        view_count INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_share_tokens_token ON troubleshooting_share_tokens(token)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_share_tokens_troubleshooting ON troubleshooting_share_tokens(troubleshooting_id)`);
+    console.log('[SendGrid] troubleshooting_share_tokens table ready');
+
     tablesInitialized = true;
     console.log('[SendGrid] ✅ All tables initialized');
     return true;
@@ -1770,6 +1787,385 @@ function generateMonthlyReportEmail(site, dateRange, stats, dailyBreakdown, equi
 }
 
 // ============================================================
+// TROUBLESHOOTING SHARE EMAIL
+// ============================================================
+
+/**
+ * Generate a secure share token
+ */
+function generateShareToken() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let token = '';
+  for (let i = 0; i < 32; i++) {
+    token += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return token;
+}
+
+/**
+ * Get troubleshooting record with photos for sharing
+ */
+async function getTroubleshootingForShare(id) {
+  try {
+    const [recordRes, photosRes] = await Promise.all([
+      pool.query('SELECT * FROM troubleshooting_records WHERE id = $1', [id]),
+      pool.query('SELECT * FROM troubleshooting_photos WHERE troubleshooting_id = $1 ORDER BY photo_type, created_at', [id])
+    ]);
+
+    if (recordRes.rows.length === 0) {
+      return null;
+    }
+
+    return {
+      record: recordRes.rows[0],
+      photos: photosRes.rows
+    };
+  } catch (error) {
+    console.error('[SendGrid] Error fetching troubleshooting for share:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Generate share email template for troubleshooting
+ */
+function generateTroubleshootingShareEmail(record, photos, shareUrl, agentName, agentImage, agentInfo, sharedByName) {
+  const severityColors = {
+    critical: '#DC2626',
+    major: '#F97316',
+    minor: '#FBBF24',
+    cosmetic: '#22C55E'
+  };
+  const severityLabels = {
+    critical: 'Critique',
+    major: 'Majeur',
+    minor: 'Mineur',
+    cosmetic: 'Cosmétique'
+  };
+  const statusLabels = {
+    open: 'Ouvert',
+    in_progress: 'En cours',
+    resolved: 'Résolu',
+    closed: 'Clôturé'
+  };
+  const statusColors = {
+    open: '#DC2626',
+    in_progress: '#F97316',
+    resolved: '#22C55E',
+    closed: '#6B7280'
+  };
+
+  const severityColor = severityColors[record.severity] || '#6B7280';
+  const severityLabel = severityLabels[record.severity] || record.severity;
+  const statusColor = statusColors[record.status] || '#6B7280';
+  const statusLabel = statusLabels[record.status] || record.status;
+
+  const createdDate = new Date(record.created_at).toLocaleDateString('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  // Get first photo for preview if available
+  const previewPhoto = photos.find(p => p.photo_type === 'before') || photos[0];
+
+  return `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dépannage partagé - ${record.equipment_name || record.title}</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f3f4f6; line-height: 1.6;">
+  <div style="max-width: 650px; margin: 0 auto; background: white;">
+
+    <!-- Header with Agent -->
+    <div style="background: linear-gradient(135deg, ${agentInfo.color}, ${agentInfo.color}CC); padding: 30px; text-align: center; color: white;">
+      <div style="margin-bottom: 15px;">
+        ${agentImage ?
+          `<img src="cid:agent-image" alt="${agentName}" style="width: 80px; height: 80px; border-radius: 50%; border: 3px solid white; object-fit: cover;" />` :
+          `<div style="width: 80px; height: 80px; border-radius: 50%; background: rgba(255,255,255,0.2); display: inline-flex; align-items: center; justify-content: center; font-size: 36px; border: 3px solid white;">${agentInfo.icon}</div>`
+        }
+      </div>
+      <h1 style="margin: 0; font-size: 22px;">📤 Dépannage partagé par ${agentName}</h1>
+      <p style="margin: 8px 0 0; opacity: 0.9; font-size: 13px;">${agentInfo.description}</p>
+    </div>
+
+    <!-- Shared by info -->
+    <div style="background: #f0f9ff; padding: 15px 25px; border-bottom: 1px solid #e5e7eb;">
+      <p style="margin: 0; font-size: 14px; color: #1e40af;">
+        <strong>${sharedByName}</strong> vous a partagé ce dépannage
+      </p>
+    </div>
+
+    <!-- Equipment & Status -->
+    <div style="padding: 25px; border-bottom: 1px solid #e5e7eb;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px;">
+        <div>
+          <h2 style="margin: 0 0 5px; font-size: 20px; color: #1f2937;">${record.equipment_name || record.equipment_code || 'Équipement'}</h2>
+          <p style="margin: 0; font-size: 13px; color: #6b7280;">
+            ${record.building_code ? `📍 ${record.building_code}` : ''}
+            ${record.floor ? ` • Étage ${record.floor}` : ''}
+            ${record.zone ? ` • ${record.zone}` : ''}
+          </p>
+        </div>
+        <div style="text-align: right;">
+          <span style="display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; color: white; background: ${severityColor};">
+            ${severityLabel}
+          </span>
+        </div>
+      </div>
+
+      <div style="background: #f8fafc; border-radius: 8px; padding: 15px; margin-top: 15px;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="padding: 8px 0;">
+              <span style="font-size: 12px; color: #6b7280;">Statut</span><br>
+              <span style="display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; background: ${statusColor}20; color: ${statusColor};">
+                ${statusLabel}
+              </span>
+            </td>
+            <td style="padding: 8px 0;">
+              <span style="font-size: 12px; color: #6b7280;">Créé le</span><br>
+              <span style="font-size: 14px; color: #1f2937;">${createdDate}</span>
+            </td>
+            ${record.downtime_minutes ? `
+            <td style="padding: 8px 0;">
+              <span style="font-size: 12px; color: #6b7280;">Temps d'arrêt</span><br>
+              <span style="font-size: 14px; font-weight: 600; color: #DC2626;">${record.downtime_minutes} min</span>
+            </td>
+            ` : ''}
+          </tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- Problem Description -->
+    <div style="padding: 25px; border-bottom: 1px solid #e5e7eb;">
+      <h3 style="margin: 0 0 15px; font-size: 16px; color: #1f2937;">🔧 ${record.title || 'Description du problème'}</h3>
+      ${record.description ? `<p style="margin: 0; font-size: 14px; color: #374151; white-space: pre-wrap;">${record.description}</p>` : ''}
+
+      ${record.root_cause ? `
+      <div style="margin-top: 20px; padding: 15px; background: #fef3c7; border-radius: 8px; border-left: 4px solid #F59E0B;">
+        <strong style="font-size: 13px; color: #92400e;">Cause identifiée:</strong>
+        <p style="margin: 5px 0 0; font-size: 14px; color: #78350f;">${record.root_cause}</p>
+      </div>
+      ` : ''}
+
+      ${record.solution ? `
+      <div style="margin-top: 15px; padding: 15px; background: #dcfce7; border-radius: 8px; border-left: 4px solid #22C55E;">
+        <strong style="font-size: 13px; color: #166534;">Solution appliquée:</strong>
+        <p style="margin: 5px 0 0; font-size: 14px; color: #15803d;">${record.solution}</p>
+      </div>
+      ` : ''}
+    </div>
+
+    ${previewPhoto ? `
+    <!-- Photo Preview -->
+    <div style="padding: 25px; border-bottom: 1px solid #e5e7eb; text-align: center;">
+      <h3 style="margin: 0 0 15px; font-size: 16px; color: #1f2937;">📷 Photo</h3>
+      <img src="cid:troubleshooting-photo" alt="Photo du dépannage" style="max-width: 100%; max-height: 300px; border-radius: 8px; border: 1px solid #e5e7eb;" />
+      ${photos.length > 1 ? `<p style="margin: 10px 0 0; font-size: 13px; color: #6b7280;">+ ${photos.length - 1} autre(s) photo(s) disponible(s)</p>` : ''}
+    </div>
+    ` : ''}
+
+    <!-- CTA Button -->
+    <div style="padding: 30px; text-align: center; background: #f8fafc;">
+      <a href="${shareUrl}" style="display: inline-block; padding: 16px 40px; background: linear-gradient(135deg, ${agentInfo.color}, ${agentInfo.color}CC); color: white; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 14px rgba(0,0,0,0.15);">
+        👁️ Voir le dépannage complet
+      </a>
+      <p style="margin: 15px 0 0; font-size: 12px; color: #6b7280;">
+        Accédez aux photos, au plan de localisation et aux détails complets
+      </p>
+    </div>
+
+    <!-- Footer -->
+    <div style="background: #1f2937; padding: 25px; text-align: center; color: #9ca3af; font-size: 12px;">
+      <p style="margin: 0;">Ce dépannage vous a été partagé via Haleon-tool</p>
+      <p style="margin: 15px 0 0; font-size: 11px;">© ${new Date().getFullYear()} Haleon-tool - Daniel Palha - Tous droits réservés</p>
+    </div>
+  </div>
+</body>
+</html>
+  `;
+}
+
+/**
+ * Send troubleshooting share email
+ */
+async function sendTroubleshootingShareEmail(troubleshootingId, recipientEmails, senderEmail, senderName) {
+  if (!SENDGRID_API_KEY) {
+    return { success: false, error: 'SendGrid API key not configured' };
+  }
+
+  try {
+    // Get troubleshooting data
+    const data = await getTroubleshootingForShare(troubleshootingId);
+    if (!data) {
+      return { success: false, error: 'Troubleshooting not found' };
+    }
+
+    const { record, photos } = data;
+    const equipmentType = record.equipment_type || 'switchboard';
+
+    // Get agent info
+    const agentInfo = AGENT_AVATARS[equipmentType] || AGENT_AVATARS.main;
+    const agentCustomNames = await getAgentCustomNames();
+    const agentName = agentCustomNames[equipmentType] || agentInfo.name;
+
+    // Get agent image
+    const agentImageResult = await pool.query(
+      `SELECT binary_data, mime_type FROM app_settings WHERE key = $1`,
+      [`ai_image_${equipmentType}`]
+    );
+    const agentImageData = agentImageResult.rows[0];
+
+    // Create share token
+    const shareToken = generateShareToken();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30); // 30 days expiry
+
+    await pool.query(`
+      INSERT INTO troubleshooting_share_tokens (token, troubleshooting_id, created_by_email, shared_with_emails, expires_at)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [shareToken, troubleshootingId, senderEmail, recipientEmails, expiresAt]);
+
+    const shareUrl = `${APP_URL}/shared/troubleshooting/${shareToken}`;
+
+    // Generate email HTML
+    const htmlContent = generateTroubleshootingShareEmail(
+      record,
+      photos,
+      shareUrl,
+      agentName,
+      !!agentImageData,
+      agentInfo,
+      senderName || senderEmail
+    );
+
+    // Prepare attachments
+    const attachments = [];
+    if (agentImageData?.binary_data) {
+      attachments.push({
+        content: agentImageData.binary_data.toString('base64'),
+        filename: `agent.${agentImageData.mime_type?.split('/')[1] || 'png'}`,
+        type: agentImageData.mime_type || 'image/png',
+        disposition: 'inline',
+        content_id: 'agent-image'
+      });
+    }
+
+    // Add troubleshooting photo if available
+    const previewPhoto = photos.find(p => p.photo_type === 'before') || photos[0];
+    if (previewPhoto?.photo_data) {
+      // Extract base64 data from data URL
+      const photoDataMatch = previewPhoto.photo_data.match(/^data:([^;]+);base64,(.+)$/);
+      if (photoDataMatch) {
+        const mimeType = photoDataMatch[1];
+        const base64Data = photoDataMatch[2];
+        attachments.push({
+          content: base64Data,
+          filename: `photo.${mimeType.split('/')[1] || 'jpg'}`,
+          type: mimeType,
+          disposition: 'inline',
+          content_id: 'troubleshooting-photo'
+        });
+      }
+    }
+
+    // Send to each recipient
+    const results = [];
+    for (const email of recipientEmails) {
+      try {
+        const msg = {
+          to: email,
+          from: {
+            email: SENDGRID_FROM_EMAIL,
+            name: `${agentName} via Haleon-tool`
+          },
+          subject: `📤 ${senderName || senderEmail} vous partage un dépannage - ${record.equipment_name || record.title}`,
+          html: htmlContent,
+          attachments: attachments.length > 0 ? attachments : undefined
+        };
+
+        const response = await sgMail.send(msg);
+
+        await pool.query(`
+          INSERT INTO email_history (email_to, email_type, subject, site, status, sendgrid_message_id)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `, [email, 'troubleshooting_share', msg.subject, record.site, 'sent', response[0]?.headers?.['x-message-id'] || null]);
+
+        results.push({ email, success: true });
+        console.log(`[SendGrid] ✅ Share email sent to ${email}`);
+      } catch (err) {
+        results.push({ email, success: false, error: err.message });
+        console.error(`[SendGrid] ❌ Failed to send share email to ${email}:`, err.message);
+      }
+    }
+
+    return {
+      success: true,
+      shareToken,
+      shareUrl,
+      results
+    };
+
+  } catch (error) {
+    console.error('[SendGrid] Share email error:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Get shared troubleshooting by token (public access)
+ */
+async function getSharedTroubleshooting(token) {
+  try {
+    // Get token and check validity
+    const tokenResult = await pool.query(`
+      SELECT * FROM troubleshooting_share_tokens
+      WHERE token = $1 AND (expires_at IS NULL OR expires_at > NOW())
+    `, [token]);
+
+    if (tokenResult.rows.length === 0) {
+      return { valid: false, error: 'Link expired or invalid' };
+    }
+
+    const tokenData = tokenResult.rows[0];
+
+    // Increment view count
+    await pool.query(`
+      UPDATE troubleshooting_share_tokens SET view_count = view_count + 1 WHERE token = $1
+    `, [token]);
+
+    // Get troubleshooting data
+    const data = await getTroubleshootingForShare(tokenData.troubleshooting_id);
+    if (!data) {
+      return { valid: false, error: 'Troubleshooting not found' };
+    }
+
+    return {
+      valid: true,
+      record: data.record,
+      photos: data.photos,
+      shareInfo: {
+        createdBy: tokenData.created_by_email,
+        createdAt: tokenData.created_at,
+        viewCount: tokenData.view_count + 1
+      }
+    };
+
+  } catch (error) {
+    console.error('[SendGrid] Get shared troubleshooting error:', error.message);
+    return { valid: false, error: error.message };
+  }
+}
+
+// ============================================================
 // EMAIL SENDING
 // ============================================================
 
@@ -2796,7 +3192,349 @@ router.get('/subscribers', authenticateToken, async (req, res) => {
 });
 
 // ============================================================
+// TROUBLESHOOTING SHARE ROUTES
+// ============================================================
+
+/**
+ * POST /api/sendgrid/share-troubleshooting
+ * Share a troubleshooting record via email
+ */
+router.post('/share-troubleshooting', authenticateToken, async (req, res) => {
+  try {
+    const { troubleshootingId, emails } = req.body;
+    const senderEmail = req.user?.email;
+    const senderName = req.user?.name || req.user?.email;
+
+    if (!troubleshootingId) {
+      return res.status(400).json({ error: 'troubleshootingId is required' });
+    }
+
+    if (!emails || !Array.isArray(emails) || emails.length === 0) {
+      return res.status(400).json({ error: 'emails array is required' });
+    }
+
+    // Validate email format
+    const validEmails = emails.filter(email =>
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    );
+
+    if (validEmails.length === 0) {
+      return res.status(400).json({ error: 'No valid email addresses provided' });
+    }
+
+    console.log(`[SendGrid] Share troubleshooting ${troubleshootingId} to ${validEmails.length} recipients by ${senderEmail}`);
+
+    const result = await sendTroubleshootingShareEmail(
+      troubleshootingId,
+      validEmails,
+      senderEmail,
+      senderName
+    );
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: `Dépannage partagé avec ${validEmails.length} personne(s)`,
+        shareUrl: result.shareUrl,
+        results: result.results
+      });
+    } else {
+      res.status(500).json({ success: false, error: result.error });
+    }
+
+  } catch (error) {
+    console.error('[SendGrid] Share troubleshooting error:', error.message);
+    res.status(500).json({ error: 'Failed to share troubleshooting' });
+  }
+});
+
+/**
+ * GET /api/sendgrid/shared/:token
+ * Get shared troubleshooting data (PUBLIC - no auth required)
+ */
+router.get('/shared/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+
+    const result = await getSharedTroubleshooting(token);
+
+    if (!result.valid) {
+      return res.status(404).json({
+        error: result.error || 'Lien invalide ou expiré',
+        expired: true
+      });
+    }
+
+    // Return data for read-only view
+    res.json({
+      success: true,
+      readOnly: true, // Always read-only for shared view
+      record: result.record,
+      photos: result.photos,
+      shareInfo: result.shareInfo
+    });
+
+  } catch (error) {
+    console.error('[SendGrid] Get shared troubleshooting error:', error.message);
+    res.status(500).json({ error: 'Failed to get shared troubleshooting' });
+  }
+});
+
+/**
+ * GET /api/sendgrid/shared/:token/map-data
+ * Get map position data for shared troubleshooting (PUBLIC - no auth required)
+ * Returns equipment position and plan PDF URL for rendering mini map
+ */
+router.get('/shared/:token/map-data', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+
+    // Validate share token
+    const tokenResult = await pool.query(`
+      SELECT troubleshooting_id FROM troubleshooting_share_tokens
+      WHERE token = $1 AND (expires_at IS NULL OR expires_at > NOW())
+    `, [token]);
+
+    if (tokenResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invalid or expired token' });
+    }
+
+    const troubleshootingId = tokenResult.rows[0].troubleshooting_id;
+
+    // Get troubleshooting record
+    const troubleshootingResult = await pool.query(
+      'SELECT equipment_type, equipment_id, equipment_original_id, building_code, floor FROM troubleshooting_records WHERE id = $1',
+      [troubleshootingId]
+    );
+
+    if (troubleshootingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Troubleshooting not found' });
+    }
+
+    const { equipment_type, equipment_id, equipment_original_id, building_code, floor } = troubleshootingResult.rows[0];
+
+    // Use equipment_id or fallback to equipment_original_id
+    const effectiveEquipmentId = equipment_id || equipment_original_id;
+
+    if (!equipment_type || !effectiveEquipmentId) {
+      return res.json({ success: true, hasPosition: false, reason: 'No equipment linked' });
+    }
+
+    // Position table mapping by equipment type
+    const positionTableMap = {
+      switchboard: { table: 'switchboard_positions', idField: 'switchboard_id', planTable: 'switchboard_plans' },
+      vsd: { table: 'vsd_positions', idField: 'equipment_id', planTable: 'vsd_plans' },
+      meca: { table: 'meca_positions', idField: 'equipment_id', planTable: 'meca_plans' },
+      glo: { table: 'glo_positions', idField: 'equipment_id', planTable: 'glo_plans' },
+      hv: { table: 'hv_positions', idField: 'equipment_id', planTable: 'hv_plans' },
+      mobile: { table: 'me_equipment_positions', idField: 'equipment_id', planTable: 'mobile_equipment_plans' },
+      atex: { table: 'atex_positions', idField: 'equipment_id', planTable: 'atex_plans' },
+      datahub: { table: 'dh_positions', idField: 'item_id', planTable: 'datahub_plans' },
+      infrastructure: { table: 'inf_positions', idField: 'item_id', planTable: 'infrastructure_plans' },
+      doors: { table: 'fd_door_positions', idField: 'door_id', planTable: 'doors_plans' },
+      firecontrol: { table: 'fc_map_positions', idField: 'equipment_id', planTable: 'fire_control_plans' }
+    };
+
+    const config = positionTableMap[equipment_type];
+    if (!config) {
+      return res.json({ success: true, hasPosition: false, reason: 'Unknown equipment type' });
+    }
+
+    // Get position data
+    const positionResult = await pool.query(
+      `SELECT * FROM ${config.table} WHERE ${config.idField} = $1 ORDER BY created_at DESC LIMIT 1`,
+      [effectiveEquipmentId]
+    );
+
+    if (positionResult.rows.length === 0) {
+      return res.json({ success: true, hasPosition: false, reason: 'Equipment not placed on map' });
+    }
+
+    const position = positionResult.rows[0];
+    const logicalName = position.logical_name;
+    const pageIndex = position.page_index || 0;
+
+    // Get plan info
+    const planResult = await pool.query(
+      `SELECT id, logical_name, display_name FROM ${config.planTable} WHERE logical_name = $1 LIMIT 1`,
+      [logicalName]
+    );
+
+    const plan = planResult.rows[0] || { logical_name: logicalName, display_name: logicalName };
+
+    // Build plan file URL based on equipment type
+    const planFileUrlMap = {
+      switchboard: `/api/switchboard/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      vsd: `/api/vsd/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      meca: `/api/meca/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      glo: `/api/glo/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      hv: `/api/hv/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      mobile: `/api/mobile-equipment/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      atex: `/api/atex/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      datahub: `/api/datahub/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      infrastructure: `/api/infrastructure/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      doors: `/api/doors/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      firecontrol: `/api/fire-control/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`
+    };
+
+    res.json({
+      success: true,
+      hasPosition: true,
+      equipmentType: equipment_type,
+      position: {
+        x_frac: position.x_frac,
+        y_frac: position.y_frac,
+        page_index: pageIndex
+      },
+      plan: {
+        logical_name: plan.logical_name,
+        display_name: plan.display_name || plan.logical_name,
+        page_index: pageIndex,
+        planFileUrl: planFileUrlMap[equipment_type]
+      },
+      location: {
+        building_code,
+        floor
+      },
+      // Token for PDF proxy
+      shareToken: token
+    });
+
+  } catch (error) {
+    console.error('[SendGrid] Get shared map data error:', error.message);
+    res.status(500).json({ error: 'Failed to get map data' });
+  }
+});
+
+/**
+ * GET /api/sendgrid/shared/:token/plan-file
+ * Proxy endpoint to serve plan PDF for shared view (PUBLIC - no auth required)
+ * Validates share token before serving the file
+ */
+router.get('/shared/:token/plan-file', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+
+    // Validate share token and get troubleshooting data
+    const tokenResult = await pool.query(`
+      SELECT t.troubleshooting_id, tr.equipment_type, tr.equipment_id, tr.equipment_original_id
+      FROM troubleshooting_share_tokens t
+      JOIN troubleshooting_records tr ON tr.id = t.troubleshooting_id
+      WHERE t.token = $1 AND (t.expires_at IS NULL OR t.expires_at > NOW())
+    `, [token]);
+
+    if (tokenResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invalid or expired token' });
+    }
+
+    const { equipment_type, equipment_id, equipment_original_id } = tokenResult.rows[0];
+
+    // Use equipment_id or fallback to equipment_original_id
+    const effectiveEquipmentId = equipment_id || equipment_original_id;
+
+    if (!equipment_type || !effectiveEquipmentId) {
+      return res.status(404).json({ error: 'No equipment linked' });
+    }
+
+    // Position table mapping
+    const positionTableMap = {
+      switchboard: { table: 'switchboard_positions', idField: 'switchboard_id', planTable: 'switchboard_plans', binaryField: 'binary_data' },
+      vsd: { table: 'vsd_positions', idField: 'equipment_id', planTable: 'vsd_plans', binaryField: 'binary_data' },
+      meca: { table: 'meca_positions', idField: 'equipment_id', planTable: 'meca_plans', binaryField: 'binary_data' },
+      glo: { table: 'glo_positions', idField: 'equipment_id', planTable: 'glo_plans', binaryField: 'binary_data' },
+      hv: { table: 'hv_positions', idField: 'equipment_id', planTable: 'hv_plans', binaryField: 'binary_data' },
+      mobile: { table: 'me_equipment_positions', idField: 'equipment_id', planTable: 'mobile_equipment_plans', binaryField: 'binary_data' },
+      atex: { table: 'atex_positions', idField: 'equipment_id', planTable: 'atex_plans', binaryField: 'binary_data' },
+      datahub: { table: 'dh_positions', idField: 'item_id', planTable: 'datahub_plans', binaryField: 'binary_data' },
+      infrastructure: { table: 'inf_positions', idField: 'item_id', planTable: 'infrastructure_plans', binaryField: 'binary_data' },
+      doors: { table: 'fd_door_positions', idField: 'door_id', planTable: 'doors_plans', binaryField: 'binary_data' },
+      firecontrol: { table: 'fc_map_positions', idField: 'equipment_id', planTable: 'fire_control_plans', binaryField: 'binary_data' }
+    };
+
+    const config = positionTableMap[equipment_type];
+    if (!config) {
+      return res.status(404).json({ error: 'Unknown equipment type' });
+    }
+
+    // Get position to find logical_name
+    const positionResult = await pool.query(
+      `SELECT logical_name FROM ${config.table} WHERE ${config.idField} = $1 LIMIT 1`,
+      [effectiveEquipmentId]
+    );
+
+    if (positionResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Position not found' });
+    }
+
+    const logicalName = positionResult.rows[0].logical_name;
+
+    // Get plan binary data
+    const planResult = await pool.query(
+      `SELECT ${config.binaryField}, mime_type FROM ${config.planTable} WHERE logical_name = $1 LIMIT 1`,
+      [logicalName]
+    );
+
+    if (planResult.rows.length === 0 || !planResult.rows[0][config.binaryField]) {
+      return res.status(404).json({ error: 'Plan file not found' });
+    }
+
+    const plan = planResult.rows[0];
+    const mimeType = plan.mime_type || 'application/pdf';
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(plan[config.binaryField]);
+
+  } catch (error) {
+    console.error('[SendGrid] Get shared plan file error:', error.message);
+    res.status(500).json({ error: 'Failed to get plan file' });
+  }
+});
+
+/**
+ * GET /api/sendgrid/share-test
+ * Test share email (for development)
+ */
+router.get('/share-test', async (req, res) => {
+  try {
+    const { troubleshootingId, email } = req.query;
+
+    if (!troubleshootingId || !email) {
+      return res.status(400).json({
+        error: 'Required parameters: troubleshootingId, email',
+        usage: '/api/sendgrid/share-test?troubleshootingId=xxx&email=xxx@xxx.com'
+      });
+    }
+
+    const result = await sendTroubleshootingShareEmail(
+      troubleshootingId,
+      [email],
+      'test@haleon-tool.io',
+      'Test User'
+    );
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('[SendGrid] Share test error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================================
 // EXPORTS
 // ============================================================
 export default router;
-export { sendDailyOutageReport, sendDailyReportsToAllSubscribers, initEmailTables };
+export { sendDailyOutageReport, sendDailyReportsToAllSubscribers, initEmailTables, getSharedTroubleshooting };

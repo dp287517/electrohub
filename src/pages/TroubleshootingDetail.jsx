@@ -4,7 +4,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Wrench, Calendar, Building2, Users, MapPin, AlertTriangle,
   CheckCircle, Clock, ArrowLeft, Zap, Image, FileText,
-  Edit, Trash2, Loader2, X, Save, Plus, Camera
+  Edit, Trash2, Loader2, X, Save, Plus, Camera, Share2, Send, Check
 } from 'lucide-react';
 import { get, API_BASE } from '../lib/api';
 import { getUserPermissions } from '../lib/permissions';
@@ -224,6 +224,170 @@ function PhotoGallery({ photos, editMode, onAddPhoto, onDeletePhoto }) {
 }
 
 // ============================================================
+// SHARE MODAL
+// ============================================================
+function ShareModal({ isOpen, onClose, troubleshootingId, equipmentName }) {
+  const [emails, setEmails] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState(null);
+  const [shareUrl, setShareUrl] = useState(null);
+
+  const handleShare = async () => {
+    setError(null);
+    setSending(true);
+
+    // Parse emails (comma or newline separated)
+    const emailList = emails
+      .split(/[,\n]/)
+      .map(e => e.trim())
+      .filter(e => e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+
+    if (emailList.length === 0) {
+      setError('Veuillez entrer au moins une adresse email valide');
+      setSending(false);
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('eh_token');
+      const response = await fetch(`${API_BASE}/api/sendgrid/share-troubleshooting`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          troubleshootingId,
+          emails: emailList
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setSent(true);
+        setShareUrl(data.shareUrl);
+      } else {
+        setError(data.error || 'Erreur lors du partage');
+      }
+    } catch (err) {
+      setError('Erreur de connexion');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleClose = () => {
+    setEmails('');
+    setSent(false);
+    setError(null);
+    setShareUrl(null);
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={handleClose}>
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+              <Share2 className="w-5 h-5 text-blue-600" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900">Partager ce dépannage</h3>
+              <p className="text-sm text-gray-500">{equipmentName}</p>
+            </div>
+          </div>
+          <button onClick={handleClose} className="p-2 hover:bg-gray-100 rounded-full">
+            <X size={20} className="text-gray-500" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-4">
+          {sent ? (
+            <div className="text-center py-6">
+              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Check className="w-8 h-8 text-green-600" />
+              </div>
+              <h4 className="text-lg font-semibold text-gray-900 mb-2">Envoyé avec succès !</h4>
+              <p className="text-gray-600 mb-4">Le dépannage a été partagé par email.</p>
+              {shareUrl && (
+                <div className="bg-gray-50 rounded-lg p-3 text-left">
+                  <p className="text-xs text-gray-500 mb-1">Lien de partage :</p>
+                  <p className="text-sm text-blue-600 break-all">{shareUrl}</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-gray-600 mb-4">
+                Entrez les adresses email des personnes avec qui vous souhaitez partager ce dépannage.
+                Elles recevront un email avec un lien pour consulter les détails.
+              </p>
+
+              <textarea
+                value={emails}
+                onChange={(e) => setEmails(e.target.value)}
+                placeholder="email1@exemple.com, email2@exemple.com..."
+                className="w-full h-24 p-3 border rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+              />
+
+              <p className="text-xs text-gray-500 mt-2">
+                Séparez les adresses par des virgules ou des retours à la ligne
+              </p>
+
+              {error && (
+                <div className="mt-3 p-3 bg-red-50 text-red-700 text-sm rounded-lg">
+                  {error}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-2 p-4 border-t bg-gray-50 rounded-b-2xl">
+          {sent ? (
+            <button
+              onClick={handleClose}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Fermer
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleClose}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleShare}
+                disabled={sending || !emails.trim()}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {sending ? (
+                  <Loader2 size={18} className="animate-spin" />
+                ) : (
+                  <Send size={18} />
+                )}
+                Envoyer
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // MAIN COMPONENT
 // ============================================================
 export default function TroubleshootingDetail() {
@@ -237,6 +401,7 @@ export default function TroubleshootingDetail() {
   const [deleting, setDeleting] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editData, setEditData] = useState({});
+  const [showShareModal, setShowShareModal] = useState(false);
   const [newPhotos, setNewPhotos] = useState([]);
 
   useEffect(() => {
@@ -466,46 +631,60 @@ export default function TroubleshootingDetail() {
               </div>
             </div>
 
-            {canModify && (
-              <div className="flex gap-2">
-                {editMode ? (
-                  <>
-                    <button
-                      onClick={() => { setEditMode(false); setEditData(record); setNewPhotos([]); }}
-                      className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
-                    >
-                      Annuler
-                    </button>
-                    <button
-                      onClick={handleSave}
-                      disabled={saving}
-                      className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-600 rounded-lg hover:bg-white/90 transition-colors disabled:opacity-50"
-                    >
-                      {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-                      Enregistrer
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => setEditMode(true)}
-                      className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
-                      title="Modifier"
-                    >
-                      <Edit size={20} />
-                    </button>
-                    <button
-                      onClick={handleDelete}
-                      disabled={deleting}
-                      className="p-2 bg-white/10 hover:bg-red-500 rounded-lg transition-colors disabled:opacity-50"
-                      title="Supprimer"
-                    >
-                      {deleting ? <Loader2 size={20} className="animate-spin" /> : <Trash2 size={20} />}
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
+            <div className="flex gap-2">
+              {/* Share button - always visible */}
+              {!editMode && (
+                <button
+                  onClick={() => setShowShareModal(true)}
+                  className="p-2 bg-white/10 hover:bg-blue-500 rounded-lg transition-colors"
+                  title="Partager"
+                >
+                  <Share2 size={20} />
+                </button>
+              )}
+
+              {/* Edit/Delete buttons - only for authorized users */}
+              {canModify && (
+                <>
+                  {editMode ? (
+                    <>
+                      <button
+                        onClick={() => { setEditMode(false); setEditData(record); setNewPhotos([]); }}
+                        className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        onClick={handleSave}
+                        disabled={saving}
+                        className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-600 rounded-lg hover:bg-white/90 transition-colors disabled:opacity-50"
+                      >
+                        {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                        Enregistrer
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => setEditMode(true)}
+                        className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                        title="Modifier"
+                      >
+                        <Edit size={20} />
+                      </button>
+                      <button
+                        onClick={handleDelete}
+                        disabled={deleting}
+                        className="p-2 bg-white/10 hover:bg-red-500 rounded-lg transition-colors disabled:opacity-50"
+                        title="Supprimer"
+                      >
+                        {deleting ? <Loader2 size={20} className="animate-spin" /> : <Trash2 size={20} />}
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -807,6 +986,14 @@ export default function TroubleshootingDetail() {
           </div>
         </div>
       </div>
+
+      {/* Share Modal */}
+      <ShareModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        troubleshootingId={id}
+        equipmentName={record?.equipment_name || record?.equipment_code || 'Dépannage'}
+      />
     </div>
   );
 }

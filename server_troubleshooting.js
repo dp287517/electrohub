@@ -1637,6 +1637,9 @@ const EQUIPMENT_SYNONYMS = {
   'pompe': ['moteur', 'meca', 'eau', 'refoulement', 'relevage', 'surpresseur'],
   'ventilateur': ['moteur', 'meca', 'extraction', 'soufflage', 'cvc', 'ventilation'],
   'compresseur': ['moteur', 'meca', 'air comprime', 'air comprimé'],
+  'convoyeur': ['meca', 'mecanique', 'mécanique', 'tapis', 'bande', 'transporteur', 'conv'],
+  'tapis': ['convoyeur', 'bande', 'transporteur', 'meca'],
+  'transporteur': ['convoyeur', 'tapis', 'bande', 'meca'],
 
   // Portes / Accès
   'porte': ['acces', 'accès', 'portail', 'barriere', 'barrière', 'issue', 'entree', 'entrée', 'sortie'],
@@ -1741,60 +1744,86 @@ function levenshteinDistance(a, b) {
   return matrix[b.length][a.length];
 }
 
-// Normalise une chaîne pour la comparaison
+// Normalise une chaîne pour la comparaison (garde les tirets pour les codes)
 function normalizeString(str) {
   return str
     .toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remove accents
-    .replace(/[^a-z0-9\s]/g, '') // Remove special chars
+    .replace(/[^a-z0-9\s\-]/g, '') // Keep hyphens for codes like "27-9-G"
     .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Normalise sans tirets pour le matching de mots
+function normalizeWord(str) {
+  return str
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '')
     .trim();
 }
 
 // Trouve les termes de recherche étendus basés sur les synonymes
 function expandSearchTerms(query) {
+  const originalQuery = query.trim();
   const normalized = normalizeString(query);
-  const words = normalized.split(' ');
-  const expandedTerms = new Set(words);
-  const floorTerms = new Set(); // Separate set for floor values
+  const words = normalized.split(' ').filter(w => w.length > 0);
+  const expandedTerms = new Set();
+  const floorTerms = new Set();
+
+  // TOUJOURS ajouter les termes originaux (avec tirets, etc.)
+  words.forEach(w => expandedTerms.add(w));
+
+  // Ajouter aussi la version sans tirets pour chaque mot
+  words.forEach(w => {
+    if (w.includes('-')) {
+      expandedTerms.add(w.replace(/-/g, '')); // "27-9-g" -> "279g"
+      expandedTerms.add(w.replace(/-/g, ' ')); // "27-9-g" -> "27 9 g"
+    }
+  });
 
   // Check for multi-word floor terms like "sous sol"
   const multiWordFloorTerms = Object.keys(FLOOR_SYNONYMS).filter(k => k.includes(' '));
   for (const floorTerm of multiWordFloorTerms) {
     if (normalized.includes(floorTerm)) {
-      FLOOR_SYNONYMS[floorTerm].forEach(syn => floorTerms.add(normalizeString(syn)));
+      FLOOR_SYNONYMS[floorTerm].forEach(syn => floorTerms.add(normalizeWord(syn)));
     }
   }
 
   for (const word of words) {
+    const wordClean = normalizeWord(word); // Version sans tirets pour lookup
+
     // Pattern de bâtiment: b11, b20, bat11, bat20, etc. → "batiment 11", "11"
-    const buildingMatch = word.match(/^(b|bat|batiment|building)(\d+)$/i);
+    const buildingMatch = wordClean.match(/^(b|bat|batiment|building)(\d+)$/i);
     if (buildingMatch) {
       const buildingNum = buildingMatch[2];
       expandedTerms.add(buildingNum);
       expandedTerms.add(`batiment ${buildingNum}`);
       expandedTerms.add(`batiment${buildingNum}`);
       expandedTerms.add(`bat ${buildingNum}`);
+      expandedTerms.add(`bat${buildingNum}`);
       expandedTerms.add(`b${buildingNum}`);
       expandedTerms.add(`building ${buildingNum}`);
+      // Aussi la version avec accent pour matcher la DB
+      expandedTerms.add(`bâtiment ${buildingNum}`);
     }
 
     // Recherche exacte dans le dictionnaire équipements
-    if (EQUIPMENT_SYNONYMS[word]) {
-      EQUIPMENT_SYNONYMS[word].forEach(syn => expandedTerms.add(normalizeString(syn)));
+    if (EQUIPMENT_SYNONYMS[wordClean]) {
+      EQUIPMENT_SYNONYMS[wordClean].forEach(syn => expandedTerms.add(normalizeWord(syn)));
     }
 
     // Recherche exacte dans le dictionnaire étages
-    if (FLOOR_SYNONYMS[word]) {
-      FLOOR_SYNONYMS[word].forEach(syn => floorTerms.add(normalizeString(syn)));
+    if (FLOOR_SYNONYMS[wordClean]) {
+      FLOOR_SYNONYMS[wordClean].forEach(syn => floorTerms.add(normalizeWord(syn)));
     }
 
     // Recherche fuzzy dans les clés du dictionnaire équipements
     for (const key of Object.keys(EQUIPMENT_SYNONYMS)) {
-      const distance = levenshteinDistance(word, key);
-      if (distance <= 2 && word.length > 3) { // Tolérance de 2 caractères pour mots > 3 chars
+      const distance = levenshteinDistance(wordClean, key);
+      if (distance <= 2 && wordClean.length > 3) {
         expandedTerms.add(key);
-        EQUIPMENT_SYNONYMS[key].forEach(syn => expandedTerms.add(normalizeString(syn)));
+        EQUIPMENT_SYNONYMS[key].forEach(syn => expandedTerms.add(normalizeWord(syn)));
       }
     }
   }
@@ -1839,16 +1868,17 @@ router.get('/equipment/smart-search', async (req, res) => {
 
     // Tables à rechercher avec leurs configurations
     // hasZone: true si la table a une colonne 'zone'
+    // hasFloor: true si la table a une colonne 'floor'
     const searchConfigs = [
-      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true, hasZone: true },
-      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', hasSite: true, hasBuilding: true, hasBuildingCode: false, hasZone: true },
-      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true, extraCols: ['equipment_type', 'category', 'function'] },
-      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true },
-      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true, hasZone: true },
-      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true, extraCols: ['equipment_type', 'function'] },
-      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: false },
-      { type: 'atex', table: 'atex_equipments', nameCol: 'name', codeCol: null, hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true },
-      { type: 'infrastructure', table: 'inf_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: false, extraCols: ['location', 'description'] }
+      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true, hasFloor: true, hasZone: false },
+      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', hasSite: true, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: true },
+      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: true, extraCols: ['equipment_type', 'category', 'function'] },
+      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: false },
+      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true, hasFloor: true, hasZone: false },
+      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: true, extraCols: ['equipment_type', 'function'] },
+      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: false },
+      { type: 'atex', table: 'atex_equipments', nameCol: 'name', codeCol: null, hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: false, hasZone: true },
+      { type: 'infrastructure', table: 'inf_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasFloor: true, hasZone: false, extraCols: ['location', 'description'] }
     ];
 
     for (const config of searchConfigs) {
@@ -1861,26 +1891,36 @@ router.get('/equipment/smart-search', async (req, res) => {
         if (config.extraCols) {
           config.extraCols.forEach(col => selectCols.push(col));
         }
-        selectCols.push('floor');
+        if (config.hasFloor) selectCols.push('floor');
         if (config.hasZone) selectCols.push('zone');
+
+        // Helper pour normaliser les accents dans PostgreSQL
+        const unaccent = (col) => `LOWER(TRANSLATE(COALESCE(${col}, ''), 'àâäãéèêëïîíôöõùûüçñÀÂÄÃÉÈÊËÏÎÍÔÖÕÙÛÜÇÑ', 'aaaaeeeeiiiooouuucnAAAAEEEEIIIOOOUUUCN'))`;
 
         // Construire les conditions WHERE pour tous les termes étendus
         const searchConditions = expandedTerms.map((term, idx) => {
           const paramNum = config.hasSite ? idx + 2 : idx + 1;
           const conditions = [
+            // Match avec accents normalisés
+            `${unaccent(config.nameCol)} LIKE $${paramNum}`,
+            // Match exact sur le code (garder casse et tirets)
             `LOWER(COALESCE(${config.nameCol}, '')) LIKE $${paramNum}`
           ];
           if (config.codeCol) {
+            // Pour les codes, chercher AUSSI sans normalisation (27-9-G)
             conditions.push(`LOWER(COALESCE(${config.codeCol}, '')) LIKE $${paramNum}`);
+            conditions.push(`${unaccent(config.codeCol)} LIKE $${paramNum}`);
           }
           if (config.hasBuilding) {
-            conditions.push(`LOWER(COALESCE(building, '')) LIKE $${paramNum}`);
+            conditions.push(`${unaccent('building')} LIKE $${paramNum}`);
           }
           if (config.hasBuildingCode) {
             conditions.push(`LOWER(COALESCE(building_code, '')) LIKE $${paramNum}`);
           }
-          // Always search floor column
-          conditions.push(`LOWER(COALESCE(floor, '')) LIKE $${paramNum}`);
+          // Search floor column only if table has it
+          if (config.hasFloor) {
+            conditions.push(`LOWER(COALESCE(floor, '')) LIKE $${paramNum}`);
+          }
           if (config.extraCols) {
             config.extraCols.forEach(col => {
               conditions.push(`LOWER(COALESCE(${col}, '')) LIKE $${paramNum}`);
@@ -1909,7 +1949,8 @@ router.get('/equipment/smart-search', async (req, res) => {
           const floorNorm = normalizeString(row.floor || '');
           const codeNorm = normalizeString(row.code || '');
           const queryNorm = normalizeString(q);
-          const originalWords = queryNorm.split(' ').filter(w => w.length > 1);
+          // Garder les mots de 2+ caractères OU les chiffres (même à 1 caractère comme "5")
+          const originalWords = queryNorm.split(' ').filter(w => w.length > 1 || /^\d+$/.test(w));
           let score = 0;
 
           // Match exact = score élevé
@@ -1919,25 +1960,117 @@ router.get('/equipment/smart-search', async (req, res) => {
 
           // IMPORTANT: Compter combien de mots originaux matchent
           let originalWordMatches = 0;
-          for (const word of originalWords) {
-            const wordMatchesName = nameNorm.includes(word);
-            const wordMatchesBuilding = buildingNorm.includes(word);
-            const wordMatchesFloor = floorNorm.includes(word);
-            const wordMatchesCode = codeNorm.includes(word);
+          let nameMatches = 0; // Track name-specific matches
+          let locationMatches = 0; // Track building/floor matches
 
-            if (wordMatchesName || wordMatchesBuilding || wordMatchesFloor || wordMatchesCode) {
+          // Helper SIMPLIFIÉ: vérifie si un mot est présent dans le texte
+          const wordMatches = (text, word) => {
+            if (!text || !word) return false;
+
+            // Pour les chiffres: vérifier comme mot séparé (pas "5" dans "35")
+            if (/^\d+$/.test(word)) {
+              // Diviser le texte en mots et chercher une correspondance exacte
+              const textWords = text.split(/[\s\-_.,;:!?()[\]{}\/\\]+/).filter(w => w.length > 0);
+              // Match exact OU le nombre à la fin/début d'un mot (ex: "zone5", "5eme")
+              return textWords.some(tw => tw === word || tw.endsWith(word) || tw.startsWith(word));
+            }
+
+            // Pour les mots normaux: simple includes
+            return text.includes(word);
+          };
+
+          // Créer un mapping des mots originaux vers leurs expansions
+          const getWordExpansions = (word) => {
+            const expansions = [word];
+            const wordClean = normalizeWord(word);
+
+            // Ajouter les synonymes
+            if (EQUIPMENT_SYNONYMS[wordClean]) {
+              EQUIPMENT_SYNONYMS[wordClean].forEach(syn => expansions.push(normalizeWord(syn)));
+            }
+
+            // Expansion bâtiment: b20 -> batiment 20, 20
+            const buildingMatch = wordClean.match(/^(b|bat|batiment|building)(\d+)$/i);
+            if (buildingMatch) {
+              const num = buildingMatch[2];
+              expansions.push(num, `batiment ${num}`, `batiment${num}`, `bat ${num}`, `bat${num}`);
+            }
+
+            // Expansion étages
+            if (FLOOR_SYNONYMS[wordClean]) {
+              FLOOR_SYNONYMS[wordClean].forEach(syn => expansions.push(normalizeWord(syn)));
+            }
+
+            return expansions;
+          };
+
+          for (const word of originalWords) {
+            const wordExpansions = getWordExpansions(word);
+
+            // Vérifier si UNE des expansions matche
+            let matched = false;
+            let matchedName = false;
+            let matchedBuilding = false;
+            let matchedFloor = false;
+            let matchedCode = false;
+
+            for (const expansion of wordExpansions) {
+              if (wordMatches(nameNorm, expansion)) matchedName = true;
+              if (wordMatches(buildingNorm, expansion)) matchedBuilding = true;
+              if (wordMatches(floorNorm, expansion)) matchedFloor = true;
+              if (wordMatches(codeNorm, expansion)) matchedCode = true;
+            }
+
+            if (matchedName || matchedBuilding || matchedFloor || matchedCode) {
               originalWordMatches++;
-              // Bonus spécifique par type de match
-              if (wordMatchesName) score += 25;
-              if (wordMatchesBuilding) score += 30; // Building match important
-              if (wordMatchesFloor) score += 30; // Floor match important
-              if (wordMatchesCode) score += 20;
+              if (matchedName) {
+                score += 25;
+                nameMatches++;
+              }
+              if (matchedBuilding) {
+                score += 30;
+                locationMatches++;
+              }
+              if (matchedFloor) {
+                score += 30;
+                locationMatches++;
+              }
+              if (matchedCode) score += 20;
             }
           }
+
+          // Vérifier si le "mot principal" (premier mot non-numérique, non-étage) matche le nom
+          const mainWords = originalWords.filter(w => {
+            const wordClean = normalizeWord(w);
+            const isNumber = /^\d+$/.test(wordClean);
+            const isFloorTerm = ['rdc', 'rez', 'ss', 'sous', 'sol', '1er', '2eme', '3eme', '4eme', '5eme'].includes(wordClean);
+            return !isNumber && !isFloorTerm;
+          });
+          const primaryWord = mainWords[0];
+          const primaryWordClean = primaryWord ? normalizeWord(primaryWord) : null;
+
+          // Match EXACT du mot principal (le mot lui-même, pas un synonyme)
+          const exactPrimaryMatch = primaryWordClean && wordMatches(nameNorm, primaryWordClean);
+
+          // Match via synonymes (luminaire -> eclairage dans le nom)
+          let synonymPrimaryMatch = false;
+          if (primaryWordClean && !exactPrimaryMatch && EQUIPMENT_SYNONYMS[primaryWordClean]) {
+            for (const syn of EQUIPMENT_SYNONYMS[primaryWordClean]) {
+              if (wordMatches(nameNorm, normalizeWord(syn))) {
+                synonymPrimaryMatch = true;
+                break;
+              }
+            }
+          }
+
+          const primaryWordMatchesName = exactPrimaryMatch || synonymPrimaryMatch;
 
           // GROS bonus pour les matchs multiples (AND logic reward)
           if (originalWordMatches >= 2) score += originalWordMatches * 40;
           if (originalWordMatches >= 3) score += 100; // Triple match bonus
+
+          // GROS bonus si le mot principal matche le nom
+          if (primaryWordMatchesName) score += 80;
 
           // Match sur les termes étendus (synonymes)
           expandedTerms.forEach(term => {
@@ -1948,6 +2081,11 @@ router.get('/equipment/smart-search', async (req, res) => {
 
           // Bonus si le type est suggéré
           if (suggestedTypes.includes(config.type)) score += 30;
+
+          // Debug log for first few results
+          if (results.length < 5) {
+            console.log(`[SMART-SEARCH] Match: "${row.name}" - score=${score}, matchCount=${originalWordMatches}, nameMatches=${nameMatches}, exactPrimary=${exactPrimaryMatch}, synonymPrimary=${synonymPrimaryMatch}, primaryWord="${primaryWord}"`);
+          }
 
           results.push({
             id: row.id,
@@ -1963,7 +2101,11 @@ router.get('/equipment/smart-search', async (req, res) => {
               return acc;
             }, {}) : null,
             score,
-            matchCount: originalWordMatches // Store for filtering
+            matchCount: originalWordMatches,
+            nameMatches,
+            primaryWordMatch: primaryWordMatchesName,
+            exactPrimaryMatch,
+            synonymPrimaryMatch
           });
         }
       } catch (err) {
@@ -1972,25 +2114,49 @@ router.get('/equipment/smart-search', async (req, res) => {
       }
     }
 
-    // Filtrer les résultats peu pertinents
-    // Si la requête a 3+ mots, on garde seulement ceux qui matchent au moins 2 mots
-    // Si la requête a 2 mots, on garde ceux qui matchent au moins 1 mot mais on boost ceux à 2
-    const queryWordCount = normalizeString(q).split(' ').filter(w => w.length > 1).length;
+    // ===============================================================
+    // FILTRAGE SIMPLIFIÉ - Privilégier les résultats avec plus de matchs
+    // ===============================================================
+    const queryWords = normalizeString(q).split(' ').filter(w => w.length > 0);
+    const queryWordCount = queryWords.length;
+
     let filteredResults = results;
 
-    if (queryWordCount >= 3) {
-      // Pour 3+ mots: garder seulement les matchs de 2+ mots
-      const goodMatches = results.filter(r => r.matchCount >= 2);
-      if (goodMatches.length >= 3) {
-        filteredResults = goodMatches;
-      }
-    } else if (queryWordCount >= 2) {
-      // Pour 2 mots: priorité aux matchs de 2 mots, mais garder les autres si pas assez
-      const perfectMatches = results.filter(r => r.matchCount >= 2);
-      if (perfectMatches.length >= 3) {
-        filteredResults = perfectMatches;
+    // Debug: afficher les premiers résultats avec leurs scores
+    console.log(`[SMART-SEARCH] Top 5 results before filtering:`);
+    results.slice(0, 5).forEach((r, i) => {
+      console.log(`  ${i+1}. "${r.name}" - score=${r.score}, matchCount=${r.matchCount}, exactPrimary=${r.exactPrimaryMatch}, synonymPrimary=${r.synonymPrimaryMatch}`);
+    });
+
+    // RÈGLE SIMPLE: Filtrer les résultats avec au moins 1 match, préférer ceux avec plus de matchs
+    if (queryWordCount >= 2) {
+      // Essayer d'abord: tous les mots matchent
+      const fullMatches = results.filter(r => r.matchCount >= queryWordCount);
+      if (fullMatches.length > 0) {
+        filteredResults = fullMatches;
+        console.log(`[SMART-SEARCH] Full matches (${queryWordCount}+ words): ${fullMatches.length} results`);
+      } else {
+        // Sinon: au moins la moitié des mots matchent
+        const halfMatchCount = Math.ceil(queryWordCount / 2);
+        const partialMatches = results.filter(r => r.matchCount >= halfMatchCount);
+        if (partialMatches.length > 0) {
+          filteredResults = partialMatches;
+          console.log(`[SMART-SEARCH] Partial matches (${halfMatchCount}+ words): ${partialMatches.length} results`);
+        } else {
+          // Sinon: au moins 1 mot matche
+          const anyMatches = results.filter(r => r.matchCount >= 1);
+          if (anyMatches.length > 0) {
+            filteredResults = anyMatches;
+            console.log(`[SMART-SEARCH] Any matches (1+ words): ${anyMatches.length} results`);
+          } else {
+            // Fallback: retourner tous les résultats triés par score
+            filteredResults = results;
+            console.log(`[SMART-SEARCH] Fallback to all results: ${results.length} results`);
+          }
+        }
       }
     }
+    // Pour 1 seul mot, garder tous les résultats triés par score
 
     // Trier par score décroissant
     filteredResults.sort((a, b) => b.score - a.score);
