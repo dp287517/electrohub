@@ -141,7 +141,7 @@ const POSITION_TABLE_MAP = {
   glo: { table: 'glo_positions', idCol: 'equipment_id', planCol: 'logical_name', planTable: 'glo_plans', planNamesTable: 'glo_plan_names' },
   datahub: { table: 'dh_positions', idCol: 'item_id', planCol: 'logical_name', planTable: 'dh_plans', planNamesTable: null },
   atex: { table: 'atex_positions', idCol: 'equipment_id', planCol: 'logical_name', planTable: 'atex_plans', planNamesTable: null },
-  infrastructure: { table: 'infra_positions', idCol: 'equipment_id', planCol: 'logical_name', planTable: 'infrastructure_plans', planNamesTable: null }
+  infrastructure: { table: 'inf_positions', idCol: 'item_id', planCol: 'logical_name', planTable: 'vsd_plans', planNamesTable: 'vsd_plan_names' }
 };
 
 // Get equipment position and plan data for mini plan
@@ -1418,6 +1418,34 @@ const EQUIPMENT_SYNONYMS = {
   'urgence': ['panne', 'critique', 'prioritaire', 'arret', 'arrêt']
 };
 
+// Mapping des étages/niveaux vers valeurs normalisées
+const FLOOR_SYNONYMS = {
+  // Sous-sol / Cave
+  'sous sol': ['9', '-1', 's', 'ss', 'souterrain', 'cave', 'sous-sol'],
+  'souterrain': ['9', '-1', 's', 'ss', 'sous sol', 'cave'],
+  'ss': ['9', '-1', 's', 'sous sol', 'souterrain', 'cave'],
+  'cave': ['9', '-1', 's', 'ss', 'sous sol', 'souterrain'],
+
+  // Rez-de-chaussée
+  'rdc': ['0', 'rez', 'rez de chaussee', 'rez-de-chaussee', 'ground'],
+  'rez de chaussee': ['0', 'rdc', 'rez'],
+  'rez': ['0', 'rdc', 'rez de chaussee'],
+
+  // Étages numérotés
+  '1er': ['1', 'premier', '1er etage', 'etage 1'],
+  'premier': ['1', '1er', '1er etage', 'etage 1'],
+  '2eme': ['2', 'deuxieme', '2eme etage', 'etage 2'],
+  'deuxieme': ['2', '2eme', '2eme etage', 'etage 2'],
+  '3eme': ['3', 'troisieme', '3eme etage', 'etage 3'],
+  'troisieme': ['3', '3eme', '3eme etage', 'etage 3'],
+  '4eme': ['4', 'quatrieme', '4eme etage', 'etage 4'],
+  '5eme': ['5', 'cinquieme', '5eme etage', 'etage 5'],
+
+  // Termes génériques
+  'etage': ['niveau', 'floor'],
+  'niveau': ['etage', 'floor']
+};
+
 // Mapping problèmes → types d'équipements suggérés
 const PROBLEM_TO_EQUIPMENT_TYPE = {
   // Problèmes température
@@ -1491,14 +1519,28 @@ function expandSearchTerms(query) {
   const normalized = normalizeString(query);
   const words = normalized.split(' ');
   const expandedTerms = new Set(words);
+  const floorTerms = new Set(); // Separate set for floor values
+
+  // Check for multi-word floor terms like "sous sol"
+  const multiWordFloorTerms = Object.keys(FLOOR_SYNONYMS).filter(k => k.includes(' '));
+  for (const floorTerm of multiWordFloorTerms) {
+    if (normalized.includes(floorTerm)) {
+      FLOOR_SYNONYMS[floorTerm].forEach(syn => floorTerms.add(normalizeString(syn)));
+    }
+  }
 
   for (const word of words) {
-    // Recherche exacte dans le dictionnaire
+    // Recherche exacte dans le dictionnaire équipements
     if (EQUIPMENT_SYNONYMS[word]) {
       EQUIPMENT_SYNONYMS[word].forEach(syn => expandedTerms.add(normalizeString(syn)));
     }
 
-    // Recherche fuzzy dans les clés du dictionnaire
+    // Recherche exacte dans le dictionnaire étages
+    if (FLOOR_SYNONYMS[word]) {
+      FLOOR_SYNONYMS[word].forEach(syn => floorTerms.add(normalizeString(syn)));
+    }
+
+    // Recherche fuzzy dans les clés du dictionnaire équipements
     for (const key of Object.keys(EQUIPMENT_SYNONYMS)) {
       const distance = levenshteinDistance(word, key);
       if (distance <= 2 && word.length > 3) { // Tolérance de 2 caractères pour mots > 3 chars
@@ -1507,6 +1549,9 @@ function expandSearchTerms(query) {
       }
     }
   }
+
+  // Add floor terms to expanded terms
+  floorTerms.forEach(term => expandedTerms.add(term));
 
   return Array.from(expandedTerms);
 }
@@ -1552,7 +1597,8 @@ router.get('/equipment/smart-search', async (req, res) => {
       { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true },
       { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, extraCols: ['equipment_type', 'function'] },
       { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false },
-      { type: 'atex', table: 'atex_equipments', nameCol: 'name', codeCol: null, hasSite: false, hasBuilding: true, hasBuildingCode: false }
+      { type: 'atex', table: 'atex_equipments', nameCol: 'name', codeCol: null, hasSite: false, hasBuilding: true, hasBuildingCode: false },
+      { type: 'infrastructure', table: 'inf_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, extraCols: ['location', 'description'] }
     ];
 
     for (const config of searchConfigs) {
@@ -1671,7 +1717,9 @@ function getEquipmentTypeLabel(type) {
     hv: 'Haute tension',
     glo: 'Équipement GLO',
     mobile: 'Équipement mobile',
-    datahub: 'Datahub'
+    datahub: 'Datahub',
+    atex: 'Équipement ATEX',
+    infrastructure: 'Infrastructure'
   };
   return labels[type] || type;
 }

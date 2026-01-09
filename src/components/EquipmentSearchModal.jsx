@@ -4,10 +4,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Search, X, Check, Plus, Loader2, Building2, MapPin,
   Wrench, Zap, ChevronRight, AlertTriangle, Trash2,
-  HelpCircle, Sparkles
+  HelpCircle, Sparkles, Cpu
 } from 'lucide-react';
 import { get } from '../lib/api';
 import TroubleshootingWizard from './TroubleshootingWizard';
+import MiniEquipmentPreview from './AIAvatar/MiniEquipmentPreview';
 
 // Icons pour les types d'équipements
 const EQUIPMENT_ICONS = {
@@ -18,7 +19,8 @@ const EQUIPMENT_ICONS = {
   hv: Zap,
   glo: Zap,
   datahub: Building2,
-  atex: AlertTriangle
+  atex: AlertTriangle,
+  infrastructure: Cpu
 };
 
 // Couleurs pour les types
@@ -30,7 +32,8 @@ const EQUIPMENT_COLORS = {
   hv: 'bg-red-100 text-red-600',
   glo: 'bg-yellow-100 text-yellow-600',
   datahub: 'bg-cyan-100 text-cyan-600',
-  atex: 'bg-amber-100 text-amber-600'
+  atex: 'bg-amber-100 text-amber-600',
+  infrastructure: 'bg-violet-100 text-violet-600'
 };
 
 export default function EquipmentSearchModal({ isOpen, onClose, onSuccess }) {
@@ -281,6 +284,14 @@ export default function EquipmentSearchModal({ isOpen, onClose, onSuccess }) {
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* Mini plan preview */}
+              <div className="mb-4">
+                <MiniEquipmentPreview
+                  equipment={{ id: confirmEquipment.id, name: confirmEquipment.name, code: confirmEquipment.code }}
+                  equipmentType={confirmEquipment.equipment_type}
+                />
               </div>
 
               <div className="flex gap-3">
