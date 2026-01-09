@@ -6,6 +6,7 @@ import {
   Wrench, Calendar, Building2, Users, MapPin, AlertTriangle,
   CheckCircle, Clock, Zap, Image, FileText, X, Eye, Share2, Lock
 } from 'lucide-react';
+import SharedMapPreview from '../components/SharedMapPreview';
 
 // ============================================================
 // SEVERITY & STATUS CONFIGS (same as TroubleshootingDetail)
@@ -307,42 +308,14 @@ export default function SharedTroubleshootingView() {
               <PhotoGallery photos={photos} />
             </div>
 
-            {/* Location Summary - Simple display for public view */}
-            {(record.building_code || record.floor || record.zone || record.equipment_name) && (
-              <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl border border-slate-200 p-6">
+            {/* Mini Plan - Uses public API with share token validation */}
+            {record.equipment_type && record.equipment_id && (
+              <div className="bg-white rounded-xl shadow-sm border p-6">
                 <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
                   <MapPin size={18} className="text-orange-500" />
-                  Localisation
+                  Localisation sur plan
                 </h2>
-                <div className="grid grid-cols-2 gap-4">
-                  {record.building_code && (
-                    <div className="bg-white rounded-lg p-3 border border-slate-200">
-                      <span className="text-xs text-gray-500 uppercase tracking-wide">Bâtiment</span>
-                      <p className="font-semibold text-gray-900 mt-1">{record.building_code}</p>
-                    </div>
-                  )}
-                  {record.floor && (
-                    <div className="bg-white rounded-lg p-3 border border-slate-200">
-                      <span className="text-xs text-gray-500 uppercase tracking-wide">Étage</span>
-                      <p className="font-semibold text-gray-900 mt-1">{record.floor}</p>
-                    </div>
-                  )}
-                  {record.zone && (
-                    <div className="bg-white rounded-lg p-3 border border-slate-200">
-                      <span className="text-xs text-gray-500 uppercase tracking-wide">Zone</span>
-                      <p className="font-semibold text-gray-900 mt-1">{record.zone}</p>
-                    </div>
-                  )}
-                  {record.equipment_code && (
-                    <div className="bg-white rounded-lg p-3 border border-slate-200">
-                      <span className="text-xs text-gray-500 uppercase tracking-wide">Code équipement</span>
-                      <p className="font-semibold text-gray-900 font-mono mt-1">{record.equipment_code}</p>
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs text-gray-500 mt-4 italic">
-                  Le plan interactif est disponible uniquement pour les utilisateurs connectés.
-                </p>
+                <SharedMapPreview shareToken={token} />
               </div>
             )}
           </div>
@@ -386,6 +359,36 @@ export default function SharedTroubleshootingView() {
                 )}
               </div>
             </div>
+
+            {/* Location */}
+            {(record.building_code || record.floor || record.zone) && (
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <Building2 size={16} className="text-orange-500" />
+                  Localisation
+                </h3>
+                <div className="space-y-3">
+                  {record.building_code && (
+                    <div>
+                      <span className="text-sm text-gray-500">Bâtiment</span>
+                      <p className="font-medium text-gray-900">{record.building_code}</p>
+                    </div>
+                  )}
+                  {record.floor && (
+                    <div>
+                      <span className="text-sm text-gray-500">Étage</span>
+                      <p className="font-medium text-gray-900">{record.floor}</p>
+                    </div>
+                  )}
+                  {record.zone && (
+                    <div>
+                      <span className="text-sm text-gray-500">Zone</span>
+                      <p className="font-medium text-gray-900">{record.zone}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Time Tracking */}
             <div className="bg-white rounded-xl shadow-sm border p-6">

@@ -3285,6 +3285,219 @@ router.get('/shared/:token', async (req, res) => {
 });
 
 /**
+ * GET /api/sendgrid/shared/:token/map-data
+ * Get map position data for shared troubleshooting (PUBLIC - no auth required)
+ * Returns equipment position and plan PDF URL for rendering mini map
+ */
+router.get('/shared/:token/map-data', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+
+    // Validate share token
+    const tokenResult = await pool.query(`
+      SELECT troubleshooting_id FROM troubleshooting_share_tokens
+      WHERE token = $1 AND (expires_at IS NULL OR expires_at > NOW())
+    `, [token]);
+
+    if (tokenResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invalid or expired token' });
+    }
+
+    const troubleshootingId = tokenResult.rows[0].troubleshooting_id;
+
+    // Get troubleshooting record
+    const troubleshootingResult = await pool.query(
+      'SELECT equipment_type, equipment_id, building_code, floor FROM troubleshooting_records WHERE id = $1',
+      [troubleshootingId]
+    );
+
+    if (troubleshootingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Troubleshooting not found' });
+    }
+
+    const { equipment_type, equipment_id, building_code, floor } = troubleshootingResult.rows[0];
+
+    if (!equipment_type || !equipment_id) {
+      return res.json({ success: true, hasPosition: false, reason: 'No equipment linked' });
+    }
+
+    // Position table mapping by equipment type
+    const positionTableMap = {
+      switchboard: { table: 'switchboard_positions', idField: 'switchboard_id', planTable: 'switchboard_plans' },
+      vsd: { table: 'vsd_positions', idField: 'equipment_id', planTable: 'vsd_plans' },
+      meca: { table: 'meca_positions', idField: 'equipment_id', planTable: 'meca_plans' },
+      glo: { table: 'glo_positions', idField: 'equipment_id', planTable: 'glo_plans' },
+      hv: { table: 'hv_positions', idField: 'equipment_id', planTable: 'hv_plans' },
+      mobile: { table: 'me_equipment_positions', idField: 'equipment_id', planTable: 'mobile_equipment_plans' },
+      atex: { table: 'atex_positions', idField: 'equipment_id', planTable: 'atex_plans' },
+      datahub: { table: 'dh_positions', idField: 'item_id', planTable: 'datahub_plans' },
+      infrastructure: { table: 'inf_positions', idField: 'item_id', planTable: 'infrastructure_plans' },
+      doors: { table: 'fd_door_positions', idField: 'door_id', planTable: 'doors_plans' },
+      firecontrol: { table: 'fc_map_positions', idField: 'equipment_id', planTable: 'fire_control_plans' }
+    };
+
+    const config = positionTableMap[equipment_type];
+    if (!config) {
+      return res.json({ success: true, hasPosition: false, reason: 'Unknown equipment type' });
+    }
+
+    // Get position data
+    const positionResult = await pool.query(
+      `SELECT * FROM ${config.table} WHERE ${config.idField} = $1 ORDER BY created_at DESC LIMIT 1`,
+      [equipment_id]
+    );
+
+    if (positionResult.rows.length === 0) {
+      return res.json({ success: true, hasPosition: false, reason: 'Equipment not placed on map' });
+    }
+
+    const position = positionResult.rows[0];
+    const logicalName = position.logical_name;
+    const pageIndex = position.page_index || 0;
+
+    // Get plan info
+    const planResult = await pool.query(
+      `SELECT id, logical_name, display_name FROM ${config.planTable} WHERE logical_name = $1 LIMIT 1`,
+      [logicalName]
+    );
+
+    const plan = planResult.rows[0] || { logical_name: logicalName, display_name: logicalName };
+
+    // Build plan file URL based on equipment type
+    const planFileUrlMap = {
+      switchboard: `/api/switchboard/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      vsd: `/api/vsd/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      meca: `/api/meca/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      glo: `/api/glo/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      hv: `/api/hv/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      mobile: `/api/mobile-equipment/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      atex: `/api/atex/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      datahub: `/api/datahub/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      infrastructure: `/api/infrastructure/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      doors: `/api/doors/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`,
+      firecontrol: `/api/fire-control/maps/planFile?logical_name=${encodeURIComponent(logicalName)}`
+    };
+
+    res.json({
+      success: true,
+      hasPosition: true,
+      equipmentType: equipment_type,
+      position: {
+        x_frac: position.x_frac,
+        y_frac: position.y_frac,
+        page_index: pageIndex
+      },
+      plan: {
+        logical_name: plan.logical_name,
+        display_name: plan.display_name || plan.logical_name,
+        page_index: pageIndex,
+        planFileUrl: planFileUrlMap[equipment_type]
+      },
+      location: {
+        building_code,
+        floor
+      },
+      // Token for PDF proxy
+      shareToken: token
+    });
+
+  } catch (error) {
+    console.error('[SendGrid] Get shared map data error:', error.message);
+    res.status(500).json({ error: 'Failed to get map data' });
+  }
+});
+
+/**
+ * GET /api/sendgrid/shared/:token/plan-file
+ * Proxy endpoint to serve plan PDF for shared view (PUBLIC - no auth required)
+ * Validates share token before serving the file
+ */
+router.get('/shared/:token/plan-file', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+
+    // Validate share token and get troubleshooting data
+    const tokenResult = await pool.query(`
+      SELECT t.troubleshooting_id, tr.equipment_type, tr.equipment_id
+      FROM troubleshooting_share_tokens t
+      JOIN troubleshooting_records tr ON tr.id = t.troubleshooting_id
+      WHERE t.token = $1 AND (t.expires_at IS NULL OR t.expires_at > NOW())
+    `, [token]);
+
+    if (tokenResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Invalid or expired token' });
+    }
+
+    const { equipment_type, equipment_id } = tokenResult.rows[0];
+
+    if (!equipment_type || !equipment_id) {
+      return res.status(404).json({ error: 'No equipment linked' });
+    }
+
+    // Position table mapping
+    const positionTableMap = {
+      switchboard: { table: 'switchboard_positions', idField: 'switchboard_id', planTable: 'switchboard_plans', binaryField: 'binary_data' },
+      vsd: { table: 'vsd_positions', idField: 'equipment_id', planTable: 'vsd_plans', binaryField: 'binary_data' },
+      meca: { table: 'meca_positions', idField: 'equipment_id', planTable: 'meca_plans', binaryField: 'binary_data' },
+      glo: { table: 'glo_positions', idField: 'equipment_id', planTable: 'glo_plans', binaryField: 'binary_data' },
+      hv: { table: 'hv_positions', idField: 'equipment_id', planTable: 'hv_plans', binaryField: 'binary_data' },
+      mobile: { table: 'me_equipment_positions', idField: 'equipment_id', planTable: 'mobile_equipment_plans', binaryField: 'binary_data' },
+      atex: { table: 'atex_positions', idField: 'equipment_id', planTable: 'atex_plans', binaryField: 'binary_data' },
+      datahub: { table: 'dh_positions', idField: 'item_id', planTable: 'datahub_plans', binaryField: 'binary_data' },
+      infrastructure: { table: 'inf_positions', idField: 'item_id', planTable: 'infrastructure_plans', binaryField: 'binary_data' },
+      doors: { table: 'fd_door_positions', idField: 'door_id', planTable: 'doors_plans', binaryField: 'binary_data' },
+      firecontrol: { table: 'fc_map_positions', idField: 'equipment_id', planTable: 'fire_control_plans', binaryField: 'binary_data' }
+    };
+
+    const config = positionTableMap[equipment_type];
+    if (!config) {
+      return res.status(404).json({ error: 'Unknown equipment type' });
+    }
+
+    // Get position to find logical_name
+    const positionResult = await pool.query(
+      `SELECT logical_name FROM ${config.table} WHERE ${config.idField} = $1 LIMIT 1`,
+      [equipment_id]
+    );
+
+    if (positionResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Position not found' });
+    }
+
+    const logicalName = positionResult.rows[0].logical_name;
+
+    // Get plan binary data
+    const planResult = await pool.query(
+      `SELECT ${config.binaryField}, mime_type FROM ${config.planTable} WHERE logical_name = $1 LIMIT 1`,
+      [logicalName]
+    );
+
+    if (planResult.rows.length === 0 || !planResult.rows[0][config.binaryField]) {
+      return res.status(404).json({ error: 'Plan file not found' });
+    }
+
+    const plan = planResult.rows[0];
+    const mimeType = plan.mime_type || 'application/pdf';
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(plan[config.binaryField]);
+
+  } catch (error) {
+    console.error('[SendGrid] Get shared plan file error:', error.message);
+    res.status(500).json({ error: 'Failed to get plan file' });
+  }
+});
+
+/**
  * GET /api/sendgrid/share-test
  * Test share email (for development)
  */
