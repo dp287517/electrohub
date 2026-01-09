@@ -459,7 +459,18 @@ app.get("/api/switchboard/maps/positions", async (req, res) => {
         "X-User-Email": req.header("X-User-Email") || "",
         "X-User-Name": req.header("X-User-Name") || "",
       });
-      
+
+      // Debug: log first switchboard to check if category info is present
+      if (allSwitchboards.length > 0) {
+        const sample = allSwitchboards[0];
+        console.log('[swb-map] Sample switchboard data:', {
+          id: sample.id,
+          name: sample.name,
+          category_id: sample.category_id,
+          category_color: sample.category_color
+        });
+      }
+
       allSwitchboards.forEach(sb => {
         switchboardsMap.set(sb.id, sb);
       });
