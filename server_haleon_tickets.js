@@ -92,19 +92,35 @@ export async function initHaleonTicketsTables(pool) {
     // Ajouter un index unique sur name pour les ON CONFLICT (plus robuste)
     // D'abord supprimer les doublons s'il y en a
     try {
-      await pool.query(`
-        DELETE FROM haleon_ticket_teams a
-        USING haleon_ticket_teams b
-        WHERE a.id < b.id AND a.name = b.name
+      const duplicates = await pool.query(`
+        SELECT name, COUNT(*) as cnt FROM haleon_ticket_teams GROUP BY name HAVING COUNT(*) > 1
       `);
+      if (duplicates.rows.length > 0) {
+        console.log('[Haleon Tickets] Found duplicates, cleaning:', duplicates.rows);
+        await pool.query(`
+          DELETE FROM haleon_ticket_teams a
+          USING haleon_ticket_teams b
+          WHERE a.id < b.id AND a.name = b.name
+        `);
+        console.log('[Haleon Tickets] Duplicates cleaned');
+      }
     } catch (e) {
-      console.log('[Haleon Tickets] No duplicates to clean');
+      console.log('[Haleon Tickets] Duplicate check error:', e.message);
     }
 
     // Créer l'index unique s'il n'existe pas
-    await pool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_haleon_ticket_teams_name_unique ON haleon_ticket_teams(name)
-    `);
+    try {
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_haleon_ticket_teams_name_unique ON haleon_ticket_teams(name)
+      `);
+      console.log('[Haleon Tickets] ✅ Unique index on name created/verified');
+    } catch (indexError) {
+      console.error('[Haleon Tickets] ❌ Index creation failed:', indexError.message);
+      // Si l'index existe déjà avec un autre nom, ignorer
+      if (!indexError.message.includes('already exists')) {
+        console.error('[Haleon Tickets] Will use fallback logic in sync');
+      }
+    }
 
     // Table des catégories
     await pool.query(`
