@@ -502,15 +502,22 @@ export default function TroubleshootingDetail() {
 
     setDeleting(true);
     try {
+      // Get user email from localStorage for authorization
+      const userEmail = getCurrentUserEmail();
+
       const response = await fetch(`${API_BASE}/api/troubleshooting/${id}`, {
         method: 'DELETE',
-        credentials: 'include'
+        credentials: 'include',
+        headers: {
+          'x-user-email': userEmail || ''
+        }
       });
 
       if (response.ok) {
         navigate('/app/troubleshooting');
       } else {
-        alert('Erreur lors de la suppression');
+        const data = await response.json().catch(() => ({}));
+        alert(data.error || 'Erreur lors de la suppression');
       }
     } catch (e) {
       console.error('Delete error:', e);

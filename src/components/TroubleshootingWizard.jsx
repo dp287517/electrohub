@@ -1205,16 +1205,23 @@ export function TroubleshootingHistory({ equipmentId, equipmentType, limit = 5, 
 
     setDeleting(recordId);
     try {
+      // Get user email from localStorage for authorization
+      const userEmail = getCurrentUserEmail();
+
       const response = await fetch(`${API_BASE}/api/troubleshooting/${recordId}`, {
         method: 'DELETE',
-        credentials: 'include'
+        credentials: 'include',
+        headers: {
+          'x-user-email': userEmail || ''
+        }
       });
 
       if (response.ok) {
         setRecords(prev => prev.filter(r => r.id !== recordId));
         onRefresh?.();
       } else {
-        alert('Erreur lors de la suppression');
+        const data = await response.json().catch(() => ({}));
+        alert(data.error || 'Erreur lors de la suppression');
       }
     } catch (e) {
       console.error('Delete error:', e);
