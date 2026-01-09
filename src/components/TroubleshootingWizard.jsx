@@ -6,10 +6,12 @@ import {
   Wrench, Camera, Plus, X, ChevronRight, ChevronLeft, Send,
   CheckCircle, AlertTriangle, Upload, Trash2, Image, Clock,
   FileText, Sparkles, Loader2, Building2, MapPin, Tag,
-  Download, Eye, RefreshCw, Zap
+  Download, Eye, RefreshCw, Zap, Calendar
 } from 'lucide-react';
 import { post, get, API_BASE } from '../lib/api';
 import { getUserPermissions } from '../lib/permissions';
+import TimePicker from './TimePicker';
+import DurationPicker from './DurationPicker';
 
 // Get current user email from localStorage
 function getCurrentUserEmail() {
@@ -477,32 +479,73 @@ function ClassificationStep({ formData, setFormData, onNext, onBack }) {
         </div>
       </div>
 
-      {/* Duration */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Durée intervention (min)
-          </label>
-          <input
-            type="number"
+      {/* Time section */}
+      <div className="space-y-4 p-4 bg-gray-50 rounded-xl">
+        <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+          <Clock size={16} />
+          Temps d'intervention
+        </h4>
+
+        {/* Date and start time */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Date d'intervention
+            </label>
+            <div className="relative">
+              <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+              <input
+                type="date"
+                value={formData.intervention_date}
+                onChange={(e) => setFormData(prev => ({ ...prev, intervention_date: e.target.value }))}
+                className="w-full pl-12 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white"
+              />
+            </div>
+          </div>
+          <TimePicker
+            value={formData.start_time}
+            onChange={(time) => setFormData(prev => ({ ...prev, start_time: time }))}
+            label="Heure de début"
+            placeholder="Sélectionner l'heure"
+          />
+        </div>
+
+        {/* Duration */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <DurationPicker
             value={formData.duration_minutes}
-            onChange={(e) => setFormData(prev => ({ ...prev, duration_minutes: parseInt(e.target.value) || 0 }))}
-            placeholder="Ex: 45"
-            className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+            onChange={(minutes) => setFormData(prev => ({ ...prev, duration_minutes: minutes }))}
+            label="Durée d'intervention"
+            placeholder="Sélectionner la durée"
+            color="orange"
           />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Temps d'arrêt (min)
-          </label>
-          <input
-            type="number"
+          <DurationPicker
             value={formData.downtime_minutes}
-            onChange={(e) => setFormData(prev => ({ ...prev, downtime_minutes: parseInt(e.target.value) || 0 }))}
-            placeholder="Ex: 120"
-            className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+            onChange={(minutes) => setFormData(prev => ({ ...prev, downtime_minutes: minutes }))}
+            label="Temps d'arrêt machine"
+            placeholder="Sélectionner la durée"
+            color="red"
           />
         </div>
+
+        {/* Calculated end time */}
+        {formData.start_time && formData.duration_minutes > 0 && (
+          <div className="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-xl">
+            <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0" />
+            <div>
+              <span className="text-sm text-green-700">Heure de fin calculée : </span>
+              <span className="text-sm font-bold text-green-800">
+                {(() => {
+                  const [h, m] = formData.start_time.split(':').map(Number);
+                  const totalMinutes = h * 60 + m + formData.duration_minutes;
+                  const endH = Math.floor(totalMinutes / 60) % 24;
+                  const endM = totalMinutes % 60;
+                  return `${endH.toString().padStart(2, '0')}:${endM.toString().padStart(2, '0')}`;
+                })()}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col-reverse sm:flex-row gap-3 sm:justify-between">
@@ -603,20 +646,57 @@ function SummaryStep({ formData, photos, equipment, additionalEquipment = [], on
         </div>
 
         {/* Times */}
-        {(formData.duration_minutes || formData.downtime_minutes) && (
-          <div className="flex gap-4 text-sm">
-            {formData.duration_minutes > 0 && (
-              <div className="flex items-center gap-1 text-gray-600">
+        {(formData.start_time || formData.duration_minutes || formData.downtime_minutes) && (
+          <div className="space-y-2 text-sm">
+            {/* Date and times */}
+            {formData.intervention_date && (
+              <div className="flex items-center gap-2 text-gray-600">
+                <Calendar size={14} />
+                <span>
+                  {new Date(formData.intervention_date).toLocaleDateString('fr-FR', {
+                    weekday: 'long',
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric'
+                  })}
+                </span>
+              </div>
+            )}
+            {formData.start_time && (
+              <div className="flex items-center gap-2 text-gray-600">
                 <Clock size={14} />
-                <span>Durée: {formData.duration_minutes} min</span>
+                <span>
+                  Début: {formData.start_time}
+                  {formData.duration_minutes > 0 && (
+                    <>
+                      {' → Fin: '}
+                      {(() => {
+                        const [h, m] = formData.start_time.split(':').map(Number);
+                        const totalMinutes = h * 60 + m + formData.duration_minutes;
+                        const endH = Math.floor(totalMinutes / 60) % 24;
+                        const endM = totalMinutes % 60;
+                        return `${endH.toString().padStart(2, '0')}:${endM.toString().padStart(2, '0')}`;
+                      })()}
+                    </>
+                  )}
+                </span>
               </div>
             )}
-            {formData.downtime_minutes > 0 && (
-              <div className="flex items-center gap-1 text-red-600">
-                <AlertTriangle size={14} />
-                <span>Arrêt: {formData.downtime_minutes} min</span>
-              </div>
-            )}
+            {/* Duration badges */}
+            <div className="flex gap-3">
+              {formData.duration_minutes > 0 && (
+                <div className="flex items-center gap-1 text-orange-600">
+                  <Clock size={14} />
+                  <span>Durée: {formData.duration_minutes >= 60 ? `${Math.floor(formData.duration_minutes / 60)}h${formData.duration_minutes % 60 > 0 ? formData.duration_minutes % 60 + 'min' : ''}` : `${formData.duration_minutes} min`}</span>
+                </div>
+              )}
+              {formData.downtime_minutes > 0 && (
+                <div className="flex items-center gap-1 text-red-600">
+                  <AlertTriangle size={14} />
+                  <span>Arrêt: {formData.downtime_minutes >= 60 ? `${Math.floor(formData.downtime_minutes / 60)}h${formData.downtime_minutes % 60 > 0 ? formData.downtime_minutes % 60 + 'min' : ''}` : `${formData.downtime_minutes} min`}</span>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -730,6 +810,8 @@ export default function TroubleshootingWizard({
     severity: '',
     category: '',
     fault_type: '',
+    intervention_date: new Date().toISOString().split('T')[0], // YYYY-MM-DD
+    start_time: '', // HH:MM
     duration_minutes: 0,
     downtime_minutes: 0
   });
@@ -787,6 +869,8 @@ export default function TroubleshootingWizard({
         severity: '',
         category: '',
         fault_type: '',
+        intervention_date: new Date().toISOString().split('T')[0],
+        start_time: '',
         duration_minutes: 0,
         downtime_minutes: 0
       });
@@ -859,9 +943,34 @@ export default function TroubleshootingWizard({
     setStep(3);
   };
 
+  // Calculate started_at and completed_at from form data
+  const calculateTimestamps = () => {
+    let started_at = new Date();
+    let completed_at = new Date();
+
+    if (formData.intervention_date && formData.start_time) {
+      const [hours, minutes] = formData.start_time.split(':').map(Number);
+      started_at = new Date(`${formData.intervention_date}T${formData.start_time}:00`);
+
+      // Calculate end time: start + duration
+      if (formData.duration_minutes > 0) {
+        completed_at = new Date(started_at.getTime() + formData.duration_minutes * 60 * 1000);
+      } else {
+        completed_at = started_at;
+      }
+    } else if (formData.intervention_date) {
+      started_at = new Date(`${formData.intervention_date}T12:00:00`);
+      completed_at = started_at;
+    }
+
+    return { started_at, completed_at };
+  };
+
   const handleSubmit = async () => {
     setIsSubmitting(true);
     try {
+      const { started_at, completed_at } = calculateTimestamps();
+
       const payload = {
         equipment_type: equipmentType,
         equipment_id: equipment?.id,
@@ -872,6 +981,8 @@ export default function TroubleshootingWizard({
         zone: equipment?.zone,
         room: equipment?.room,
         ...formData,
+        started_at: started_at.toISOString(),
+        completed_at: completed_at.toISOString(),
         technician_name: userName,
         technician_email: userEmail,
         ai_diagnosis: aiSuggestion || null,
@@ -917,6 +1028,8 @@ export default function TroubleshootingWizard({
       severity: '',
       category: '',
       fault_type: '',
+      intervention_date: new Date().toISOString().split('T')[0],
+      start_time: '',
       duration_minutes: 0,
       downtime_minutes: 0
     });

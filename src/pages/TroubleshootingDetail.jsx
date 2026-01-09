@@ -9,6 +9,8 @@ import {
 import { get, API_BASE } from '../lib/api';
 import { getUserPermissions } from '../lib/permissions';
 import MiniEquipmentPreview from '../components/AIAvatar/MiniEquipmentPreview';
+import TimePicker from '../components/TimePicker';
+import DurationPicker from '../components/DurationPicker';
 
 // Get current user email from localStorage
 function getCurrentUserEmail() {
@@ -909,25 +911,90 @@ export default function TroubleshootingDetail() {
                 Temps
               </h3>
               {editMode ? (
-                <div className="space-y-3">
+                <div className="space-y-4">
+                  {/* Date */}
                   <div>
-                    <label className="text-sm text-gray-500 block mb-1">Durée intervention (min)</label>
-                    <input
-                      type="number"
-                      value={editData.duration_minutes || ''}
-                      onChange={(e) => updateField('duration_minutes', parseInt(e.target.value) || null)}
-                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
-                      placeholder="Ex: 45"
-                    />
+                    <label className="text-sm text-gray-500 block mb-1">Date d'intervention</label>
+                    <div className="relative">
+                      <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                      <input
+                        type="date"
+                        value={editData.started_at ? new Date(editData.started_at).toISOString().split('T')[0] : ''}
+                        onChange={(e) => {
+                          const newDate = e.target.value;
+                          const currentTime = editData.started_at
+                            ? new Date(editData.started_at).toTimeString().slice(0, 5)
+                            : '12:00';
+                          const newStarted = new Date(`${newDate}T${currentTime}:00`);
+                          updateField('started_at', newStarted.toISOString());
+                          // Recalculate completed_at
+                          if (editData.duration_minutes) {
+                            const newCompleted = new Date(newStarted.getTime() + editData.duration_minutes * 60 * 1000);
+                            updateField('completed_at', newCompleted.toISOString());
+                          }
+                        }}
+                        className="w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-orange-500 bg-white"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="text-sm text-gray-500 block mb-1">Temps d'arrêt (min)</label>
-                    <input
-                      type="number"
-                      value={editData.downtime_minutes || ''}
-                      onChange={(e) => updateField('downtime_minutes', parseInt(e.target.value) || null)}
-                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-orange-500"
-                      placeholder="Ex: 120"
+
+                  {/* Start time */}
+                  <TimePicker
+                    value={editData.started_at ? new Date(editData.started_at).toTimeString().slice(0, 5) : ''}
+                    onChange={(time) => {
+                      const currentDate = editData.started_at
+                        ? new Date(editData.started_at).toISOString().split('T')[0]
+                        : new Date().toISOString().split('T')[0];
+                      const newStarted = new Date(`${currentDate}T${time}:00`);
+                      updateField('started_at', newStarted.toISOString());
+                      // Recalculate completed_at
+                      if (editData.duration_minutes) {
+                        const newCompleted = new Date(newStarted.getTime() + editData.duration_minutes * 60 * 1000);
+                        updateField('completed_at', newCompleted.toISOString());
+                      }
+                    }}
+                    label="Heure de début"
+                    placeholder="Sélectionner l'heure"
+                  />
+
+                  {/* Duration */}
+                  <DurationPicker
+                    value={editData.duration_minutes || 0}
+                    onChange={(minutes) => {
+                      updateField('duration_minutes', minutes);
+                      // Recalculate completed_at
+                      if (editData.started_at) {
+                        const startedAt = new Date(editData.started_at);
+                        const newCompleted = new Date(startedAt.getTime() + minutes * 60 * 1000);
+                        updateField('completed_at', newCompleted.toISOString());
+                      }
+                    }}
+                    label="Durée d'intervention"
+                    placeholder="Sélectionner la durée"
+                    color="orange"
+                  />
+
+                  {/* Calculated end time */}
+                  {editData.started_at && editData.duration_minutes > 0 && (
+                    <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                      <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
+                      <div className="text-sm">
+                        <span className="text-green-700">Heure de fin : </span>
+                        <span className="font-bold text-green-800">
+                          {new Date(new Date(editData.started_at).getTime() + editData.duration_minutes * 60 * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Downtime */}
+                  <div className="pt-3 border-t">
+                    <DurationPicker
+                      value={editData.downtime_minutes || 0}
+                      onChange={(minutes) => updateField('downtime_minutes', minutes)}
+                      label="Temps d'arrêt machine"
+                      placeholder="Sélectionner la durée"
+                      color="red"
                     />
                   </div>
                 </div>
@@ -952,13 +1019,23 @@ export default function TroubleshootingDetail() {
                   {record.duration_minutes && (
                     <div>
                       <span className="text-sm text-gray-500">Durée intervention</span>
-                      <p className="font-medium text-gray-900">{record.duration_minutes} minutes</p>
+                      <p className="font-medium text-gray-900">
+                        {record.duration_minutes >= 60
+                          ? `${Math.floor(record.duration_minutes / 60)}h${record.duration_minutes % 60 > 0 ? ` ${record.duration_minutes % 60}min` : ''}`
+                          : `${record.duration_minutes} minutes`
+                        }
+                      </p>
                     </div>
                   )}
                   {record.downtime_minutes && (
                     <div className="pt-3 border-t">
                       <span className="text-sm text-red-500">Temps d'arrêt</span>
-                      <p className="font-bold text-red-600 text-lg">{record.downtime_minutes} minutes</p>
+                      <p className="font-bold text-red-600 text-lg">
+                        {record.downtime_minutes >= 60
+                          ? `${Math.floor(record.downtime_minutes / 60)}h${record.downtime_minutes % 60 > 0 ? ` ${record.downtime_minutes % 60}min` : ''}`
+                          : `${record.downtime_minutes} minutes`
+                        }
+                      </p>
                     </div>
                   )}
                 </div>
