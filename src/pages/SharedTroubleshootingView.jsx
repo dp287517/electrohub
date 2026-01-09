@@ -303,11 +303,6 @@ export default function SharedTroubleshootingView() {
               )}
             </div>
 
-            {/* Photos */}
-            <div className="bg-white rounded-xl shadow-sm border p-6">
-              <PhotoGallery photos={photos} />
-            </div>
-
             {/* Mini Plan - Uses public API with share token validation */}
             {record.equipment_type && (record.equipment_id || record.equipment_original_id) && (
               <div className="bg-white rounded-xl shadow-sm border p-6">
@@ -318,6 +313,11 @@ export default function SharedTroubleshootingView() {
                 <SharedMapPreview shareToken={token} />
               </div>
             )}
+
+            {/* Photos */}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <PhotoGallery photos={photos} />
+            </div>
           </div>
 
           {/* Sidebar */}
