@@ -1601,16 +1601,17 @@ router.get('/equipment/smart-search', async (req, res) => {
     const results = [];
 
     // Tables à rechercher avec leurs configurations
+    // hasZone: true si la table a une colonne 'zone'
     const searchConfigs = [
-      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true },
-      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', hasSite: true, hasBuilding: true, hasBuildingCode: false },
-      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, extraCols: ['equipment_type', 'category', 'function'] },
-      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false },
-      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true },
-      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, extraCols: ['equipment_type', 'function'] },
-      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false },
-      { type: 'atex', table: 'atex_equipments', nameCol: 'name', codeCol: null, hasSite: false, hasBuilding: true, hasBuildingCode: false },
-      { type: 'infrastructure', table: 'inf_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, extraCols: ['location', 'description'] }
+      { type: 'switchboard', table: 'switchboards', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true, hasZone: true },
+      { type: 'vsd', table: 'vsd_equipments', nameCol: 'name', codeCol: 'tag', hasSite: true, hasBuilding: true, hasBuildingCode: false, hasZone: true },
+      { type: 'meca', table: 'meca_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true, extraCols: ['equipment_type', 'category', 'function'] },
+      { type: 'mobile', table: 'me_equipments', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true },
+      { type: 'hv', table: 'hv_equipments', nameCol: 'name', codeCol: 'code', hasSite: true, hasBuilding: false, hasBuildingCode: true, hasZone: true },
+      { type: 'glo', table: 'glo_equipments', nameCol: 'name', codeCol: 'tag', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true, extraCols: ['equipment_type', 'function'] },
+      { type: 'datahub', table: 'dh_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: false },
+      { type: 'atex', table: 'atex_equipments', nameCol: 'name', codeCol: null, hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: true },
+      { type: 'infrastructure', table: 'inf_items', nameCol: 'name', codeCol: 'code', hasSite: false, hasBuilding: true, hasBuildingCode: false, hasZone: false, extraCols: ['location', 'description'] }
     ];
 
     for (const config of searchConfigs) {
@@ -1623,7 +1624,8 @@ router.get('/equipment/smart-search', async (req, res) => {
         if (config.extraCols) {
           config.extraCols.forEach(col => selectCols.push(col));
         }
-        selectCols.push('floor', 'zone');
+        selectCols.push('floor');
+        if (config.hasZone) selectCols.push('zone');
 
         // Construire les conditions WHERE pour tous les termes étendus
         const searchConditions = expandedTerms.map((term, idx) => {
@@ -1718,30 +1720,55 @@ router.get('/equipment/smart-search', async (req, res) => {
             type_label: getEquipmentTypeLabel(config.type),
             building: row.building || row.building_code,
             floor: row.floor,
-            zone: row.zone,
+            zone: config.hasZone ? row.zone : null,
             extra: config.extraCols ? config.extraCols.reduce((acc, col) => {
               if (row[col]) acc[col] = row[col];
               return acc;
             }, {}) : null,
-            score
+            score,
+            matchCount: originalWordMatches // Store for filtering
           });
         }
       } catch (err) {
-        console.warn(`[SMART-SEARCH] Error searching ${config.type}:`, err.message);
+        console.error(`[SMART-SEARCH] ❌ Error searching ${config.type} (${config.table}):`, err.message);
+        console.error(`[SMART-SEARCH] Query failed for table: ${config.table}`);
+      }
+    }
+
+    // Filtrer les résultats peu pertinents
+    // Si la requête a 3+ mots, on garde seulement ceux qui matchent au moins 2 mots
+    // Si la requête a 2 mots, on garde ceux qui matchent au moins 1 mot mais on boost ceux à 2
+    const queryWordCount = normalizeString(q).split(' ').filter(w => w.length > 1).length;
+    let filteredResults = results;
+
+    if (queryWordCount >= 3) {
+      // Pour 3+ mots: garder seulement les matchs de 2+ mots
+      const goodMatches = results.filter(r => r.matchCount >= 2);
+      if (goodMatches.length >= 3) {
+        filteredResults = goodMatches;
+      }
+    } else if (queryWordCount >= 2) {
+      // Pour 2 mots: priorité aux matchs de 2 mots, mais garder les autres si pas assez
+      const perfectMatches = results.filter(r => r.matchCount >= 2);
+      if (perfectMatches.length >= 3) {
+        filteredResults = perfectMatches;
       }
     }
 
     // Trier par score décroissant
-    results.sort((a, b) => b.score - a.score);
+    filteredResults.sort((a, b) => b.score - a.score);
 
-    console.log(`[SMART-SEARCH] Found ${results.length} results for "${q}"`);
+    // Log par type pour debug
+    const byType = {};
+    filteredResults.forEach(r => { byType[r.equipment_type] = (byType[r.equipment_type] || 0) + 1; });
+    console.log(`[SMART-SEARCH] Found ${filteredResults.length} results (filtered from ${results.length}) for "${q}":`, JSON.stringify(byType));
 
     res.json({
       success: true,
       query: q,
       expandedTerms: expandedTerms.slice(0, 10),
       suggestedTypes,
-      results: results.slice(0, parseInt(limit))
+      results: filteredResults.slice(0, parseInt(limit))
     });
   } catch (error) {
     console.error('[SMART-SEARCH] Error:', error);
