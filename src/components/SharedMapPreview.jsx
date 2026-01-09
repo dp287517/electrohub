@@ -149,9 +149,9 @@ export default function SharedMapPreview({ shareToken, className = '' }) {
         // Add image overlay
         L.imageOverlay(imageUrl, bounds).addTo(map);
 
-        // Calculate marker position
-        const x = mapData.position.x_frac * imgW;
-        const y = (1 - mapData.position.y_frac) * imgH;
+        // Calculate marker position (same as MiniEquipmentPreview)
+        const x = (mapData.position.x_frac || 0) * imgW;
+        const y = (mapData.position.y_frac || 0) * imgH;
 
         // Create marker
         const colors = EQUIPMENT_COLORS[mapData.equipmentType] || EQUIPMENT_COLORS.switchboard;
