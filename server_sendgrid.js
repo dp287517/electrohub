@@ -1967,8 +1967,9 @@ function generateTroubleshootingShareEmail(record, photos, shareUrl, agentName, 
     ${previewPhoto ? `
     <!-- Photo Preview -->
     <div style="padding: 25px; border-bottom: 1px solid #e5e7eb; text-align: center;">
-      <h3 style="margin: 0 0 15px; font-size: 16px; color: #1f2937;">📷 Aperçu</h3>
-      <p style="margin: 0 0 15px; font-size: 13px; color: #6b7280;">${photos.length} photo(s) disponible(s) - Cliquez sur le lien ci-dessous pour voir les détails complets</p>
+      <h3 style="margin: 0 0 15px; font-size: 16px; color: #1f2937;">📷 Photo</h3>
+      <img src="cid:troubleshooting-photo" alt="Photo du dépannage" style="max-width: 100%; max-height: 300px; border-radius: 8px; border: 1px solid #e5e7eb;" />
+      ${photos.length > 1 ? `<p style="margin: 10px 0 0; font-size: 13px; color: #6b7280;">+ ${photos.length - 1} autre(s) photo(s) disponible(s)</p>` : ''}
     </div>
     ` : ''}
 
@@ -2056,6 +2057,24 @@ async function sendTroubleshootingShareEmail(troubleshootingId, recipientEmails,
         disposition: 'inline',
         content_id: 'agent-image'
       });
+    }
+
+    // Add troubleshooting photo if available
+    const previewPhoto = photos.find(p => p.photo_type === 'before') || photos[0];
+    if (previewPhoto?.photo_data) {
+      // Extract base64 data from data URL
+      const photoDataMatch = previewPhoto.photo_data.match(/^data:([^;]+);base64,(.+)$/);
+      if (photoDataMatch) {
+        const mimeType = photoDataMatch[1];
+        const base64Data = photoDataMatch[2];
+        attachments.push({
+          content: base64Data,
+          filename: `photo.${mimeType.split('/')[1] || 'jpg'}`,
+          type: mimeType,
+          disposition: 'inline',
+          content_id: 'troubleshooting-photo'
+        });
+      }
     }
 
     // Send to each recipient

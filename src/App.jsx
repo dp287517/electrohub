@@ -1,5 +1,5 @@
 // src/App.jsx
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Navbar from './components/Navbar.jsx';
 import SignIn from './pages/SignIn.jsx';
 import SignUp from './pages/SignUp.jsx';
@@ -62,10 +62,15 @@ function AuthRedirect({ children }) {
 }
 
 export default function App() {
+  const location = useLocation();
+
+  // Hide navbar for public shared views
+  const hideNavbar = location.pathname.startsWith('/shared/');
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <Navbar />
-      <div className="max-w-[95vw] mx-auto px-4 py-6">
+      {!hideNavbar && <Navbar />}
+      <div className={hideNavbar ? '' : 'max-w-[95vw] mx-auto px-4 py-6'}>
         <Routes>
           {/* Public - redirect to dashboard if already logged in */}
           <Route path="/" element={<AuthRedirect><SignIn /></AuthRedirect>} />
