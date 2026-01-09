@@ -2077,6 +2077,11 @@ app.get('/api/switchboard/categories', async (req, res) => {
        ORDER BY c.sort_order, c.name
     `, [site]);
 
+    console.log(`[SWITCHBOARD CATEGORIES] Listing for site=${site}: found ${rows.length} categories`);
+    if (rows.length > 0) {
+      console.log('[SWITCHBOARD CATEGORIES] Categories:', rows.map(r => ({ id: r.id, name: r.name, color: r.color })));
+    }
+
     res.json({ ok: true, categories: rows });
   } catch (e) {
     console.error('[SWITCHBOARD CATEGORIES] List error:', e.message);
