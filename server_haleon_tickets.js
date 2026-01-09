@@ -78,7 +78,7 @@ export async function initHaleonTicketsTables(pool) {
       CREATE TABLE IF NOT EXISTS haleon_ticket_teams (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         bubble_team_id VARCHAR(255) UNIQUE,
-        name VARCHAR(255) NOT NULL,
+        name VARCHAR(255) NOT NULL UNIQUE,
         color VARCHAR(50) DEFAULT '#3b82f6',
         site VARCHAR(100) DEFAULT 'Nyon',
         bubble_users TEXT[],
@@ -87,6 +87,20 @@ export async function initHaleonTicketsTables(pool) {
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
+    `);
+
+    // Ajouter la contrainte unique sur name si elle n'existe pas (pour les DB existantes)
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'haleon_ticket_teams_name_key'
+        ) THEN
+          ALTER TABLE haleon_ticket_teams ADD CONSTRAINT haleon_ticket_teams_name_key UNIQUE (name);
+        END IF;
+      EXCEPTION WHEN duplicate_object THEN
+        NULL;
+      END $$;
     `);
 
     // Table des catégories
@@ -418,7 +432,7 @@ export function createHaleonTicketsRouter(pool) {
   router.get('/available-users', requireAuth, requireAdmin, async (req, res) => {
     try {
       const result = await pool.query(`
-        SELECT DISTINCT email, name, role
+        SELECT DISTINCT email, name
         FROM haleon_users
         WHERE is_validated = true AND is_active = true
         ORDER BY name, email
