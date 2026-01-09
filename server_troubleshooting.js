@@ -1682,6 +1682,9 @@ router.get('/equipment/smart-search', async (req, res) => {
 
           // IMPORTANT: Compter combien de mots originaux matchent
           let originalWordMatches = 0;
+          let nameMatches = 0; // Track name-specific matches
+          let locationMatches = 0; // Track building/floor matches
+
           for (const word of originalWords) {
             const wordMatchesName = nameNorm.includes(word);
             const wordMatchesBuilding = buildingNorm.includes(word);
@@ -1691,16 +1694,45 @@ router.get('/equipment/smart-search', async (req, res) => {
             if (wordMatchesName || wordMatchesBuilding || wordMatchesFloor || wordMatchesCode) {
               originalWordMatches++;
               // Bonus spécifique par type de match
-              if (wordMatchesName) score += 25;
-              if (wordMatchesBuilding) score += 30; // Building match important
-              if (wordMatchesFloor) score += 30; // Floor match important
+              if (wordMatchesName) {
+                score += 25;
+                nameMatches++;
+              }
+              if (wordMatchesBuilding) {
+                score += 30; // Building match important
+                locationMatches++;
+              }
+              if (wordMatchesFloor) {
+                score += 30; // Floor match important
+                locationMatches++;
+              }
               if (wordMatchesCode) score += 20;
             }
           }
 
+          // Vérifier si le "mot principal" (premier mot non-numérique, non-étage) matche le nom
+          const mainWords = originalWords.filter(w => {
+            const isNumber = /^\d+$/.test(w);
+            const isFloorTerm = ['rdc', 'rez', 'ss', 'sous', 'sol', '1er', '2eme', '3eme', '4eme', '5eme'].includes(w);
+            return !isNumber && !isFloorTerm;
+          });
+          const primaryWord = mainWords[0];
+          const primaryWordMatchesName = primaryWord && (
+            nameNorm.includes(primaryWord) ||
+            expandedTerms.some(term => {
+              // Check if this expanded term comes from the primary word and matches name
+              const termFromPrimary = EQUIPMENT_SYNONYMS[primaryWord]?.includes(term) ||
+                                       normalizeString(primaryWord) === term;
+              return termFromPrimary && nameNorm.includes(term);
+            })
+          );
+
           // GROS bonus pour les matchs multiples (AND logic reward)
           if (originalWordMatches >= 2) score += originalWordMatches * 40;
           if (originalWordMatches >= 3) score += 100; // Triple match bonus
+
+          // GROS bonus si le mot principal matche le nom
+          if (primaryWordMatchesName) score += 80;
 
           // Match sur les termes étendus (synonymes)
           expandedTerms.forEach(term => {
@@ -1726,7 +1758,9 @@ router.get('/equipment/smart-search', async (req, res) => {
               return acc;
             }, {}) : null,
             score,
-            matchCount: originalWordMatches // Store for filtering
+            matchCount: originalWordMatches,
+            nameMatches,
+            primaryWordMatch: primaryWordMatchesName
           });
         }
       } catch (err) {
@@ -1736,22 +1770,48 @@ router.get('/equipment/smart-search', async (req, res) => {
     }
 
     // Filtrer les résultats peu pertinents
-    // Si la requête a 3+ mots, on garde seulement ceux qui matchent au moins 2 mots
-    // Si la requête a 2 mots, on garde ceux qui matchent au moins 1 mot mais on boost ceux à 2
-    const queryWordCount = normalizeString(q).split(' ').filter(w => w.length > 1).length;
+    // STRICT: Le mot principal (type d'équipement) doit matcher le nom
+    const queryWords = normalizeString(q).split(' ').filter(w => w.length > 1);
+    const queryWordCount = queryWords.length;
+
+    // Identifier le mot principal (premier mot non-numérique, non-étage)
+    const mainQueryWords = queryWords.filter(w => {
+      const isNumber = /^\d+$/.test(w);
+      const isFloorTerm = ['rdc', 'rez', 'ss', 'sous', 'sol', '1er', '2eme', '3eme', '4eme', '5eme'].includes(w);
+      return !isNumber && !isFloorTerm;
+    });
+    const hasPrimaryWord = mainQueryWords.length > 0;
+
     let filteredResults = results;
 
-    if (queryWordCount >= 3) {
-      // Pour 3+ mots: garder seulement les matchs de 2+ mots
-      const goodMatches = results.filter(r => r.matchCount >= 2);
-      if (goodMatches.length >= 3) {
-        filteredResults = goodMatches;
+    if (hasPrimaryWord && queryWordCount >= 2) {
+      // STRICT: Le mot principal DOIT matcher le nom
+      // Exemple: "porte 22 rez" → "porte" doit être dans le nom
+      const primaryMatches = results.filter(r => r.primaryWordMatch);
+
+      if (primaryMatches.length > 0) {
+        // On a des matchs sur le mot principal - les garder
+        filteredResults = primaryMatches;
+
+        // En plus, pour 3+ mots, exiger 2+ matchs au total
+        if (queryWordCount >= 3) {
+          const strictMatches = primaryMatches.filter(r => r.matchCount >= 2);
+          if (strictMatches.length > 0) {
+            filteredResults = strictMatches;
+          }
+        }
+      } else {
+        // Pas de match sur le mot principal - fallback aux matchs multiples
+        const multiMatches = results.filter(r => r.matchCount >= 2);
+        if (multiMatches.length > 0) {
+          filteredResults = multiMatches;
+        }
       }
     } else if (queryWordCount >= 2) {
-      // Pour 2 mots: priorité aux matchs de 2 mots, mais garder les autres si pas assez
-      const perfectMatches = results.filter(r => r.matchCount >= 2);
-      if (perfectMatches.length >= 3) {
-        filteredResults = perfectMatches;
+      // Requête sans mot principal clair (ex: "22 rdc") - garder matchs multiples
+      const multiMatches = results.filter(r => r.matchCount >= 2);
+      if (multiMatches.length > 0) {
+        filteredResults = multiMatches;
       }
     }
 
