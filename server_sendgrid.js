@@ -3353,13 +3353,9 @@ router.get('/shared/:token/map-data', async (req, res) => {
     const logicalName = position.logical_name;
     const pageIndex = position.page_index || 0;
 
-    // Get plan info
-    const planResult = await pool.query(
-      `SELECT id, logical_name, display_name FROM ${config.planTable} WHERE logical_name = $1 LIMIT 1`,
-      [logicalName]
-    );
-
-    const plan = planResult.rows[0] || { logical_name: logicalName, display_name: logicalName };
+    // Get plan info - vsd_plans doesn't have display_name, so just use logical_name
+    // display_name is in vsd_plan_names table but we don't need it for the map
+    const plan = { logical_name: logicalName, display_name: logicalName };
 
     // Build plan file URL based on equipment type
     const planFileUrlMap = {
