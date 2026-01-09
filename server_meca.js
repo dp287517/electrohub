@@ -1356,9 +1356,14 @@ app.get("/api/meca/maps/positions", async (req, res) => {
               e.building,
               e.zone,
               e.floor,
-              e.location
+              e.location,
+              e.category_id,
+              c.name as category_name,
+              c.color as category_color,
+              c.icon as category_icon
          FROM meca_positions pos
          JOIN meca_equipments e ON e.id = pos.equipment_id
+         LEFT JOIN meca_equipment_categories c ON c.id = e.category_id
         WHERE pos.logical_name=$1
           AND pos.page_index=$2`,
       [planKey, Number(page_index)]
