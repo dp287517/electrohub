@@ -1741,6 +1741,8 @@ router.post("/migrate", adminOnly, async (req, res) => {
     await addColumnIfNotExists('companies', 'code', 'TEXT UNIQUE');
     await addColumnIfNotExists('companies', 'is_internal', 'BOOLEAN DEFAULT FALSE');
     await addColumnIfNotExists('companies', 'settings', "JSONB DEFAULT '{}'::jsonb");
+    await addColumnIfNotExists('companies', 'logo', 'BYTEA');
+    await addColumnIfNotExists('companies', 'logo_mime', "TEXT DEFAULT 'image/png'");
     logs.push('Table companies créée/vérifiée');
 
     // 2. Insérer Haleon
