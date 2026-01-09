@@ -564,6 +564,51 @@ export default function Atex() {
     }
   }, [reload]);
 
+  // Handle placement with confirmation modal (more reliable than native confirm())
+  const handlePlaceOnInfraPlan = useCallback((equipmentId, targetPlan, currentLogicalName) => {
+    const doPlace = async () => {
+      try {
+        const plan = infraPlans.find(p => p.id === targetPlan.id);
+        if (!plan) {
+          throw new Error("Plan not found");
+        }
+        console.log("[ATEX] handlePlaceOnInfraPlan placing:", { equipmentId, planId: plan.id, logical_name: plan.logical_name });
+
+        const result = await api.atexMaps.setPosition(equipmentId, {
+          logical_name: plan.logical_name,
+          plan_id: plan.id,
+          page_index: 0,
+          x_frac: 0.5,
+          y_frac: 0.5,
+        });
+        console.log("[ATEX] setPosition result:", result);
+        setToast("Équipement placé sur le plan");
+        setPlacingOnInfra(null);
+        await reload();
+      } catch (e) {
+        console.error("[ATEX] Error placing on plan:", e);
+        setToast("Erreur: " + (e.message || "Placement échoué"));
+      }
+    };
+
+    // If equipment is already on a plan, ask for confirmation
+    if (currentLogicalName) {
+      setConfirmModal({
+        open: true,
+        title: "Déplacer l'équipement ?",
+        message: `L'équipement sera déplacé du plan actuel vers "${targetPlan.display_name || targetPlan.logical_name}".`,
+        variant: "warning",
+        onConfirm: async () => {
+          await doPlace();
+          setConfirmModal({ open: false, title: "", message: "", onConfirm: null, variant: "danger" });
+        }
+      });
+    } else {
+      // No current position, place directly
+      doPlace();
+    }
+  }, [infraPlans, reload]);
+
   useEffect(() => {
     reload();
     loadPeStats(); // 🔌 Load PE stats on mount
@@ -1721,6 +1766,7 @@ export default function Atex() {
           infraPlans={infraPlans}
           infraPositions={infraPositions}
           placeOnInfraPlan={placeOnInfraPlan}
+          handlePlaceOnInfraPlan={handlePlaceOnInfraPlan}
           removeFromInfraPlan={removeFromInfraPlan}
           onGoToPlans={() => { setActiveTab("plans"); setDrawerOpen(false); }}
         />
@@ -3391,6 +3437,7 @@ function EquipmentDrawer({
   infraPlans = [],
   infraPositions = [],
   placeOnInfraPlan,
+  handlePlaceOnInfraPlan,
   removeFromInfraPlan,
   onGoToPlans,
 }) {
@@ -3804,13 +3851,8 @@ function EquipmentDrawer({
                                 key={plan.id}
                                 onClick={() => {
                                   if (isCurrentPlan) return;
-                                  if (editing.logical_name) {
-                                    if (confirm(`Déplacer l'équipement du plan actuel vers "${plan.display_name || plan.logical_name}" ?`)) {
-                                      placeOnInfraPlan(editing.id, plan.id);
-                                    }
-                                  } else {
-                                    placeOnInfraPlan(editing.id, plan.id);
-                                  }
+                                  // Use handlePlaceOnInfraPlan which shows a proper confirmation modal
+                                  handlePlaceOnInfraPlan(editing.id, plan, editing.logical_name);
                                 }}
                                 disabled={isCurrentPlan}
                                 className={`flex items-center gap-3 p-3 border rounded-lg transition-colors text-left ${

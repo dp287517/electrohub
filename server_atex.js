@@ -1153,6 +1153,7 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
     const id = String(req.params.id);
     // 🚀 PERF: Exclude photo_content from response (can be 6-8MB!)
     // Use (photo_content IS NOT NULL AND length(photo_content) > 0) to check for photo without returning it
+    // 📍 Include logical_name from atex_positions for repositioning functionality
     const { rows } = await pool.query(
       `
       SELECT e.id, e.name, e.building, e.zone, e.equipment, e.sub_equipment, e.type,
@@ -1165,7 +1166,15 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
              (SELECT result FROM atex_checks c
                WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
                ORDER BY c.date DESC NULLS LAST
-               LIMIT 1) AS last_result
+               LIMIT 1) AS last_result,
+             (SELECT logical_name FROM atex_positions p
+               WHERE p.equipment_id=e.id
+               ORDER BY p.created_at DESC
+               LIMIT 1) AS logical_name,
+             (SELECT plan_id FROM atex_positions p
+               WHERE p.equipment_id=e.id
+               ORDER BY p.created_at DESC
+               LIMIT 1) AS position_plan_id
       FROM atex_equipments e WHERE e.id=$1
       `,
       [id]
