@@ -6,7 +6,7 @@ import {
   Globe, MapPin, Briefcase, Edit3, Save, AppWindow, CheckSquare,
   Square, ChevronDown, Sparkles, Database, Loader2, History, LogIn, LogOut,
   FileText, Settings, Upload, Image, Bot, Clock, UserCheck, UserX, Bug,
-  Box, Package, ExternalLink, Palette, Ruler
+  Box, Package, ExternalLink, Palette, Ruler, Ticket
 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { ADMIN_EMAILS, ALL_APPS } from '../lib/permissions';
@@ -3640,6 +3640,13 @@ export default function Admin() {
             <TabButton active={activeTab === 'modules'} onClick={() => setActiveTab('modules')} icon={Package}>Modules</TabButton>
             <TabButton active={activeTab === 'auth-audit'} onClick={() => setActiveTab('auth-audit')} icon={History}>Auth Audit</TabButton>
             <TabButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={Settings}>Settings</TabButton>
+            <button
+              onClick={() => navigate('/admin/haleon-tickets')}
+              className="flex items-center gap-2 px-4 py-3 font-medium transition-all border-b-2 border-transparent text-purple-600 hover:text-purple-700 hover:bg-purple-50 whitespace-nowrap"
+            >
+              <Ticket size={18} />
+              Haleon Tickets
+            </button>
           </div>
         </div>
       </div>
