@@ -123,12 +123,14 @@ export async function initTroubleshootingTables(poolInstance) {
         try {
           let foundId = null;
           const { equipment_type, equipment_name, equipment_id, site } = record;
+          console.log(`[TROUBLESHOOTING] Processing record ${record.id}: type=${equipment_type}, name="${equipment_name}", site=${site}`);
 
           // If equipment_id is already set (UUID), use it as original_id
           if (equipment_id) {
             foundId = equipment_id;
+            console.log(`[TROUBLESHOOTING] Using existing equipment_id: ${foundId}`);
           } else {
-            // Look up ID from source table by name
+            // Look up ID from source table by name (case-insensitive with ILIKE)
             const tableMap = {
               switchboard: { table: 'switchboards', nameCol: 'name', siteCol: 'site' },
               vsd: { table: 'vsd_equipments', nameCol: 'name', siteCol: 'site' },
@@ -142,17 +144,24 @@ export async function initTroubleshootingTables(poolInstance) {
             const config = tableMap[equipment_type];
             if (config) {
               let query, params;
+              // Use ILIKE for case-insensitive matching
               if (config.siteCol) {
-                query = `SELECT id FROM ${config.table} WHERE ${config.nameCol} = $1 AND ${config.siteCol} = $2 LIMIT 1`;
+                query = `SELECT id, ${config.nameCol} as name FROM ${config.table} WHERE LOWER(TRIM(${config.nameCol})) = LOWER(TRIM($1)) AND ${config.siteCol} = $2 LIMIT 1`;
                 params = [equipment_name, site];
               } else {
-                query = `SELECT id FROM ${config.table} WHERE ${config.nameCol} = $1 LIMIT 1`;
+                query = `SELECT id, ${config.nameCol} as name FROM ${config.table} WHERE LOWER(TRIM(${config.nameCol})) = LOWER(TRIM($1)) LIMIT 1`;
                 params = [equipment_name];
               }
+              console.log(`[TROUBLESHOOTING] Searching in ${config.table} with name="${equipment_name}"`);
               const result = await pool.query(query, params);
               if (result.rows.length > 0) {
                 foundId = String(result.rows[0].id);
+                console.log(`[TROUBLESHOOTING] Found equipment: id=${foundId}, name="${result.rows[0].name}"`);
+              } else {
+                console.log(`[TROUBLESHOOTING] No match found in ${config.table} for name="${equipment_name}"`);
               }
+            } else {
+              console.log(`[TROUBLESHOOTING] No config for equipment_type="${equipment_type}"`);
             }
           }
 
@@ -162,11 +171,15 @@ export async function initTroubleshootingTables(poolInstance) {
               [foundId, record.id]
             );
             console.log(`[TROUBLESHOOTING] ✅ Backfilled record ${record.id} with equipment_original_id=${foundId}`);
+          } else {
+            console.log(`[TROUBLESHOOTING] ❌ Could not find equipment for record ${record.id}`);
           }
         } catch (err) {
           console.warn(`[TROUBLESHOOTING] ⚠️ Could not backfill record ${record.id}:`, err.message);
         }
       }
+    } else {
+      console.log('[TROUBLESHOOTING] ✅ No records need backfilling');
     }
 
     // Multi-equipment support table - links troubleshooting to multiple equipment
