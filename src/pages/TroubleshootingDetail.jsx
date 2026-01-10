@@ -12,6 +12,20 @@ import MiniEquipmentPreview from '../components/AIAvatar/MiniEquipmentPreview';
 import TimePicker from '../components/TimePicker';
 import DurationPicker from '../components/DurationPicker';
 
+// Get company logo URL from user's company
+function getCompanyLogoUrl() {
+  try {
+    const ehUser = localStorage.getItem('eh_user');
+    if (ehUser) {
+      const user = JSON.parse(ehUser);
+      if (user?.company_id) {
+        return `${API_BASE}/api/companies/${user.company_id}/logo`;
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
 // Get current user email from localStorage
 function getCurrentUserEmail() {
   try {
@@ -443,6 +457,31 @@ export default function TroubleshootingDetail() {
   const [editData, setEditData] = useState({});
   const [showShareModal, setShowShareModal] = useState(false);
   const [newPhotos, setNewPhotos] = useState([]);
+  const [companyLogo, setCompanyLogo] = useState(null);
+
+  // Load company logo
+  useEffect(() => {
+    const logoUrl = getCompanyLogoUrl();
+    if (logoUrl) {
+      const token = localStorage.getItem('eh_token');
+      fetch(logoUrl, {
+        credentials: 'include',
+        headers: { 'Authorization': token ? `Bearer ${token}` : '' }
+      })
+        .then(res => {
+          if (res.ok) return res.blob();
+          throw new Error('No logo');
+        })
+        .then(blob => {
+          const url = URL.createObjectURL(blob);
+          setCompanyLogo(url);
+        })
+        .catch(() => setCompanyLogo(null));
+    }
+    return () => {
+      if (companyLogo) URL.revokeObjectURL(companyLogo);
+    };
+  }, []);
 
   useEffect(() => {
     loadRecord();
@@ -632,37 +671,108 @@ export default function TroubleshootingDetail() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
+      {/* Header - Improved mobile responsive */}
       <div className={`${editMode ? 'bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500' : 'bg-gradient-to-r from-orange-500 via-red-500 to-pink-500'} text-white`}>
-        <div className="max-w-6xl mx-auto px-4 py-6">
-          <Link
-            to="/app/troubleshooting"
-            className="inline-flex items-center gap-2 text-white/80 hover:text-white mb-4 transition-colors"
-          >
-            <ArrowLeft size={18} />
-            Retour aux dépannages
-          </Link>
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+          {/* Top row - Back link and action buttons */}
+          <div className="flex items-center justify-between mb-3 sm:mb-4">
+            <Link
+              to="/app/troubleshooting"
+              className="inline-flex items-center gap-1.5 text-white/80 hover:text-white transition-colors text-sm sm:text-base"
+            >
+              <ArrowLeft size={16} className="sm:w-[18px] sm:h-[18px]" />
+              <span className="hidden xs:inline">Retour</span>
+            </Link>
 
-          <div className="flex items-start justify-between">
-            <div className="flex items-start gap-4">
-              <div className="p-3 bg-white/20 rounded-xl">
-                <Wrench size={28} />
+            {/* Action buttons - compact on mobile */}
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              {!editMode && (
+                <button
+                  onClick={() => setShowShareModal(true)}
+                  className="p-1.5 sm:p-2 bg-white/10 hover:bg-blue-500 rounded-lg transition-colors"
+                  title="Partager"
+                >
+                  <Share2 size={18} className="sm:w-5 sm:h-5" />
+                </button>
+              )}
+
+              {canModify && (
+                <>
+                  {editMode ? (
+                    <>
+                      <button
+                        onClick={() => { setEditMode(false); setEditData(record); setNewPhotos([]); }}
+                        className="px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        onClick={handleSave}
+                        disabled={saving}
+                        className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-1.5 sm:py-2 text-sm sm:text-base bg-white text-indigo-600 rounded-lg hover:bg-white/90 transition-colors disabled:opacity-50"
+                      >
+                        {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                        <span className="hidden sm:inline">Enregistrer</span>
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => setEditMode(true)}
+                        className="p-1.5 sm:p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                        title="Modifier"
+                      >
+                        <Edit size={18} className="sm:w-5 sm:h-5" />
+                      </button>
+                      <button
+                        onClick={handleDelete}
+                        disabled={deleting}
+                        className="p-1.5 sm:p-2 bg-white/10 hover:bg-red-500 rounded-lg transition-colors disabled:opacity-50"
+                        title="Supprimer"
+                      >
+                        {deleting ? <Loader2 size={18} className="animate-spin" /> : <Trash2 size={18} className="sm:w-5 sm:h-5" />}
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Main header content with logo */}
+          <div className="flex items-start gap-3 sm:gap-4">
+            {/* Company logo or Wrench icon */}
+            {companyLogo ? (
+              <div className="flex-shrink-0 w-12 h-12 sm:w-14 sm:h-14 bg-white rounded-xl p-1.5 sm:p-2 shadow-lg">
+                <img
+                  src={companyLogo}
+                  alt="Logo"
+                  className="w-full h-full object-contain"
+                />
               </div>
-              <div>
-                {editMode ? (
-                  <input
-                    type="text"
-                    value={editData.title || ''}
-                    onChange={(e) => updateField('title', e.target.value)}
-                    className="text-2xl sm:text-3xl font-bold bg-white/20 rounded-lg px-3 py-1 w-full text-white placeholder-white/60"
-                    placeholder="Titre du dépannage"
-                  />
-                ) : (
-                  <h1 className="text-2xl sm:text-3xl font-bold">{record.title}</h1>
-                )}
-                <div className="flex flex-wrap items-center gap-4 mt-2 text-white/80">
-                  <span className="flex items-center gap-1">
-                    <Calendar size={16} />
+            ) : (
+              <div className="flex-shrink-0 p-2.5 sm:p-3 bg-white/20 rounded-xl">
+                <Wrench size={22} className="sm:w-7 sm:h-7" />
+              </div>
+            )}
+
+            {/* Title and metadata */}
+            <div className="flex-1 min-w-0">
+              {editMode ? (
+                <input
+                  type="text"
+                  value={editData.title || ''}
+                  onChange={(e) => updateField('title', e.target.value)}
+                  className="text-lg sm:text-2xl lg:text-3xl font-bold bg-white/20 rounded-lg px-2 sm:px-3 py-1 w-full text-white placeholder-white/60"
+                  placeholder="Titre du dépannage"
+                />
+              ) : (
+                <h1 className="text-lg sm:text-2xl lg:text-3xl font-bold leading-tight line-clamp-2">{record.title}</h1>
+              )}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 sm:mt-2 text-white/80 text-xs sm:text-sm">
+                <span className="flex items-center gap-1">
+                  <Calendar size={14} className="sm:w-4 sm:h-4" />
+                  <span className="hidden sm:inline">
                     {new Date(record.created_at).toLocaleDateString('fr-FR', {
                       weekday: 'long',
                       day: 'numeric',
@@ -670,67 +780,19 @@ export default function TroubleshootingDetail() {
                       year: 'numeric'
                     })}
                   </span>
-                  <span className="flex items-center gap-1">
-                    <Users size={16} />
-                    {record.technician_name}
+                  <span className="sm:hidden">
+                    {new Date(record.created_at).toLocaleDateString('fr-FR', {
+                      day: 'numeric',
+                      month: 'short',
+                      year: 'numeric'
+                    })}
                   </span>
-                </div>
+                </span>
+                <span className="flex items-center gap-1">
+                  <Users size={14} className="sm:w-4 sm:h-4" />
+                  {record.technician_name}
+                </span>
               </div>
-            </div>
-
-            <div className="flex gap-2">
-              {/* Share button - always visible */}
-              {!editMode && (
-                <button
-                  onClick={() => setShowShareModal(true)}
-                  className="p-2 bg-white/10 hover:bg-blue-500 rounded-lg transition-colors"
-                  title="Partager"
-                >
-                  <Share2 size={20} />
-                </button>
-              )}
-
-              {/* Edit/Delete buttons - only for authorized users */}
-              {canModify && (
-                <>
-                  {editMode ? (
-                    <>
-                      <button
-                        onClick={() => { setEditMode(false); setEditData(record); setNewPhotos([]); }}
-                        className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
-                      >
-                        Annuler
-                      </button>
-                      <button
-                        onClick={handleSave}
-                        disabled={saving}
-                        className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-600 rounded-lg hover:bg-white/90 transition-colors disabled:opacity-50"
-                      >
-                        {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-                        Enregistrer
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => setEditMode(true)}
-                        className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
-                        title="Modifier"
-                      >
-                        <Edit size={20} />
-                      </button>
-                      <button
-                        onClick={handleDelete}
-                        disabled={deleting}
-                        className="p-2 bg-white/10 hover:bg-red-500 rounded-lg transition-colors disabled:opacity-50"
-                        title="Supprimer"
-                      >
-                        {deleting ? <Loader2 size={20} className="animate-spin" /> : <Trash2 size={20} />}
-                      </button>
-                    </>
-                  )}
-                </>
-              )}
             </div>
           </div>
         </div>

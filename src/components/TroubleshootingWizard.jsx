@@ -94,6 +94,13 @@ const FAULT_TYPE_OPTIONS = [
   { value: 'corrective', label: 'Correctif' }
 ];
 
+const STATUS_OPTIONS = [
+  { value: 'completed', label: 'Résolu', icon: CheckCircle, color: 'green', description: 'Le problème a été corrigé' },
+  { value: 'in_progress', label: 'En cours', icon: Clock, color: 'orange', description: 'Intervention en cours' },
+  { value: 'pending_parts', label: 'En attente pièces', icon: Clock, color: 'blue', description: 'En attente de pièces détachées' },
+  { value: 'pending_external', label: 'En attente externe', icon: Clock, color: 'purple', description: 'En attente d\'intervention externe' }
+];
+
 // ============================================================
 // STEP COMPONENTS
 // ============================================================
@@ -479,6 +486,45 @@ function ClassificationStep({ formData, setFormData, onNext, onBack }) {
         </div>
       </div>
 
+      {/* Status selection */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-3">
+          Statut du dépannage
+        </label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {STATUS_OPTIONS.map((option) => {
+            const Icon = option.icon;
+            return (
+              <button
+                key={option.value}
+                onClick={() => setFormData(prev => ({ ...prev, status: option.value }))}
+                className={`p-4 rounded-xl border-2 text-left transition-all ${
+                  formData.status === option.value
+                    ? option.color === 'green' ? 'border-green-500 bg-green-50' :
+                      option.color === 'orange' ? 'border-orange-500 bg-orange-50' :
+                      option.color === 'blue' ? 'border-blue-500 bg-blue-50' :
+                      'border-purple-500 bg-purple-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <Icon className={`w-4 h-4 ${
+                    formData.status === option.value
+                      ? option.color === 'green' ? 'text-green-600' :
+                        option.color === 'orange' ? 'text-orange-600' :
+                        option.color === 'blue' ? 'text-blue-600' :
+                        'text-purple-600'
+                      : 'text-gray-400'
+                  }`} />
+                  <span className="font-semibold text-gray-900">{option.label}</span>
+                </div>
+                <p className="text-xs text-gray-500">{option.description}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Time section */}
       <div className="space-y-4 p-4 bg-gray-50 rounded-xl">
         <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
@@ -643,6 +689,16 @@ function SummaryStep({ formData, photos, equipment, additionalEquipment = [], on
               {FAULT_TYPE_OPTIONS.find(f => f.value === formData.fault_type)?.label || formData.fault_type}
             </span>
           )}
+          {/* Status badge */}
+          <span className={`px-3 py-1 rounded-full text-sm font-medium flex items-center gap-1 ${
+            formData.status === 'completed' ? 'bg-green-100 text-green-700' :
+            formData.status === 'in_progress' ? 'bg-orange-100 text-orange-700' :
+            formData.status === 'pending_parts' ? 'bg-blue-100 text-blue-700' :
+            'bg-purple-100 text-purple-700'
+          }`}>
+            {formData.status === 'completed' ? <CheckCircle size={14} /> : <Clock size={14} />}
+            {STATUS_OPTIONS.find(s => s.value === formData.status)?.label || 'Résolu'}
+          </span>
         </div>
 
         {/* Times */}
@@ -810,6 +866,7 @@ export default function TroubleshootingWizard({
     severity: '',
     category: '',
     fault_type: '',
+    status: 'completed', // Default to completed, user can change to keep open
     intervention_date: new Date().toISOString().split('T')[0], // YYYY-MM-DD
     start_time: '', // HH:MM
     duration_minutes: 0,
@@ -869,6 +926,7 @@ export default function TroubleshootingWizard({
         severity: '',
         category: '',
         fault_type: '',
+        status: 'completed',
         intervention_date: new Date().toISOString().split('T')[0],
         start_time: '',
         duration_minutes: 0,
@@ -971,9 +1029,13 @@ export default function TroubleshootingWizard({
     try {
       const { started_at, completed_at } = calculateTimestamps();
 
+      // Get the original equipment ID - could be numeric (switchboard) or UUID
+      // This ensures the mini plan can find the equipment position
+      const equipmentOriginalId = equipment?.id || equipment?.item_id || equipment?.switchboard_id || equipment?.equipment_id;
+
       const payload = {
         equipment_type: equipmentType,
-        equipment_id: equipment?.id,
+        equipment_id: equipmentOriginalId, // This will be stored in equipment_original_id on server
         equipment_name: equipment?.name || equipment?.equipment_name,
         equipment_code: equipment?.code || equipment?.tag,
         building_code: equipment?.building_code || equipment?.building,
@@ -981,8 +1043,9 @@ export default function TroubleshootingWizard({
         zone: equipment?.zone,
         room: equipment?.room,
         ...formData,
+        status: formData.status || 'completed', // Send the selected status
         started_at: started_at.toISOString(),
-        completed_at: completed_at.toISOString(),
+        completed_at: formData.status === 'completed' ? completed_at.toISOString() : null,
         technician_name: userName,
         technician_email: userEmail,
         ai_diagnosis: aiSuggestion || null,
@@ -1028,6 +1091,7 @@ export default function TroubleshootingWizard({
       severity: '',
       category: '',
       fault_type: '',
+      status: 'completed',
       intervention_date: new Date().toISOString().split('T')[0],
       start_time: '',
       duration_minutes: 0,
