@@ -6,7 +6,7 @@ import {
   DoorOpen, BarChart3, ClipboardCheck, ChevronRight, Sparkles,
   Calendar, X, MapPin, Briefcase, Shield, Globe, Crown, Battery, Database,
   Play, Clock, CheckCircle, ChevronDown, Building2, Layers, Activity,
-  ArrowUpRight, ArrowDownRight, Zap as ZapIcon, Star, Bell, ShieldAlert
+  ArrowUpRight, ArrowDownRight, Zap as ZapIcon, Star, Bell, ShieldAlert, Ticket
 } from 'lucide-react';
 import {
   AreaChart, Area, PieChart as RechartsPie, Pie, Cell,
@@ -323,6 +323,8 @@ export default function Dashboard() {
   const [stats, setStats] = useState({ overdue: 0, pending: 0, completed: 0, total: 0, overdueByEquipment: {}, pendingByEquipment: {} });
   const [proceduresStats, setProceduresStats] = useState({ pendingAttention: 0 });
   const [doorsStats, setDoorsStats] = useState({ pendingAttention: 0 });
+  const [ticketsStats, setTicketsStats] = useState({ total: 0, unassigned: 0, my_tickets: 0, urgent: 0, user_teams: [] });
+  const [troubleshootingStats, setTroubleshootingStats] = useState({ total: 0 });
   const [briefData, setBriefData] = useState(null);
   const [chartData, setChartData] = useState([]);
   const [equipmentData, setEquipmentData] = useState([]);
@@ -340,8 +342,10 @@ export default function Dashboard() {
       aiAssistant.getMorningBrief().catch(() => null),
       aiAssistant.getHistoricalStats(7).catch(() => null),
       getProceduresDashboard().catch(() => null),
-      api.doors.dashboard().catch(() => null)
-    ]).then(([depts, sitesRes, me, controls, brief, historical, procedures, doors]) => {
+      api.doors.dashboard().catch(() => null),
+      fetch('/api/haleon-tickets/stats', { credentials: 'include', headers: { 'Authorization': `Bearer ${localStorage.getItem('eh_token') || ''}` } }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/troubleshooting/analytics/summary', { credentials: 'include', headers: { 'Authorization': `Bearer ${localStorage.getItem('eh_token') || ''}`, 'X-Site': JSON.parse(localStorage.getItem('eh_user') || '{}')?.site || '' } }).then(r => r.ok ? r.json() : null).catch(() => null)
+    ]).then(([depts, sitesRes, me, controls, brief, historical, procedures, doors, tickets, troubleshooting]) => {
       setDepartments(depts.departments || []);
       setSites(sitesRes.sites || []);
 
@@ -368,6 +372,16 @@ export default function Dashboard() {
 
       if (doors) {
         setDoorsStats(doors);
+      }
+
+      if (tickets) {
+        setTicketsStats(tickets);
+      }
+
+      if (troubleshooting) {
+        setTroubleshootingStats({
+          total: troubleshooting.total_interventions || 0
+        });
       }
 
       if (brief) {
@@ -588,7 +602,7 @@ export default function Dashboard() {
             <StatCard
               icon={Clock}
               value={filteredStats.pending}
-              label="À faire"
+              label="À faire (30j.)"
               color="from-amber-400 via-orange-500 to-red-600"
               glow="hover:shadow-orange-500/30"
               onClick={() => navigate('/app/switchboard-controls?tab=schedules')}
@@ -606,12 +620,12 @@ export default function Dashboard() {
               index={2}
             />
             <StatCard
-              icon={Activity}
-              value={healthScore}
-              label="Score santé"
-              color="from-blue-400 via-indigo-500 to-purple-600"
-              glow="hover:shadow-indigo-500/30"
-              onClick={() => setShowStory(true)}
+              icon={Ticket}
+              value={ticketsStats.total + troubleshootingStats.total}
+              label="Interventions"
+              color="from-purple-400 via-violet-500 to-indigo-600"
+              glow="hover:shadow-violet-500/30"
+              onClick={() => navigate('/app/troubleshooting')}
               index={3}
             />
           </div>
