@@ -1877,7 +1877,7 @@ export default function HighVoltage() {
         )}
 
         {/* Main Content Area */}
-        <div className={`flex-1 overflow-hidden ${isMobile && !selectedEquipment ? 'hidden' : ''}`}>
+        <div className={`flex-1 overflow-y-auto ${isMobile && !selectedEquipment ? 'hidden' : ''}`}>
           {selectedEquipment ? (
             <>
               {/* Mobile back button */}

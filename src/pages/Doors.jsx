@@ -1968,7 +1968,7 @@ export default function Doors() {
         )}
 
         {/* Main Panel */}
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-y-auto">
           {!selectedDoor ? (
             <div className="h-full flex items-center justify-center text-gray-500">
               <div className="text-center">
