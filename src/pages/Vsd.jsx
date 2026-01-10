@@ -515,9 +515,9 @@ const DetailPanel = ({
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-6 text-white">
+    <div className="bg-white">
+      {/* Header - sticky on mobile for quick access */}
+      <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-4 sm:p-6 text-white">
         <div className="flex items-center justify-between mb-4">
           <button
             onClick={onClose}
@@ -615,7 +615,7 @@ const DetailPanel = ({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
         {/* Mini Electro - AI Assistant (en premier sur mobile) */}
         <MiniElectro
           equipment={equipment}
@@ -850,11 +850,11 @@ const DetailPanel = ({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="border-t p-4 space-y-2">
+      {/* Actions - Boutons groupés */}
+      <div className="p-4 sm:p-6 pt-2 space-y-3">
         <button
           onClick={() => onNavigateToMap(equipment)}
-          className="w-full py-3 px-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium hover:from-green-600 hover:to-emerald-700 transition-all flex items-center justify-center gap-2"
+          className="w-full py-3 px-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium hover:from-green-600 hover:to-emerald-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-green-500/25"
         >
           <MapPin size={18} />
           {isPlaced ? 'Voir sur le plan' : 'Localiser sur le plan'}
@@ -987,9 +987,9 @@ const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
-      <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-6 text-white">
+      <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-4 sm:p-6 text-white">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-white/20 rounded-xl">
@@ -1011,7 +1011,7 @@ const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
       </div>
 
       {/* Form Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
         {/* AI Button */}
         <button
           onClick={() => setShowAIModal(true)}
@@ -1262,7 +1262,7 @@ const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
       </div>
 
       {/* Actions */}
-      <div className="border-t p-4 flex gap-3">
+      <div className="p-4 sm:p-6 pt-2 flex gap-3">
         <button
           onClick={onCancel}
           className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
@@ -1272,7 +1272,7 @@ const EditForm = ({ equipment, onSave, onCancel, showToast }) => {
         <button
           onClick={handleSave}
           disabled={isSaving}
-          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 text-white font-medium hover:from-green-600 hover:to-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2"
+          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 text-white font-medium hover:from-green-600 hover:to-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-green-500/25"
         >
           {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
           Enregistrer

@@ -497,7 +497,7 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, 
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
       <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-4 md:p-6 text-white">
         <div className="flex items-center justify-between">
@@ -517,7 +517,7 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, site, switchboards, 
       </div>
 
       {/* Form */}
-      <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+      <form onSubmit={handleSubmit} className="p-4 md:p-6 space-y-4 md:space-y-6">
         {/* Basic Info */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="md:col-span-2 lg:col-span-1">
@@ -968,7 +968,7 @@ const DetailPanel = ({
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
       <div className="bg-gradient-to-r from-amber-500 to-orange-600 p-4 md:p-6 text-white">
         <div className="flex items-center justify-between mb-4">
@@ -1033,7 +1033,7 @@ const DetailPanel = ({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6">
+      <div className="p-4 md:p-6 space-y-4 md:space-y-6">
         {/* Mini Electro - AI Assistant (en premier sur mobile) */}
         <MiniElectro
           equipment={equipment}
@@ -1276,16 +1276,16 @@ const DetailPanel = ({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="border-t p-4 flex gap-3">
+      {/* Actions - Boutons groupés */}
+      <div className="p-4 md:p-6 pt-2 flex gap-3">
         <button onClick={() => onNavigateToMap(equipment)}
-          className="flex-1 py-3 px-4 rounded-xl bg-emerald-100 text-emerald-700 font-medium hover:bg-emerald-200 flex items-center justify-center gap-2">
+          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-medium hover:from-emerald-600 hover:to-teal-700 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25">
           <MapPin size={18} />
           {isPlaced ? 'Voir sur le plan' : 'Localiser'}
         </button>
         {canDeleteEquipment(equipment) && (
           <button onClick={() => onDelete(equipment)}
-            className="py-3 px-4 rounded-xl bg-red-100 text-red-700 font-medium hover:bg-red-200">
+            className="py-3 px-4 rounded-xl bg-red-50 text-red-600 font-medium hover:bg-red-100">
             <Trash2 size={18} />
           </button>
         )}
