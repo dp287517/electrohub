@@ -291,25 +291,57 @@ export function createHaleonTicketsRouter(pool) {
     try {
       console.log('[Haleon Tickets] Synchronisation des équipes depuis Bubble...');
 
-      // 1. Récupérer les catégories (qui contiennent les équipes)
+      // 0. Nettoyer les anciennes équipes qui ont des noms ressemblant à des IDs Bubble
+      await pool.query(`
+        DELETE FROM haleon_ticket_teams
+        WHERE name ~ '^[0-9]{13}x[0-9]+$'
+      `);
+      console.log('[Haleon Tickets] Anciennes équipes avec IDs nettoyées');
+
+      // 1. D'abord récupérer les équipes (Utilities Team) pour avoir les vrais noms
+      let bubbleTeams = [];
+      try {
+        const teamsData = await bubbleFetch('/obj/Utilities%20Team?limit=100');
+        bubbleTeams = teamsData.response?.results || [];
+        console.log(`[Haleon Tickets] ${bubbleTeams.length} équipes trouvées dans Utilities Team`);
+      } catch (e) {
+        console.log('[Haleon Tickets] Table Utilities Team non trouvée:', e.message);
+      }
+
+      // Créer un map des équipes par ID pour lookup rapide
+      const teamsById = new Map();
+      for (const team of bubbleTeams) {
+        teamsById.set(team._id, team);
+      }
+
+      // 2. Récupérer les catégories
       const categoriesData = await bubbleFetch('/obj/TICKET:%20Cat%C3%A9gorie?limit=100');
       const categories = categoriesData.response?.results || [];
-
       console.log(`[Haleon Tickets] ${categories.length} catégories trouvées`);
 
-      // 2. Extraire les équipes uniques
+      // 3. Extraire les équipes uniques avec leurs vrais noms
       const teamsMap = new Map();
       for (const cat of categories) {
-        const teamName = cat.EquipeUser;
-        if (teamName && !teamsMap.has(teamName)) {
-          teamsMap.set(teamName, {
-            name: teamName,
-            color: cat.Color || '#3b82f6',
-            site: cat.Site || 'Nyon'
-          });
+        const teamId = cat.EquipeUser; // C'est un ID Bubble
+        if (teamId) {
+          const bubbleTeam = teamsById.get(teamId);
+          const teamName = bubbleTeam?.Nom || teamId; // Utiliser le nom ou fallback sur l'ID
+
+          if (!teamsMap.has(teamName)) {
+            teamsMap.set(teamName, {
+              bubble_id: teamId,
+              name: teamName,
+              color: cat.Color || '#3b82f6',
+              site: cat.Site || 'Nyon',
+              users: bubbleTeam?.Users || ''
+            });
+          }
         }
 
-        // Upsert catégorie
+        // Upsert catégorie avec le vrai nom d'équipe
+        const bubbleTeam = teamsById.get(cat.EquipeUser);
+        const categoryTeamName = bubbleTeam?.Nom || cat.EquipeUser;
+
         await pool.query(`
           INSERT INTO haleon_ticket_categories (bubble_category_id, name, team_name, color, icon_url, site, last_sync_at)
           VALUES ($1, $2, $3, $4, $5, $6, NOW())
@@ -321,28 +353,16 @@ export function createHaleonTicketsRouter(pool) {
             site = EXCLUDED.site,
             last_sync_at = NOW(),
             updated_at = NOW()
-        `, [cat._id, cat.Nom, cat.EquipeUser, cat.Color, cat.Image, cat.Site]);
+        `, [cat._id, cat.Nom, categoryTeamName, cat.Color, cat.Image, cat.Site]);
       }
 
-      // 3. Récupérer les équipes Bubble (table EquipeUser ou Utilities Team)
-      let bubbleTeams = [];
-      try {
-        // Essayer d'abord "Utilities Team"
-        const teamsData = await bubbleFetch('/obj/Utilities%20Team?limit=100');
-        bubbleTeams = teamsData.response?.results || [];
-      } catch (e) {
-        console.log('[Haleon Tickets] Table Utilities Team non trouvée, utilisation des catégories');
-      }
-
-      // 4. Upsert équipes
+      // 4. Upsert équipes avec les vrais noms
       let teamsCreated = 0;
       let teamsUpdated = 0;
 
       for (const [teamName, teamData] of teamsMap) {
-        // Chercher les infos complètes dans bubbleTeams
-        const bubbleTeam = bubbleTeams.find(t => t.Nom === teamName);
-        const bubbleUsers = bubbleTeam?.Users ?
-          (Array.isArray(bubbleTeam.Users) ? bubbleTeam.Users : bubbleTeam.Users.split(',').map(u => u.trim()))
+        const bubbleUsers = teamData.users ?
+          (Array.isArray(teamData.users) ? teamData.users : teamData.users.split(',').map(u => u.trim()))
           : [];
 
         // Upsert avec gestion d'erreur pour le cas où l'index n'existe pas encore
@@ -358,7 +378,7 @@ export function createHaleonTicketsRouter(pool) {
               last_sync_at = NOW(),
               updated_at = NOW()
             RETURNING (xmax = 0) as inserted
-          `, [bubbleTeam?._id, teamName, teamData.color, teamData.site, bubbleUsers]);
+          `, [teamData.bubble_id, teamName, teamData.color, teamData.site, bubbleUsers]);
 
           if (result.rows[0]?.inserted) {
             teamsCreated++;
@@ -385,13 +405,13 @@ export function createHaleonTicketsRouter(pool) {
                 SET bubble_team_id = COALESCE($2, bubble_team_id),
                     color = $3, site = $4, bubble_users = $5, last_sync_at = NOW(), updated_at = NOW()
                 WHERE name = $1
-              `, [teamName, bubbleTeam?._id, teamData.color, teamData.site, bubbleUsers]);
+              `, [teamName, teamData.bubble_id, teamData.color, teamData.site, bubbleUsers]);
               teamsUpdated++;
             } else {
               await pool.query(`
                 INSERT INTO haleon_ticket_teams (bubble_team_id, name, color, site, bubble_users, last_sync_at)
                 VALUES ($1, $2, $3, $4, $5, NOW())
-              `, [bubbleTeam?._id, teamName, teamData.color, teamData.site, bubbleUsers]);
+              `, [teamData.bubble_id, teamName, teamData.color, teamData.site, bubbleUsers]);
               teamsCreated++;
             }
           } else {
@@ -485,10 +505,11 @@ export function createHaleonTicketsRouter(pool) {
   // GET /api/haleon-tickets/available-users - Utilisateurs ElectroHub disponibles
   router.get('/available-users', requireAuth, requireAdmin, async (req, res) => {
     try {
+      // Récupérer les utilisateurs actifs de haleon_users
       const result = await pool.query(`
         SELECT DISTINCT email, name
         FROM haleon_users
-        WHERE is_validated = true AND is_active = true
+        WHERE is_active = true
         ORDER BY name, email
       `);
 
