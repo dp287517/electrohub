@@ -83,9 +83,11 @@ function getDaysOld(dateStr) {
   return Math.floor((now - date) / (1000 * 60 * 60 * 24));
 }
 
-// Build Bubble.io ticket URL - format: /ticket?unique_id=ID
-function getTicketUrl(ticketId) {
-  return `https://haleon-tool.io/ticket?unique_id=${ticketId}`;
+// Build Bubble.io ticket URL - format: ?screen=parcourirC&code=CODE
+function getTicketUrl(ticketCode) {
+  // Extract the numeric code from ticket_code (e.g., "TICKET#220091" -> "220091")
+  const code = ticketCode?.replace(/[^0-9]/g, '') || ticketCode;
+  return `https://haleon-tool.io/ticket?screen=parcourirC&code=${code}`;
 }
 
 // Extract photos from raw_data
@@ -222,7 +224,7 @@ function TicketRow({ ticket, onAssign, onView, userEmail }) {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              window.open(getTicketUrl(ticket.bubble_ticket_id), '_blank');
+              window.open(getTicketUrl(ticket.ticket_code), '_blank');
             }}
             className="p-1 sm:p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg"
             title="Ouvrir dans Haleon Tool"
@@ -235,73 +237,139 @@ function TicketRow({ ticket, onAssign, onView, userEmail }) {
   );
 }
 
-// Ticket Detail Modal with photos support - improved responsive
-function TicketDetailModal({ ticket, onClose, onAssign, userEmail }) {
+// Ticket Detail Modal - Full screen on mobile for better interaction
+function TicketDetailModal({ ticket, onClose, onAssign, userEmail, onRefresh }) {
   const [selectedPhoto, setSelectedPhoto] = useState(null);
+  const [assigning, setAssigning] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
 
   if (!ticket) return null;
 
-  const ticketUrl = getTicketUrl(ticket.bubble_ticket_id);
+  const ticketUrl = getTicketUrl(ticket.ticket_code);
   const isMyTicket = ticket.assigned_to_email?.toLowerCase() === userEmail?.toLowerCase();
   const daysOld = getDaysOld(ticket.bubble_created_at);
   const photos = getTicketPhotos(ticket.raw_data);
+  const canClose = isMyTicket && ticket.status_normalized === 'assigned';
+
+  const handleAssign = async () => {
+    setAssigning(true);
+    try {
+      const res = await fetch(`/api/haleon-tickets/${ticket.bubble_ticket_id}/assign`, {
+        ...getAuthOptions(),
+        method: 'POST'
+      });
+      if (res.ok) {
+        onRefresh?.();
+        onClose();
+      } else {
+        const data = await res.json();
+        alert('Erreur: ' + (data.error || 'Impossible d\'attribuer'));
+      }
+    } catch (err) {
+      alert('Erreur: ' + err.message);
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  const handleClose = async () => {
+    setClosing(true);
+    try {
+      const res = await fetch(`/api/haleon-tickets/${ticket.bubble_ticket_id}/close`, {
+        ...getAuthOptions(),
+        method: 'POST',
+        body: JSON.stringify({ resolution_note: 'Fermé depuis ElectroHub' })
+      });
+      if (res.ok) {
+        onRefresh?.();
+        onClose();
+      } else {
+        const data = await res.json();
+        alert('Erreur: ' + (data.error || 'Impossible de fermer'));
+      }
+    } catch (err) {
+      alert('Erreur: ' + err.message);
+    } finally {
+      setClosing(false);
+      setShowCloseConfirm(false);
+    }
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-sm">
-      <div className="relative bg-white rounded-xl sm:rounded-2xl shadow-2xl w-full max-w-lg max-h-[95vh] sm:max-h-[90vh] flex flex-col overflow-hidden animate-scaleIn">
-        {/* Header - compact on mobile */}
-        <div className="flex items-center justify-between p-3 sm:p-4 border-b bg-gradient-to-r from-purple-500/10 to-indigo-500/10">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 bg-purple-600 rounded-lg flex items-center justify-center flex-shrink-0">
-              <Ticket size={16} className="sm:w-5 sm:h-5 text-white" />
-            </div>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm">
+      {/* Full height on mobile, centered modal on desktop */}
+      <div className="relative bg-white w-full h-[95vh] sm:h-auto sm:max-h-[90vh] sm:max-w-lg sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-slideUp sm:animate-scaleIn rounded-t-2xl">
+        {/* Header - sticky */}
+        <div className="sticky top-0 z-10 flex items-center justify-between p-3 border-b bg-gradient-to-r from-purple-600 to-indigo-600 text-white">
+          <div className="flex items-center gap-2 min-w-0">
+            <Ticket size={20} />
             <div className="min-w-0">
+              <h3 className="font-bold text-sm truncate">{ticket.ticket_code}</h3>
               <div className="flex items-center gap-2">
-                <h3 className="font-bold text-gray-900 text-sm sm:text-base truncate">{ticket.ticket_code}</h3>
-                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${getPriorityColor(ticket.priority_normalized)}`} />
+                <span className={`w-2 h-2 rounded-full ${
+                  ticket.priority_normalized === 'urgent' || ticket.priority_normalized === 'safety'
+                    ? 'bg-red-400' : 'bg-white/60'
+                }`} />
+                <span className="text-xs opacity-90">{getPriorityLabel(ticket.priority_normalized)}</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-white/20">
+                  {getStatusLabel(ticket.status_normalized)}
+                </span>
               </div>
-              <span className={`text-xs px-1.5 sm:px-2 py-0.5 rounded border ${getStatusColor(ticket.status_normalized)}`}>
-                {getStatusLabel(ticket.status_normalized)}
-              </span>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 sm:p-2 text-gray-500 hover:bg-gray-100 rounded-lg flex-shrink-0"
-            title="Fermer"
+            className="p-2 hover:bg-white/20 rounded-lg"
           >
-            <X size={18} />
+            <X size={20} />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4">
+        {/* Content - scrollable */}
+        <div className="flex-1 overflow-y-auto">
+          {/* Quick info bar */}
+          <div className="grid grid-cols-3 gap-1 p-2 bg-gray-50 border-b text-center text-xs">
+            <div>
+              <div className="text-gray-500">Bâtiment</div>
+              <div className="font-medium truncate">{ticket.building || '-'}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">Zone</div>
+              <div className="font-medium truncate">{ticket.zone || '-'}</div>
+            </div>
+            <div>
+              <div className="text-gray-500">Créé</div>
+              <div className="font-medium">{formatDate(ticket.bubble_created_at)}</div>
+            </div>
+          </div>
+
           {/* Description */}
-          <div>
-            <h4 className="text-xs sm:text-sm font-semibold text-gray-700 mb-1">Description</h4>
-            <p className="text-xs sm:text-sm text-gray-800 bg-gray-50 p-2 sm:p-3 rounded-lg">
+          <div className="p-3 border-b">
+            <h4 className="text-xs font-semibold text-gray-500 mb-1">DESCRIPTION</h4>
+            <p className="text-sm text-gray-800 whitespace-pre-wrap">
               {ticket.description || 'Aucune description'}
             </p>
           </div>
 
           {/* Photos */}
           {photos.length > 0 && (
-            <div>
-              <h4 className="text-xs sm:text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1">
-                <ImageIcon size={14} /> Photos ({photos.length})
+            <div className="p-3 border-b">
+              <h4 className="text-xs font-semibold text-gray-500 mb-2 flex items-center gap-1">
+                <ImageIcon size={12} /> PHOTOS ({photos.length})
               </h4>
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+              <div className="flex gap-2 overflow-x-auto pb-2">
                 {photos.map((photo, idx) => (
                   <button
                     key={idx}
                     onClick={() => setSelectedPhoto(photo)}
-                    className="aspect-square rounded-lg overflow-hidden border-2 border-gray-200 hover:border-purple-400 transition-colors"
+                    className="flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 border-gray-200 hover:border-purple-400"
                   >
                     <img
                       src={photo}
                       alt={`Photo ${idx + 1}`}
                       className="w-full h-full object-cover"
-                      onError={(e) => { e.target.style.display = 'none'; }}
+                      onError={(e) => { e.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%23eee" width="100" height="100"/><text x="50" y="55" text-anchor="middle" fill="%23999" font-size="12">Erreur</text></svg>'; }}
                     />
                   </button>
                 ))}
@@ -309,96 +377,92 @@ function TicketDetailModal({ ticket, onClose, onAssign, userEmail }) {
             </div>
           )}
 
-          {/* Location */}
-          <div className="grid grid-cols-2 gap-2 sm:gap-3">
-            <div>
-              <h4 className="text-xs font-semibold text-gray-500 mb-1">Bâtiment</h4>
-              <div className="flex items-center gap-1 text-xs sm:text-sm text-gray-800">
-                <Building2 size={12} className="text-gray-400" />
-                {ticket.building || '-'}
-              </div>
-            </div>
-            <div>
-              <h4 className="text-xs font-semibold text-gray-500 mb-1">Zone</h4>
-              <div className="flex items-center gap-1 text-xs sm:text-sm text-gray-800">
-                <MapPin size={12} className="text-gray-400" />
-                {ticket.zone || '-'}
-              </div>
-            </div>
-          </div>
-
           {/* Details */}
-          <div className="grid grid-cols-2 gap-2 sm:gap-3">
-            <div>
-              <h4 className="text-xs font-semibold text-gray-500 mb-1">Équipe</h4>
-              <p className="text-xs sm:text-sm text-gray-800">{ticket.team_name || '-'}</p>
-            </div>
-            <div>
-              <h4 className="text-xs font-semibold text-gray-500 mb-1">Priorité</h4>
-              <p className="text-xs sm:text-sm text-gray-800">{getPriorityLabel(ticket.priority_normalized)}</p>
-            </div>
-          </div>
-
-          {/* Dates */}
-          <div className="grid grid-cols-2 gap-2 sm:gap-3">
-            <div>
-              <h4 className="text-xs font-semibold text-gray-500 mb-1">Créé le</h4>
-              <div className="flex items-center gap-1 text-xs sm:text-sm text-gray-800">
-                <Clock size={12} className="text-gray-400" />
-                {ticket.bubble_created_at ?
-                  new Date(ticket.bubble_created_at).toLocaleDateString('fr-FR', {
-                    day: 'numeric', month: 'short', year: 'numeric'
-                  }) : '-'}
-                {daysOld > 7 && (
-                  <span className="text-xs text-orange-600 ml-1">({daysOld}j)</span>
-                )}
+          <div className="p-3 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs text-gray-500">Équipe</div>
+                <div className="text-sm font-medium">{ticket.team_name || '-'}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Assigné à</div>
+                <div className="text-sm font-medium flex items-center gap-1">
+                  {ticket.assigned_to_name || ticket.assigned_to_email || 'Non assigné'}
+                  {isMyTicket && <span className="text-xs px-1 py-0.5 rounded bg-purple-100 text-purple-700">Moi</span>}
+                </div>
               </div>
             </div>
-            <div>
-              <h4 className="text-xs font-semibold text-gray-500 mb-1">Assigné à</h4>
-              <div className="flex items-center gap-1 text-xs sm:text-sm text-gray-800">
-                <User size={12} className="text-gray-400" />
-                <span className="truncate">{ticket.assigned_to_name || ticket.assigned_to_email || 'Non assigné'}</span>
-                {isMyTicket && (
-                  <span className="text-xs px-1 py-0.5 rounded bg-purple-100 text-purple-700 flex-shrink-0">Moi</span>
-                )}
-              </div>
-            </div>
-          </div>
 
-          {/* Requestor */}
-          {(ticket.requestor_email || ticket.created_by_email) && (
-            <div>
-              <h4 className="text-xs font-semibold text-gray-500 mb-1">Demandeur</h4>
-              <p className="text-xs sm:text-sm text-gray-800 truncate">
-                {ticket.requestor_name || ticket.created_by_name || ticket.requestor_email || ticket.created_by_email}
-              </p>
-            </div>
-          )}
+            {(ticket.created_by_email || ticket.requestor_email) && (
+              <div>
+                <div className="text-xs text-gray-500">Demandeur</div>
+                <div className="text-sm font-medium">
+                  {ticket.created_by_name || ticket.requestor_name || ticket.created_by_email || ticket.requestor_email}
+                </div>
+              </div>
+            )}
+
+            {daysOld > 7 && (
+              <div className="flex items-center gap-2 p-2 bg-orange-50 rounded-lg text-orange-700 text-sm">
+                <AlertTriangle size={16} />
+                <span>Ce ticket a {daysOld} jours</span>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Actions - mobile optimized */}
-        <div className="p-3 sm:p-4 border-t bg-gray-50 flex flex-col sm:flex-row gap-2">
-          {ticket.status_normalized === 'unassigned' && (
-            <button
-              onClick={() => {
-                onAssign(ticket.bubble_ticket_id);
-                onClose();
-              }}
-              className="flex-1 flex items-center justify-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 bg-purple-600 text-white rounded-lg sm:rounded-xl hover:bg-purple-700 transition-colors font-medium text-sm"
-            >
-              <UserPlus size={16} />
-              M'attribuer
-            </button>
-          )}
+        {/* Actions - sticky bottom */}
+        <div className="sticky bottom-0 p-3 border-t bg-white space-y-2">
+          {/* Main actions */}
+          <div className="flex gap-2">
+            {ticket.status_normalized === 'unassigned' && (
+              <button
+                onClick={handleAssign}
+                disabled={assigning}
+                className="flex-1 flex items-center justify-center gap-2 py-3 bg-purple-600 text-white rounded-xl font-medium disabled:opacity-50"
+              >
+                {assigning ? <RefreshCw size={18} className="animate-spin" /> : <UserPlus size={18} />}
+                {assigning ? 'Attribution...' : 'M\'attribuer ce ticket'}
+              </button>
+            )}
+            {canClose && !showCloseConfirm && (
+              <button
+                onClick={() => setShowCloseConfirm(true)}
+                className="flex-1 flex items-center justify-center gap-2 py-3 bg-green-600 text-white rounded-xl font-medium"
+              >
+                <CheckCircle size={18} />
+                Fermer le ticket
+              </button>
+            )}
+            {showCloseConfirm && (
+              <>
+                <button
+                  onClick={handleClose}
+                  disabled={closing}
+                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-green-600 text-white rounded-xl font-medium disabled:opacity-50"
+                >
+                  {closing ? <RefreshCw size={18} className="animate-spin" /> : <CheckCircle size={18} />}
+                  Confirmer
+                </button>
+                <button
+                  onClick={() => setShowCloseConfirm(false)}
+                  className="px-4 py-3 bg-gray-200 text-gray-700 rounded-xl font-medium"
+                >
+                  Annuler
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* External link */}
           <a
             href={ticketUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className={`${ticket.status_normalized === 'unassigned' ? '' : 'flex-1'} flex items-center justify-center gap-2 px-3 sm:px-4 py-2 sm:py-2.5 bg-white border-2 border-purple-200 text-purple-700 rounded-lg sm:rounded-xl hover:bg-purple-50 transition-colors font-medium text-sm`}
+            className="flex items-center justify-center gap-2 py-2 text-purple-600 text-sm"
           >
-            <ExternalLink size={16} />
-            Ouvrir Haleon Tool
+            <ExternalLink size={14} />
+            Ouvrir sur haleon-tool.io
           </a>
         </div>
       </div>
@@ -406,25 +470,22 @@ function TicketDetailModal({ ticket, onClose, onAssign, userEmail }) {
       {/* Photo lightbox */}
       {selectedPhoto && (
         <div
-          className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/90"
+          className="fixed inset-0 z-60 flex items-center justify-center p-2 bg-black/95"
           onClick={() => setSelectedPhoto(null)}
         >
           <button
             onClick={() => setSelectedPhoto(null)}
-            className="absolute top-4 right-4 p-2 text-white hover:bg-white/20 rounded-lg"
+            className="absolute top-4 right-4 p-2 text-white bg-white/20 rounded-full"
           >
             <X size={24} />
           </button>
           <img
             src={selectedPhoto}
-            alt="Photo en grand"
-            className="max-w-full max-h-full object-contain rounded-lg"
+            alt="Photo"
+            className="max-w-full max-h-full object-contain"
           />
         </div>
       )}
-
-      {/* Backdrop click to close */}
-      <div className="absolute inset-0 -z-10" onClick={onClose} />
 
       {/* Animation styles */}
       <style>{`
@@ -432,7 +493,12 @@ function TicketDetailModal({ ticket, onClose, onAssign, userEmail }) {
           from { opacity: 0; transform: scale(0.95); }
           to { opacity: 1; transform: scale(1); }
         }
+        @keyframes slideUp {
+          from { opacity: 0; transform: translateY(100%); }
+          to { opacity: 1; transform: translateY(0); }
+        }
         .animate-scaleIn { animation: scaleIn 0.2s ease-out; }
+        .animate-slideUp { animation: slideUp 0.3s ease-out; }
       `}</style>
     </div>
   );
@@ -715,6 +781,7 @@ export default function HaleonTicketsWidget({ userEmail, className = '' }) {
           onClose={() => setSelectedTicket(null)}
           onAssign={handleAssign}
           userEmail={userEmail}
+          onRefresh={loadData}
         />
       )}
     </div>
