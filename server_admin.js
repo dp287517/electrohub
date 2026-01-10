@@ -459,9 +459,33 @@ router.delete("/companies/:id", adminOnly, async (req, res) => {
   }
 });
 
+// Ensure logo columns exist in companies table (auto-migration)
+let logoColumnsChecked = false;
+async function ensureLogoColumns() {
+  if (logoColumnsChecked) return;
+  try {
+    const check = await pool.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'companies' AND column_name = 'logo'
+    `);
+    if (check.rows.length === 0) {
+      console.log('[Admin] Adding logo columns to companies table...');
+      await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo BYTEA`);
+      await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_mime TEXT DEFAULT 'image/png'`);
+      console.log('[Admin] ✅ Logo columns added successfully');
+    }
+    logoColumnsChecked = true;
+  } catch (err) {
+    console.warn('[Admin] Logo migration warning:', err.message);
+  }
+}
+
 // POST /api/admin/companies/:id/logo - Upload company logo
 router.post("/companies/:id/logo", adminOnly, uploadMemory.single('logo'), async (req, res) => {
   try {
+    // Ensure columns exist before updating
+    await ensureLogoColumns();
+
     const { id } = req.params;
     if (!req.file) {
       return res.status(400).json({ error: "No image file provided" });

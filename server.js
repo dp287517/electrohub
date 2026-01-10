@@ -10388,8 +10388,33 @@ app.use("/api/admin", adminRouter);
 /* ================================================================
    🏢 Company Logo API - Public endpoint to get company logo
    ================================================================ */
+
+// Ensure logo columns exist in companies table (auto-migration)
+let logoColumnsChecked = false;
+async function ensureLogoColumns() {
+  if (logoColumnsChecked) return;
+  try {
+    const check = await pool.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'companies' AND column_name = 'logo'
+    `);
+    if (check.rows.length === 0) {
+      console.log('[Company Logo] Adding logo columns to companies table...');
+      await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo BYTEA`);
+      await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS logo_mime TEXT DEFAULT 'image/png'`);
+      console.log('[Company Logo] ✅ Logo columns added successfully');
+    }
+    logoColumnsChecked = true;
+  } catch (err) {
+    console.warn('[Company Logo] Migration warning:', err.message);
+  }
+}
+
 app.get("/api/companies/:id/logo", async (req, res) => {
   try {
+    // Ensure columns exist before querying
+    await ensureLogoColumns();
+
     const { id } = req.params;
     const result = await pool.query(`
       SELECT logo, logo_mime FROM companies WHERE id = $1
