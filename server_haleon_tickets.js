@@ -304,6 +304,10 @@ export function createHaleonTicketsRouter(pool) {
         const teamsData = await bubbleFetch('/obj/Utilities%20Team?limit=100');
         bubbleTeams = teamsData.response?.results || [];
         console.log(`[Haleon Tickets] ${bubbleTeams.length} équipes trouvées dans Utilities Team`);
+        // Debug: afficher les équipes
+        if (bubbleTeams.length > 0) {
+          console.log('[Haleon Tickets] Exemple équipe:', JSON.stringify(bubbleTeams[0], null, 2));
+        }
       } catch (e) {
         console.log('[Haleon Tickets] Table Utilities Team non trouvée:', e.message);
       }
@@ -318,6 +322,10 @@ export function createHaleonTicketsRouter(pool) {
       const categoriesData = await bubbleFetch('/obj/TICKET:%20Cat%C3%A9gorie?limit=100');
       const categories = categoriesData.response?.results || [];
       console.log(`[Haleon Tickets] ${categories.length} catégories trouvées`);
+      // Debug: afficher une catégorie
+      if (categories.length > 0) {
+        console.log('[Haleon Tickets] Exemple catégorie:', JSON.stringify(categories[0], null, 2));
+      }
 
       // 3. Extraire les équipes uniques avec leurs vrais noms
       const teamsMap = new Map();
