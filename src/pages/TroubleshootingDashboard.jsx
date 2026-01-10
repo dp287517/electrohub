@@ -576,26 +576,26 @@ export default function TroubleshootingDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white">
-        <div className="max-w-7xl mx-auto px-4 py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-white/20 rounded-xl">
-                <Wrench size={28} />
+      {/* Header - Black/slate theme */}
+      <div className="bg-gradient-to-r from-slate-800 via-slate-900 to-black text-white">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 sm:gap-4">
+              <div className="p-2 sm:p-3 bg-white/20 rounded-xl">
+                <Wrench size={24} className="sm:w-7 sm:h-7" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold">Rapports de dépannage</h1>
-                <p className="text-white/80 text-sm">
+                <h1 className="text-lg sm:text-2xl font-bold">Rapports de dépannage</h1>
+                <p className="text-white/80 text-xs sm:text-sm hidden xs:block">
                   Analyse et suivi des interventions
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
                 onClick={generateReport}
-                className="flex items-center gap-2 px-4 py-2 bg-white/20 rounded-xl hover:bg-white/30 transition-colors"
+                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-4 py-1.5 sm:py-2 bg-white/20 rounded-lg sm:rounded-xl hover:bg-white/30 transition-colors text-sm"
               >
                 <Download size={18} />
                 <span className="hidden sm:inline">Exporter PDF</span>
@@ -678,7 +678,7 @@ export default function TroubleshootingDashboard() {
                   value={filters.search}
                   onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
                   placeholder="Rechercher un dépannage..."
-                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-slate-500 focus:border-transparent"
                 />
               </div>
               <button
@@ -716,7 +716,7 @@ export default function TroubleshootingDashboard() {
                 <select
                   value={filters.equipment_type}
                   onChange={(e) => setFilters(prev => ({ ...prev, equipment_type: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent"
                 >
                   <option value="">Tous</option>
                   <option value="switchboard">Tableaux</option>
@@ -733,7 +733,7 @@ export default function TroubleshootingDashboard() {
                 <select
                   value={filters.severity}
                   onChange={(e) => setFilters(prev => ({ ...prev, severity: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent"
                 >
                   <option value="">Toutes</option>
                   <option value="critical">Critique</option>
@@ -749,7 +749,7 @@ export default function TroubleshootingDashboard() {
                   value={filters.building_code}
                   onChange={(e) => setFilters(prev => ({ ...prev, building_code: e.target.value }))}
                   placeholder="Code bâtiment"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent"
                 />
               </div>
               <div>
@@ -757,7 +757,7 @@ export default function TroubleshootingDashboard() {
                 <select
                   value={filters.status}
                   onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent"
                 >
                   <option value="">Tous</option>
                   <option value="in_progress">En cours</option>
@@ -771,7 +771,7 @@ export default function TroubleshootingDashboard() {
                 <select
                   value={filters.source}
                   onChange={(e) => setFilters(prev => ({ ...prev, source: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent"
                 >
                   <option value="">Toutes</option>
                   <option value="manual">Manuel</option>
@@ -785,7 +785,7 @@ export default function TroubleshootingDashboard() {
                   type="date"
                   value={filters.date_from}
                   onChange={(e) => setFilters(prev => ({ ...prev, date_from: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent"
                 />
               </div>
               <div>
@@ -794,7 +794,7 @@ export default function TroubleshootingDashboard() {
                   type="date"
                   value={filters.date_to}
                   onChange={(e) => setFilters(prev => ({ ...prev, date_to: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-slate-500 focus:border-transparent"
                 />
               </div>
             </div>
@@ -806,7 +806,7 @@ export default function TroubleshootingDashboard() {
             {/* Tab content */}
             {loading ? (
           <div className="flex items-center justify-center py-12">
-            <RefreshCw className="w-8 h-8 text-orange-500 animate-spin" />
+            <RefreshCw className="w-8 h-8 text-slate-700 animate-spin" />
           </div>
         ) : (
           <>
@@ -825,18 +825,29 @@ export default function TroubleshootingDashboard() {
                   records.map((record, idx) => (
                     <div
                       key={record.id}
-                      className="bg-white rounded-xl border p-4 hover:shadow-md transition-shadow animate-slideUp cursor-pointer"
+                      className="bg-white rounded-xl border p-3 sm:p-4 hover:shadow-md transition-shadow animate-slideUp cursor-pointer"
                       style={{ animationDelay: `${idx * 30}ms` }}
                       onClick={() => navigate(`/app/troubleshooting/${record.id}`)}
                     >
-                      <div className="flex items-start justify-between gap-4">
+                      {/* Mobile: Stack layout, Desktop: Side-by-side */}
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-4">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <span className="text-xs font-mono text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
+                          {/* Badges row - wrap on mobile */}
+                          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap mb-1.5">
+                            <span className="text-xs font-mono text-gray-400 bg-gray-100 px-1.5 sm:px-2 py-0.5 rounded">
                               #{record.row_number || idx + 1}
                             </span>
                             <EquipmentTypeBadge type={record.equipment_type} />
                             <SeverityBadge severity={record.severity} />
+                            {/* Status badge for open items */}
+                            {record.status && record.status !== 'completed' && (
+                              <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">
+                                <Clock size={10} />
+                                {record.status === 'in_progress' ? 'En cours' :
+                                 record.status === 'pending_parts' ? 'Pièces' :
+                                 record.status === 'pending_external' ? 'Externe' : record.status}
+                              </span>
+                            )}
                             {record.photo_count > 0 && (
                               <span className="flex items-center gap-1 text-xs text-gray-500">
                                 <Image size={12} />
@@ -845,11 +856,12 @@ export default function TroubleshootingDashboard() {
                             )}
                           </div>
 
-                          <h3 className="font-semibold text-gray-900 truncate">{record.title}</h3>
+                          <h3 className="font-semibold text-gray-900 text-sm sm:text-base line-clamp-2 sm:truncate">{record.title}</h3>
 
-                          <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
-                            <span className="flex items-center gap-1">
-                              <MapPin size={12} />
+                          {/* Location info - compact on mobile */}
+                          <div className="flex items-center gap-2 sm:gap-3 mt-1 text-xs sm:text-sm text-gray-500 flex-wrap">
+                            <span className="flex items-center gap-1 truncate max-w-[150px] sm:max-w-none">
+                              <MapPin size={12} className="flex-shrink-0" />
                               {record.equipment_name || record.equipment_code || 'N/A'}
                             </span>
                             {record.building_code && (
@@ -858,18 +870,24 @@ export default function TroubleshootingDashboard() {
                                 {record.building_code}
                               </span>
                             )}
+                            {/* Date on mobile - inline */}
+                            <span className="sm:hidden text-gray-400">
+                              {new Date(record.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })}
+                            </span>
                           </div>
 
-                          <p className="text-sm text-gray-600 mt-2 line-clamp-2">{record.description}</p>
+                          {/* Description - hidden on mobile for compact view */}
+                          <p className="hidden sm:block text-sm text-gray-600 mt-2 line-clamp-2">{record.description}</p>
                         </div>
 
-                        <div className="text-right flex-shrink-0">
+                        {/* Right side info - hidden on mobile, shown in badges instead */}
+                        <div className="hidden sm:block text-right flex-shrink-0">
                           <p className="text-sm text-gray-500">
                             {new Date(record.created_at).toLocaleDateString('fr-FR')}
                           </p>
                           <p className="text-xs text-gray-400 mt-1">{record.technician_name}</p>
                           {(record.duration_minutes || record.downtime_minutes) && (
-                            <div className="flex items-center gap-2 mt-2 text-xs">
+                            <div className="flex items-center justify-end gap-2 mt-2 text-xs">
                               {record.duration_minutes > 0 && (
                                 <span className="flex items-center gap-1 text-gray-500">
                                   <Clock size={10} />
@@ -887,14 +905,31 @@ export default function TroubleshootingDashboard() {
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => navigate(`/app/troubleshooting/${record.id}`)}
-                          className="flex items-center gap-1 px-3 py-1.5 text-sm bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 transition-colors"
-                        >
-                          <Eye size={14} />
-                          Ouvrir
-                        </button>
+                      {/* Action buttons - compact on mobile */}
+                      <div className="flex items-center justify-between sm:justify-end gap-2 mt-2 sm:mt-3 pt-2 sm:pt-3 border-t" onClick={(e) => e.stopPropagation()}>
+                        {/* Mobile: show duration/downtime */}
+                        <div className="flex sm:hidden items-center gap-2 text-xs text-gray-500">
+                          {record.duration_minutes > 0 && (
+                            <span className="flex items-center gap-1">
+                              <Clock size={10} />
+                              {record.duration_minutes}min
+                            </span>
+                          )}
+                          {record.downtime_minutes > 0 && (
+                            <span className="flex items-center gap-1 text-red-500">
+                              <AlertTriangle size={10} />
+                              {record.downtime_minutes}min
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => navigate(`/app/troubleshooting/${record.id}`)}
+                            className="flex items-center gap-1 px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors"
+                          >
+                            <Eye size={14} />
+                            <span className="hidden xs:inline">Ouvrir</span>
+                          </button>
                         <a
                           href={`${API_BASE}/api/troubleshooting/${record.id}/pdf`}
                           target="_blank"

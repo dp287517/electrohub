@@ -671,8 +671,8 @@ export default function TroubleshootingDetail() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header - Improved mobile responsive */}
-      <div className={`${editMode ? 'bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500' : 'bg-gradient-to-r from-orange-500 via-red-500 to-pink-500'} text-white`}>
+      {/* Header - Black theme, improved mobile responsive */}
+      <div className={`${editMode ? 'bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600' : 'bg-gradient-to-r from-slate-800 via-slate-900 to-black'} text-white`}>
         <div className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
           {/* Top row - Back link and action buttons */}
           <div className="flex items-center justify-between mb-3 sm:mb-4">
