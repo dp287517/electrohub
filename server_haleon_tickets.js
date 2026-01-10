@@ -298,33 +298,66 @@ export function createHaleonTicketsRouter(pool) {
       `);
       console.log('[Haleon Tickets] Anciennes équipes avec IDs nettoyées');
 
-      // 1. D'abord récupérer les équipes (Utilities Team) pour avoir les vrais noms
+      // 1. Chercher la table des équipes - essayer plusieurs noms possibles
       let bubbleTeams = [];
-      try {
-        const teamsData = await bubbleFetch('/obj/Utilities%20Team?limit=100');
-        bubbleTeams = teamsData.response?.results || [];
-        console.log(`[Haleon Tickets] ${bubbleTeams.length} équipes trouvées dans Utilities Team`);
-        // Debug: afficher les équipes
-        if (bubbleTeams.length > 0) {
-          console.log('[Haleon Tickets] Exemple équipe:', JSON.stringify(bubbleTeams[0], null, 2));
+      const possibleTeamTables = [
+        'Equipe',
+        'TICKET:%20Equipe',
+        'EquipeUser',
+        'Team',
+        'Teams',
+        'Utilities%20Team',
+        'User%20Team',
+        'TICKET:%20Team'
+      ];
+
+      for (const tableName of possibleTeamTables) {
+        try {
+          console.log(`[Haleon Tickets] Essai table: ${tableName}`);
+          const teamsData = await bubbleFetch(`/obj/${tableName}?limit=100`);
+          const results = teamsData.response?.results || [];
+          console.log(`[Haleon Tickets] ${tableName}: ${results.length} résultats`);
+          if (results.length > 0) {
+            console.log(`[Haleon Tickets] Exemple de ${tableName}:`, JSON.stringify(results[0], null, 2));
+            // Vérifier si cette table a les bons IDs
+            const sampleId = results[0]._id;
+            console.log(`[Haleon Tickets] Sample ID format: ${sampleId}`);
+          }
+          if (results.length > 0 && !bubbleTeams.length) {
+            bubbleTeams = results;
+          }
+        } catch (e) {
+          console.log(`[Haleon Tickets] Table ${tableName} non trouvée:`, e.message);
         }
-      } catch (e) {
-        console.log('[Haleon Tickets] Table Utilities Team non trouvée:', e.message);
       }
 
       // Créer un map des équipes par ID pour lookup rapide
       const teamsById = new Map();
       for (const team of bubbleTeams) {
         teamsById.set(team._id, team);
+        // Aussi mapper par Membre si c'est un champ présent
+        if (team.Membre) {
+          teamsById.set(team.Membre, team);
+        }
       }
+      console.log(`[Haleon Tickets] Map des équipes créé avec ${teamsById.size} entrées`)
 
       // 2. Récupérer les catégories
       const categoriesData = await bubbleFetch('/obj/TICKET:%20Cat%C3%A9gorie?limit=100');
       const categories = categoriesData.response?.results || [];
       console.log(`[Haleon Tickets] ${categories.length} catégories trouvées`);
-      // Debug: afficher une catégorie
-      if (categories.length > 0) {
-        console.log('[Haleon Tickets] Exemple catégorie:', JSON.stringify(categories[0], null, 2));
+
+      // Debug: collecter tous les EquipeUser uniques pour comparaison
+      const uniqueEquipeUsers = new Set();
+      for (const cat of categories) {
+        if (cat.EquipeUser) {
+          uniqueEquipeUsers.add(cat.EquipeUser);
+        }
+      }
+      console.log(`[Haleon Tickets] ${uniqueEquipeUsers.size} EquipeUser uniques dans les catégories:`);
+      for (const id of uniqueEquipeUsers) {
+        const found = teamsById.has(id);
+        console.log(`[Haleon Tickets]   - ${id} => ${found ? 'TROUVÉ' : 'NON TROUVÉ'}`);
       }
 
       // 3. Extraire les équipes uniques avec leurs vrais noms
