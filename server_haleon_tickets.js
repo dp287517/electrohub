@@ -298,61 +298,51 @@ export function createHaleonTicketsRouter(pool) {
       `);
       console.log('[Haleon Tickets] Anciennes équipes avec IDs nettoyées');
 
-      // 1. Récupérer quelques tickets pour extraire le mapping Catégorie → Équipe
-      // Car le champ "Catégorie Equipe/User" dans les tickets contient le nom texte de l'équipe
-      let ticketsData;
-      const categoryToTeamName = new Map();
-
-      try {
-        ticketsData = await bubbleFetch('/obj/TICKET?limit=200');
-        const tickets = ticketsData.response?.results || [];
-        console.log(`[Haleon Tickets] ${tickets.length} tickets récupérés pour mapping`);
-
-        // Debug: afficher un exemple de ticket
-        if (tickets.length > 0) {
-          console.log('[Haleon Tickets] Exemple ticket:', JSON.stringify(tickets[0], null, 2));
-        }
-
-        // Construire le mapping Catégorie ID → Nom d'équipe
-        for (const ticket of tickets) {
-          const categoryId = ticket['Catégorie'];
-          const teamName = ticket['Catégorie Equipe/User'];
-
-          if (categoryId && teamName && !categoryToTeamName.has(categoryId)) {
-            categoryToTeamName.set(categoryId, teamName);
-            console.log(`[Haleon Tickets] Mapping: ${categoryId} → ${teamName}`);
-          }
-        }
-        console.log(`[Haleon Tickets] ${categoryToTeamName.size} mappings catégorie→équipe trouvés`);
-      } catch (e) {
-        console.log('[Haleon Tickets] Erreur récupération tickets:', e.message);
-      }
+      // 1. Mapping statique Nom de catégorie → Nom d'équipe (basé sur Bubble UI)
+      // L'API Bubble retourne des IDs pour les références, pas les noms texte
+      const categoryNameToTeam = {
+        'Déplacement de mobiliers et agencements': 'Technicien Facility',
+        'Nettoyage (Propreté des locaux)': 'Cleaning',
+        'Meeting room, printer, écrans, TV (only support)': 'Employee Experience et Services',
+        'Chauffage, ventilation (HVAC)': 'Thermistes',
+        'Réparations mineures et entretiens de base': 'Technicien Facility',
+        'Déchets (transport ou récupération)': 'Waste',
+        'Transfert (palettes et colis)': 'Technicien Facility',
+        'EPI et habits jetables': 'Softservice',
+        'Maintenance infrastructure (bâtiment)': 'Infra',
+        'Maintenance Electrique': 'Elec',
+        'Consommables bureautiques': 'Softservice',
+        'Espaces verts et extérieurs': 'Infra',
+        'Restauration, fitness': 'Employee Experience et Services',
+        'Aménagement Meeting Room, salle': 'Technicien Facility',
+        'Haleon-Tool Support': 'Haleon-tool Support',
+        'Consignation Electrique / Utilités': 'Consignation',
+        'Machine (café), fontaines à eau, distrib. snack': 'My Greenshop',
+        'Accessoires IT': 'Softservice'
+      };
 
       // 2. Récupérer les catégories
       const categoriesData = await bubbleFetch('/obj/TICKET:%20Cat%C3%A9gorie?limit=100');
       const categories = categoriesData.response?.results || [];
       console.log(`[Haleon Tickets] ${categories.length} catégories trouvées`);
 
-      // 3. Construire le mapping EquipeUser ID → Nom d'équipe via les catégories et tickets
-      // Pour chaque catégorie, on cherche son nom d'équipe dans le mapping des tickets
+      // 3. Construire le mapping EquipeUser ID → Nom d'équipe via les noms de catégories
       const equipeUserToName = new Map();
       for (const cat of categories) {
-        const teamNameFromTicket = categoryToTeamName.get(cat._id);
-        if (teamNameFromTicket && cat.EquipeUser) {
-          equipeUserToName.set(cat.EquipeUser, teamNameFromTicket);
+        const teamName = categoryNameToTeam[cat.Nom];
+        if (teamName && cat.EquipeUser) {
+          equipeUserToName.set(cat.EquipeUser, teamName);
+          console.log(`[Haleon Tickets] Mapping: ${cat.EquipeUser} → ${teamName} (via "${cat.Nom}")`);
         }
       }
       console.log(`[Haleon Tickets] ${equipeUserToName.size} mappings EquipeUser→nom trouvés`);
-      for (const [id, name] of equipeUserToName) {
-        console.log(`[Haleon Tickets]   ${id} → ${name}`);
-      }
 
       // 4. Extraire les équipes uniques avec leurs vrais noms
       const teamsMap = new Map();
       for (const cat of categories) {
         const teamId = cat.EquipeUser;
         if (teamId) {
-          // Utiliser le nom trouvé via tickets, sinon fallback sur l'ID
+          // Utiliser le nom trouvé via mapping, sinon fallback sur l'ID
           const teamName = equipeUserToName.get(teamId) || teamId;
 
           if (!teamsMap.has(teamName)) {
@@ -382,7 +372,7 @@ export function createHaleonTicketsRouter(pool) {
         `, [cat._id, cat.Nom, categoryTeamName, cat.Color, cat.Image, cat.Site]);
       }
 
-      // 4. Upsert équipes avec les vrais noms
+      // 5. Upsert équipes avec les vrais noms
       let teamsCreated = 0;
       let teamsUpdated = 0;
 
