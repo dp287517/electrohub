@@ -298,17 +298,13 @@ export function createHaleonTicketsRouter(pool) {
       `);
       console.log('[Haleon Tickets] Anciennes équipes avec IDs nettoyées');
 
-      // 1. Chercher la table des équipes - essayer plusieurs noms possibles
+      // 1. Chercher la table des équipes - essayer les tables Bubble réelles
       let bubbleTeams = [];
       const possibleTeamTables = [
-        'Equipe',
-        'TICKET:%20Equipe',
-        'EquipeUser',
-        'Team',
-        'Teams',
-        'Utilities%20Team',
-        'User%20Team',
-        'TICKET:%20Team'
+        'TICKET:%20Cat%C3%A9gorie%20-%20EquipeUser',  // Table liaison catégorie-équipe
+        'TICKET:%20ActionTICKET',
+        'TICKET',
+        'Utilities%20Team'
       ];
 
       for (const tableName of possibleTeamTables) {
