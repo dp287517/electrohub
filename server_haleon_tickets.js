@@ -561,17 +561,20 @@ export function createHaleonTicketsRouter(pool) {
     try {
       console.log('[Haleon Tickets] Synchronisation des tickets depuis Bubble...');
 
-      // Récupérer les tickets ouverts
-      const constraints = [
-        { key: 'Statut', constraint_type: 'contains', value: 'Ouvert' }
-      ];
-
+      // Récupérer tous les tickets récents (sans filtre car Statut est une Option Set)
+      // On filtre côté serveur ensuite
       const ticketsData = await bubbleFetch(
-        `/obj/TICKET?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=200&sort_field=Modified%20Date&descending=true`
+        `/obj/TICKET?limit=200&sort_field=Modified%20Date&descending=true`
       );
 
-      const tickets = ticketsData.response?.results || [];
-      console.log(`[Haleon Tickets] ${tickets.length} tickets ouverts trouvés`);
+      const allTickets = ticketsData.response?.results || [];
+      console.log(`[Haleon Tickets] ${allTickets.length} tickets récupérés`);
+
+      // Filtrer les tickets ouverts (statut contient "Ouvert")
+      const tickets = allTickets.filter(t =>
+        t.Statut && t.Statut.toLowerCase().includes('ouvert')
+      );
+      console.log(`[Haleon Tickets] ${tickets.length} tickets ouverts après filtrage`);
 
       let synced = 0;
       for (const ticket of tickets) {
