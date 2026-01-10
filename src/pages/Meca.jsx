@@ -531,9 +531,9 @@ const DetailPanel = ({
     equipment.speed_rpm || equipment.fluid || equipment.flow_m3h || equipment.pressure_bar;
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
-      <div className="bg-gradient-to-r from-orange-500 to-amber-600 p-6 text-white">
+      <div className="bg-gradient-to-r from-orange-500 to-amber-600 p-4 sm:p-6 text-white">
         <div className="flex items-center justify-between mb-4">
           <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg md:hidden"><X size={20} /></button>
           <button onClick={() => onEdit(equipment)} className="p-2 hover:bg-white/20 rounded-lg"><Edit3 size={18} /></button>
@@ -610,7 +610,7 @@ const DetailPanel = ({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
 
         {/* Mini Electro - AI Assistant (en premier sur mobile) */}
         <MiniElectro
@@ -921,11 +921,11 @@ const DetailPanel = ({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="border-t p-4 space-y-2">
+      {/* Actions - Boutons groupés */}
+      <div className="p-4 sm:p-6 pt-2 space-y-3">
         <button
           onClick={() => onNavigateToMap(equipment)}
-          className="w-full py-3 px-4 bg-gradient-to-r from-orange-500 to-amber-600 text-white rounded-xl font-medium hover:from-orange-600 hover:to-amber-700 transition-all flex items-center justify-center gap-2"
+          className="w-full py-3 px-4 bg-gradient-to-r from-orange-500 to-amber-600 text-white rounded-xl font-medium hover:from-orange-600 hover:to-amber-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-orange-500/25"
         >
           <MapPin size={18} />
           {isPlaced ? 'Voir sur le plan' : 'Localiser sur le plan'}
@@ -1144,9 +1144,9 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
-      <div className="bg-gradient-to-r from-orange-500 to-amber-600 p-6 text-white">
+      <div className="bg-gradient-to-r from-orange-500 to-amber-600 p-4 sm:p-6 text-white">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-white/20 rounded-xl">
@@ -1164,7 +1164,7 @@ const CategoriesSettingsPanel = ({ onClose, showToast }) => {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="p-4 sm:p-6">
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
             <RefreshCw size={32} className="animate-spin text-orange-500" />
@@ -1637,9 +1637,9 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) =
   ];
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
-      <div className="bg-gradient-to-r from-orange-500 to-amber-600 p-6 text-white">
+      <div className="bg-gradient-to-r from-orange-500 to-amber-600 p-4 sm:p-6 text-white">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-white/20 rounded-xl">
@@ -1661,7 +1661,7 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) =
       </div>
 
       {/* Form Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
         {/* AI Button */}
         <button
           onClick={() => setShowAIModal(true)}
@@ -2003,7 +2003,7 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) =
       </div>
 
       {/* Actions */}
-      <div className="border-t p-4 flex gap-3">
+      <div className="p-4 sm:p-6 pt-2 flex gap-3">
         <button
           onClick={onCancel}
           className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
@@ -2013,7 +2013,7 @@ const EditForm = ({ equipment, onSave, onCancel, showToast, categories = [] }) =
         <button
           onClick={handleSave}
           disabled={isSaving}
-          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-orange-500 to-amber-600 text-white font-medium hover:from-orange-600 hover:to-amber-700 disabled:opacity-50 flex items-center justify-center gap-2"
+          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-orange-500 to-amber-600 text-white font-medium hover:from-orange-600 hover:to-amber-700 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-orange-500/25"
         >
           {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
           Enregistrer

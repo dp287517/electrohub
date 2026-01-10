@@ -643,9 +643,9 @@ const DetailPanel = ({
   const doorStateVariant = door.door_state === 'conforme' ? 'success' : door.door_state === 'non_conforme' ? 'danger' : 'default';
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
-      <div className="bg-gradient-to-r from-rose-500 to-red-600 p-6 text-white">
+      <div className="bg-gradient-to-r from-rose-500 to-red-600 p-4 sm:p-6 text-white">
         <div className="flex items-center justify-between mb-4">
           <button
             onClick={onClose}
@@ -740,7 +740,7 @@ const DetailPanel = ({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
         {/* Mini Electro - AI Assistant (en premier sur mobile) */}
         <MiniElectro
           equipment={door}
@@ -1025,11 +1025,11 @@ const DetailPanel = ({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="border-t p-4 flex gap-3">
+      {/* Actions - Boutons groupés */}
+      <div className="p-4 sm:p-6 pt-2 flex gap-3">
         <button
           onClick={() => onNavigateToMap(door)}
-          className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 flex items-center justify-center gap-2"
+          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 text-white font-medium hover:from-rose-600 hover:to-red-700 flex items-center justify-center gap-2 shadow-lg shadow-rose-500/25"
         >
           <MapPin size={18} />
           Voir sur plan
@@ -1037,7 +1037,7 @@ const DetailPanel = ({
         {canDeleteEquipment(door) && (
         <button
           onClick={() => onDelete(door)}
-          className="py-3 px-4 rounded-xl border border-red-200 text-red-600 font-medium hover:bg-red-50 flex items-center justify-center gap-2"
+          className="py-3 px-4 rounded-xl bg-red-50 text-red-600 font-medium hover:bg-red-100 flex items-center justify-center gap-2"
         >
           <Trash2 size={18} />
         </button>
@@ -1114,9 +1114,9 @@ const EditForm = ({ door, onSave, onCancel, showToast }) => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
-      <div className="bg-gradient-to-r from-rose-500 to-red-600 p-6 text-white">
+      <div className="bg-gradient-to-r from-rose-500 to-red-600 p-4 sm:p-6 text-white">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-white/20 rounded-xl">
             <DoorOpen size={24} />
@@ -1129,7 +1129,7 @@ const EditForm = ({ door, onSave, onCancel, showToast }) => {
       </div>
 
       {/* Form Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
         {/* Identification */}
         <div className="space-y-4">
           <h3 className="font-semibold text-gray-900 flex items-center gap-2">
@@ -1223,7 +1223,7 @@ const EditForm = ({ door, onSave, onCancel, showToast }) => {
       </div>
 
       {/* Actions */}
-      <div className="border-t p-4 flex gap-3">
+      <div className="p-4 sm:p-6 pt-2 flex gap-3">
         <button
           onClick={onCancel}
           className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
@@ -1233,7 +1233,7 @@ const EditForm = ({ door, onSave, onCancel, showToast }) => {
         <button
           onClick={handleSave}
           disabled={isSaving}
-          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 text-white font-medium hover:from-rose-600 hover:to-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 text-white font-medium hover:from-rose-600 hover:to-red-700 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-rose-500/25"
         >
           {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
           Enregistrer
@@ -1324,9 +1324,9 @@ const CheckForm = ({ door, settings, onSave, onCancel, showToast }) => {
   const allFilled = items.every(item => item.value);
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
-      <div className="bg-gradient-to-r from-rose-500 to-red-600 p-6 text-white">
+      <div className="bg-gradient-to-r from-rose-500 to-red-600 p-4 sm:p-6 text-white">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-white/20 rounded-xl">
             <ClipboardCheck size={24} />
@@ -1339,7 +1339,7 @@ const CheckForm = ({ door, settings, onSave, onCancel, showToast }) => {
       </div>
 
       {/* Checklist */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="p-4 sm:p-6 space-y-4">
         {items.map((item, index) => (
           <div key={index} className="bg-gray-50 rounded-xl p-4">
             <p className="font-medium text-gray-900 mb-3">{item.label}</p>
@@ -1435,7 +1435,7 @@ const CheckForm = ({ door, settings, onSave, onCancel, showToast }) => {
       </div>
 
       {/* Actions */}
-      <div className="border-t p-4 space-y-3">
+      <div className="p-4 sm:p-6 pt-2 space-y-3">
         <div className="flex gap-3">
           <button
             onClick={onCancel}
@@ -1455,7 +1455,7 @@ const CheckForm = ({ door, settings, onSave, onCancel, showToast }) => {
         <button
           onClick={() => handleSave(true)}
           disabled={isClosing || !allFilled}
-          className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-medium hover:from-emerald-600 hover:to-teal-700 disabled:opacity-50 flex items-center justify-center gap-2"
+          className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-medium hover:from-emerald-600 hover:to-teal-700 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25"
         >
           {isClosing ? <RefreshCw size={18} className="animate-spin" /> : <CheckCircle size={18} />}
           Terminer le contrôle

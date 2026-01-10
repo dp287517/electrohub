@@ -637,9 +637,9 @@ const DetailPanel = ({
   const stateVariant = equipment.equipment_state === 'conforme' ? 'success' : equipment.equipment_state === 'non_conforme' ? 'danger' : 'default';
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
-      <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-6 text-white">
+      <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-4 sm:p-6 text-white">
         <div className="flex items-center justify-between mb-4">
           <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg md:hidden"><X size={20} /></button>
           <button onClick={() => onEdit(equipment)} className="p-2 hover:bg-white/20 rounded-lg"><Edit3 size={18} /></button>
@@ -700,7 +700,7 @@ const DetailPanel = ({
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
         {/* Mini Electro - AI Assistant (en premier sur mobile) */}
         <MiniElectro
           equipment={equipment}
@@ -973,14 +973,14 @@ const DetailPanel = ({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="border-t p-4 space-y-2">
+      {/* Actions - Boutons groupés */}
+      <div className="p-4 sm:p-6 pt-2 space-y-3">
         <button
           onClick={() => onNavigateToMap(equipment)}
-          className={`w-full py-3 px-4 rounded-xl font-medium flex items-center justify-center gap-2 transition-all ${
+          className={`w-full py-3 px-4 rounded-xl font-medium flex items-center justify-center gap-2 transition-all shadow-lg ${
             isPlaced
-              ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700'
-              : 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white hover:from-blue-600 hover:to-cyan-700'
+              ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700 shadow-emerald-500/25'
+              : 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white hover:from-blue-600 hover:to-cyan-700 shadow-blue-500/25'
           }`}
         >
           <MapPin size={18} />
@@ -1097,9 +1097,9 @@ const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
+    <div className="bg-white">
       {/* Header */}
-      <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-6 text-white">
+      <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-4 sm:p-6 text-white">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-white/20 rounded-xl">
             <Cpu size={24} />
@@ -1112,7 +1112,7 @@ const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
       </div>
 
       {/* Form Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
         {/* Identification */}
         <div className="space-y-4">
           <h3 className="font-semibold text-gray-900 flex items-center gap-2">
@@ -1248,7 +1248,7 @@ const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
       </div>
 
       {/* Actions */}
-      <div className="border-t p-4 flex gap-3">
+      <div className="p-4 sm:p-6 pt-2 flex gap-3">
         <button
           onClick={onCancel}
           className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50"
@@ -1258,7 +1258,7 @@ const EditForm = ({ equipment, categories, onSave, onCancel, showToast }) => {
         <button
           onClick={handleSave}
           disabled={isSaving}
-          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white font-medium hover:from-blue-600 hover:to-cyan-700 disabled:opacity-50 flex items-center justify-center gap-2"
+          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white font-medium hover:from-blue-600 hover:to-cyan-700 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25"
         >
           {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
           Enregistrer

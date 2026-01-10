@@ -417,8 +417,8 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
-      <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-6 text-white">
+    <div className="bg-white">
+      <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-4 sm:p-6 text-white">
         <div className="flex items-center justify-between mb-4">
           <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg md:hidden"><X size={20} /></button>
           <button onClick={() => onEdit(item)} className="p-2 hover:bg-white/20 rounded-lg"><Edit3 size={18} /></button>
@@ -468,7 +468,7 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="p-4 sm:p-6 space-y-4">
         {/* Mini Electro - AI Assistant (en premier sur mobile) */}
         <MiniElectro
           equipment={item}
@@ -549,11 +549,12 @@ const DetailPanel = ({ item, onClose, onEdit, onDelete, onNavigateToMap, isPlace
         </div>
       </div>
 
-      <div className="border-t p-4 space-y-2">
+      {/* Actions - Boutons groupés */}
+      <div className="p-4 sm:p-6 pt-2 space-y-3">
         <button onClick={() => onNavigateToMap(item)}
-          className={`w-full py-3 px-4 rounded-xl font-medium flex items-center justify-center gap-2 ${isPlaced
-            ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white'
-            : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white'}`}>
+          className={`w-full py-3 px-4 rounded-xl font-medium flex items-center justify-center gap-2 shadow-lg ${isPlaced
+            ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-emerald-500/25'
+            : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-indigo-500/25'}`}>
           <MapPin size={18} />{isPlaced ? 'Voir sur le plan' : 'Localiser sur le plan'}
         </button>
         {canDeleteEquipment(item) && (
@@ -697,8 +698,8 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
-      <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-6 text-white">
+    <div className="bg-white">
+      <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-4 sm:p-6 text-white">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-white/20 rounded-xl"><Database size={24} /></div>
           <div>
@@ -708,7 +709,7 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
         {/* Photo Section */}
         <div className="space-y-4">
           <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Camera size={16} className="text-indigo-500" />Photo</h3>
@@ -857,10 +858,11 @@ const EditForm = ({ item, categories, onSave, onCancel, showToast }) => {
         </div>
       </div>
 
-      <div className="border-t p-4 flex gap-3">
+      {/* Actions */}
+      <div className="p-4 sm:p-6 pt-2 flex gap-3">
         <button onClick={onCancel} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">Annuler</button>
         <button onClick={handleSave} disabled={isSaving}
-          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2">
+          className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-medium disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/25">
           {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}Enregistrer
         </button>
       </div>
