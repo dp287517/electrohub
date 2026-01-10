@@ -804,7 +804,7 @@ function SummaryStep({ formData, photos, equipment, additionalEquipment = [], on
 }
 
 // Success screen
-function SuccessScreen({ recordId, onClose, onViewReport, onNewTroubleshooting }) {
+function SuccessScreen({ recordId, onClose, onViewTroubleshooting, onNewTroubleshooting }) {
   return (
     <div className="text-center py-8 animate-slideIn">
       <div className="w-20 h-20 bg-gradient-to-br from-green-400 to-emerald-500 rounded-full flex items-center justify-center mx-auto mb-6 animate-pulse-ring">
@@ -818,11 +818,11 @@ function SuccessScreen({ recordId, onClose, onViewReport, onNewTroubleshooting }
 
       <div className="flex flex-col gap-3 justify-center">
         <button
-          onClick={onViewReport}
+          onClick={onViewTroubleshooting}
           className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:from-blue-600 hover:to-indigo-700 transition-all"
         >
-          <Download size={18} />
-          Télécharger le rapport PDF
+          <Eye size={18} />
+          Voir le dépannage
         </button>
         <div className="flex flex-col sm:flex-row gap-3">
           <button
@@ -1073,9 +1073,9 @@ export default function TroubleshootingWizard({
     }
   };
 
-  const handleViewReport = () => {
+  const handleViewTroubleshooting = () => {
     if (recordId) {
-      window.open(`${API_BASE}/api/troubleshooting/${recordId}/pdf`, '_blank');
+      navigate(`/app/troubleshooting/${recordId}`);
     }
   };
 
@@ -1155,7 +1155,7 @@ export default function TroubleshootingWizard({
             <SuccessScreen
               recordId={recordId}
               onClose={onClose}
-              onViewReport={handleViewReport}
+              onViewTroubleshooting={handleViewTroubleshooting}
               onNewTroubleshooting={handleNewTroubleshooting}
             />
           ) : (

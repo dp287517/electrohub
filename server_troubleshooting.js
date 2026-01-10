@@ -1134,7 +1134,7 @@ router.get('/analytics/summary', async (req, res) => {
 // PDF REPORT GENERATION
 // ============================================================
 
-// Generate single troubleshooting report PDF
+// Generate single troubleshooting report PDF - Modern layout matching SharedTroubleshootingView
 router.get('/:id/pdf', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1155,107 +1155,254 @@ router.get('/:id/pdf', async (req, res) => {
     const photos = photosRes.rows;
     const settings = settingsRes.rows[0] || {};
 
-    // Create PDF
-    const doc = new PDFDocument({ size: 'A4', margin: 50, bufferPages: true });
+    // Create PDF with modern styling
+    const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="depannage_${record.equipment_code || record.id}.pdf"`);
     doc.pipe(res);
 
-    // Header
-    let y = 50;
+    const pageWidth = 595;
+    const margin = 40;
+    const contentWidth = pageWidth - margin * 2;
 
-    // Logo
+    // === HEADER - Dark gradient background (like SharedTroubleshootingView) ===
+    const headerHeight = 120;
+
+    // Draw dark gradient header background
+    doc.rect(0, 0, pageWidth, headerHeight).fill('#1e293b');
+    // Add subtle gradient effect with darker stripe
+    doc.rect(0, 0, pageWidth, headerHeight).fill('#0f172a');
+    doc.rect(0, 0, pageWidth * 0.7, headerHeight).fill('#1e293b');
+
+    // Company logo in white box (if available)
+    let logoEndX = margin + 50;
     if (settings.logo) {
       try {
-        doc.image(settings.logo, 50, y, { width: 60 });
-      } catch (e) { /* ignore */ }
+        doc.roundedRect(margin, 25, 50, 50, 8).fill('#ffffff');
+        doc.image(settings.logo, margin + 5, 30, { width: 40, height: 40, fit: [40, 40] });
+        logoEndX = margin + 60;
+      } catch (e) {
+        // Fallback: wrench icon area
+        doc.roundedRect(margin, 25, 50, 50, 8).fill('rgba(255,255,255,0.2)');
+        logoEndX = margin + 60;
+      }
+    } else {
+      // Wrench icon placeholder
+      doc.roundedRect(margin, 25, 50, 50, 8).fill('rgba(255,255,255,0.2)');
     }
 
     // Title
-    doc.fontSize(20).fillColor('#1e40af').text('RAPPORT DE DÉPANNAGE', 130, y, { width: 280, align: 'center' });
-    doc.fontSize(10).fillColor('#6b7280').text(settings.company_name || site, 130, y + 25, { width: 280, align: 'center' });
+    doc.fontSize(18).fillColor('#ffffff').font('Helvetica-Bold');
+    const titleText = record.title || 'Rapport de dépannage';
+    doc.text(titleText, logoEndX + 10, 28, { width: 350 });
 
-    // Severity badge
-    const severityColors = { critical: '#dc2626', major: '#f59e0b', minor: '#22c55e', cosmetic: '#6b7280' };
-    const severityLabels = { critical: 'CRITIQUE', major: 'MAJEUR', minor: 'MINEUR', cosmetic: 'COSMÉTIQUE' };
-    const badgeColor = severityColors[record.severity] || '#6b7280';
-    doc.rect(470, y, 75, 24).fill(badgeColor);
-    doc.fontSize(10).fillColor('#ffffff').text(severityLabels[record.severity] || record.severity?.toUpperCase() || 'N/A', 475, y + 7, { width: 65, align: 'center' });
-
-    // Info box
-    y = 100;
-    doc.rect(50, y, 495, 100).fill('#f3f4f6');
-    doc.fontSize(10).fillColor('#374151');
-
-    // Equipment info
-    doc.font('Helvetica-Bold').text('Équipement:', 60, y + 12);
-    doc.font('Helvetica').text(`${record.equipment_name || ''} ${record.equipment_code ? `(${record.equipment_code})` : ''}`, 140, y + 12);
-
-    doc.font('Helvetica-Bold').text('Type:', 60, y + 28);
-    doc.font('Helvetica').text(getEquipmentTypeLabel(record.equipment_type), 140, y + 28);
-
-    doc.font('Helvetica-Bold').text('Localisation:', 60, y + 44);
-    doc.font('Helvetica').text(`${record.building_code || ''} ${record.floor ? `- Étage ${record.floor}` : ''} ${record.zone ? `- Zone ${record.zone}` : ''}`, 140, y + 44);
-
-    doc.font('Helvetica-Bold').text('Technicien:', 60, y + 60);
-    doc.font('Helvetica').text(`${record.technician_name} ${record.technician_email ? `(${record.technician_email})` : ''}`, 140, y + 60);
-
-    doc.font('Helvetica-Bold').text('Date:', 60, y + 76);
-    doc.font('Helvetica').text(new Date(record.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }), 140, y + 76);
-
-    // Right column
-    doc.font('Helvetica-Bold').text('Durée intervention:', 320, y + 12);
-    doc.font('Helvetica').text(formatDuration(record.duration_minutes), 430, y + 12);
-
-    doc.font('Helvetica-Bold').text('Temps d\'arrêt:', 320, y + 28);
-    doc.font('Helvetica').text(formatDuration(record.downtime_minutes), 430, y + 28);
-
-    doc.font('Helvetica-Bold').text('Catégorie:', 320, y + 44);
-    doc.font('Helvetica').text(record.category || 'N/A', 430, y + 44);
-
-    doc.font('Helvetica-Bold').text('Type de panne:', 320, y + 60);
-    doc.font('Helvetica').text(getFaultTypeLabel(record.fault_type), 430, y + 60);
-
-    // Show source if from maintenance NC
-    if (record.source === 'maintenance_nc') {
-      doc.font('Helvetica-Bold').text('Source:', 320, y + 76);
-      doc.font('Helvetica').fillColor('#dc2626').text('NC Maintenance', 430, y + 76);
-      if (record.source_nc_item) {
-        doc.font('Helvetica').fillColor('#374151');
-      }
+    // Date and technician
+    doc.fontSize(10).fillColor('rgba(255,255,255,0.8)').font('Helvetica');
+    const dateStr = new Date(record.created_at).toLocaleDateString('fr-FR', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+    });
+    doc.text(dateStr, logoEndX + 10, 55);
+    if (record.technician_name) {
+      doc.text(`Technicien: ${record.technician_name}`, logoEndX + 10, 70);
     }
 
-    // Mini plan section (if equipment has a position on a plan)
-    y = 210;
-    let miniPlanRendered = false;
-    // Use equipment_original_id for position lookup (works with both UUID and numeric IDs)
+    // Status and Severity badges (top right)
+    const statusLabels = {
+      in_progress: 'En cours', completed: 'Résolu', pending_review: 'En attente',
+      pending_parts: 'Attente pièces', pending_external: 'Attente externe',
+      open: 'Ouvert', resolved: 'Résolu', closed: 'Clôturé'
+    };
+    const statusColors = {
+      in_progress: '#f97316', completed: '#22c55e', pending_review: '#6b7280',
+      pending_parts: '#3b82f6', pending_external: '#8b5cf6',
+      open: '#ef4444', resolved: '#22c55e', closed: '#6b7280'
+    };
+    const severityColors = { critical: '#dc2626', major: '#f97316', minor: '#eab308', cosmetic: '#6b7280' };
+    const severityLabels = { critical: 'Critique', major: 'Majeur', minor: 'Mineur', cosmetic: 'Cosmétique' };
+
+    // Status badge
+    const statusColor = statusColors[record.status] || '#6b7280';
+    const statusLabel = statusLabels[record.status] || record.status || 'N/A';
+    doc.roundedRect(pageWidth - margin - 150, 25, 70, 22, 11).fill(statusColor);
+    doc.fontSize(9).fillColor('#ffffff').text(statusLabel, pageWidth - margin - 148, 31, { width: 66, align: 'center' });
+
+    // Severity badge
+    const sevColor = severityColors[record.severity] || '#6b7280';
+    const sevLabel = severityLabels[record.severity] || record.severity || 'N/A';
+    doc.roundedRect(pageWidth - margin - 75, 25, 70, 22, 11).fill(sevColor);
+    doc.fontSize(9).fillColor('#ffffff').text(sevLabel, pageWidth - margin - 73, 31, { width: 66, align: 'center' });
+
+    // === MAIN CONTENT AREA ===
+    let y = headerHeight + 20;
+    const cardPadding = 15;
+    const leftColWidth = contentWidth * 0.65 - 10;
+    const rightColWidth = contentWidth * 0.35 - 10;
+    const rightColX = margin + leftColWidth + 20;
+
+    // Helper function for white cards with shadow effect
+    const drawCard = (x, cardY, width, height) => {
+      doc.roundedRect(x, cardY, width, height, 8).fill('#ffffff');
+      doc.roundedRect(x, cardY, width, height, 8).stroke('#e5e7eb');
+    };
+
+    // Helper function for section headers inside cards
+    const drawSectionHeader = (x, headerY, text, iconColor = '#f97316') => {
+      doc.fontSize(11).fillColor(iconColor).font('Helvetica-Bold').text('●', x + cardPadding, headerY);
+      doc.fillColor('#111827').text(text, x + cardPadding + 15, headerY);
+      return headerY + 20;
+    };
+
+    // === LEFT COLUMN - Main Content ===
+
+    // Description Card
+    let descHeight = 80;
+    const descText = record.description || 'Aucune description';
+    const descTextHeight = doc.heightOfString(descText, { width: leftColWidth - cardPadding * 2 });
+    descHeight = Math.max(80, descTextHeight + 50);
+
+    drawCard(margin, y, leftColWidth, descHeight);
+    let cardY = drawSectionHeader(margin, y + cardPadding, 'Description du problème');
+    doc.fontSize(10).fillColor('#374151').font('Helvetica');
+    doc.text(descText, margin + cardPadding, cardY, { width: leftColWidth - cardPadding * 2 });
+
+    y += descHeight + 15;
+
+    // Root Cause Card (if available)
+    if (record.root_cause) {
+      const causeTextHeight = doc.heightOfString(record.root_cause, { width: leftColWidth - cardPadding * 2 });
+      const causeHeight = causeTextHeight + 50;
+
+      if (y + causeHeight > 750) { doc.addPage(); y = 40; }
+
+      drawCard(margin, y, leftColWidth, causeHeight);
+      cardY = drawSectionHeader(margin, y + cardPadding, 'Cause identifiée', '#eab308');
+      doc.fontSize(10).fillColor('#374151').font('Helvetica');
+      doc.text(record.root_cause, margin + cardPadding, cardY, { width: leftColWidth - cardPadding * 2 });
+
+      y += causeHeight + 15;
+    }
+
+    // Solution Card (if available)
+    if (record.solution) {
+      const solTextHeight = doc.heightOfString(record.solution, { width: leftColWidth - cardPadding * 2 });
+      const solHeight = solTextHeight + 50;
+
+      if (y + solHeight > 750) { doc.addPage(); y = 40; }
+
+      drawCard(margin, y, leftColWidth, solHeight);
+      cardY = drawSectionHeader(margin, y + cardPadding, 'Solution appliquée', '#22c55e');
+      doc.fontSize(10).fillColor('#374151').font('Helvetica');
+      doc.text(record.solution, margin + cardPadding, cardY, { width: leftColWidth - cardPadding * 2 });
+
+      y += solHeight + 15;
+    }
+
+    // Parts Replaced Card (if available)
+    if (record.parts_replaced) {
+      const partsTextHeight = doc.heightOfString(record.parts_replaced, { width: leftColWidth - cardPadding * 2 });
+      const partsHeight = partsTextHeight + 50;
+
+      if (y + partsHeight > 750) { doc.addPage(); y = 40; }
+
+      drawCard(margin, y, leftColWidth, partsHeight);
+      cardY = drawSectionHeader(margin, y + cardPadding, 'Pièces remplacées', '#6366f1');
+      doc.fontSize(10).fillColor('#374151').font('Helvetica');
+      doc.text(record.parts_replaced, margin + cardPadding, cardY, { width: leftColWidth - cardPadding * 2 });
+
+      y += partsHeight + 15;
+    }
+
+    // === RIGHT COLUMN - Sidebar Info ===
+    let sidebarY = headerHeight + 20;
+
+    // Equipment Card
+    const equipCardHeight = 100;
+    drawCard(rightColX, sidebarY, rightColWidth, equipCardHeight);
+    cardY = drawSectionHeader(rightColX, sidebarY + cardPadding, 'Équipement', '#f97316');
+
+    doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Type', rightColX + cardPadding, cardY);
+    doc.fontSize(10).fillColor('#111827').font('Helvetica-Bold').text(getEquipmentTypeLabel(record.equipment_type), rightColX + cardPadding, cardY + 12);
+    cardY += 30;
+
+    if (record.equipment_name) {
+      doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Nom', rightColX + cardPadding, cardY);
+      doc.fontSize(10).fillColor('#111827').font('Helvetica').text(record.equipment_name, rightColX + cardPadding, cardY + 12);
+    }
+
+    sidebarY += equipCardHeight + 15;
+
+    // Location Card
+    if (record.building_code || record.floor || record.zone) {
+      const locCardHeight = 85;
+      drawCard(rightColX, sidebarY, rightColWidth, locCardHeight);
+      cardY = drawSectionHeader(rightColX, sidebarY + cardPadding, 'Localisation', '#3b82f6');
+
+      if (record.building_code) {
+        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Bâtiment', rightColX + cardPadding, cardY);
+        doc.fontSize(10).fillColor('#111827').font('Helvetica').text(record.building_code, rightColX + cardPadding, cardY + 12);
+        cardY += 25;
+      }
+      if (record.floor) {
+        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Étage', rightColX + cardPadding, cardY);
+        doc.fontSize(10).fillColor('#111827').font('Helvetica').text(record.floor, rightColX + cardPadding, cardY + 12);
+      }
+
+      sidebarY += locCardHeight + 15;
+    }
+
+    // Time Card
+    const timeCardHeight = 110;
+    if (sidebarY + timeCardHeight < 750) {
+      drawCard(rightColX, sidebarY, rightColWidth, timeCardHeight);
+      cardY = drawSectionHeader(rightColX, sidebarY + cardPadding, 'Temps', '#8b5cf6');
+
+      if (record.started_at) {
+        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Début', rightColX + cardPadding, cardY);
+        doc.fontSize(10).fillColor('#111827').font('Helvetica').text(
+          new Date(record.started_at).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
+          rightColX + cardPadding, cardY + 12
+        );
+        cardY += 28;
+      }
+
+      if (record.duration_minutes) {
+        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Durée intervention', rightColX + cardPadding, cardY);
+        doc.fontSize(10).fillColor('#111827').font('Helvetica').text(formatDuration(record.duration_minutes), rightColX + cardPadding, cardY + 12);
+        cardY += 28;
+      }
+
+      if (record.downtime_minutes) {
+        doc.fontSize(9).fillColor('#dc2626').font('Helvetica').text('Temps d\'arrêt', rightColX + cardPadding, cardY);
+        doc.fontSize(11).fillColor('#dc2626').font('Helvetica-Bold').text(formatDuration(record.downtime_minutes), rightColX + cardPadding, cardY + 12);
+      }
+
+      sidebarY += timeCardHeight + 15;
+    }
+
+    // === MINI PLAN (if equipment has a position) ===
     const equipmentIdForPlan = record.equipment_original_id || record.equipment_id;
     if (equipmentIdForPlan && record.equipment_type) {
       try {
         const planData = await getEquipmentPlanData(record.equipment_type, equipmentIdForPlan);
         if (planData?.thumbnail) {
-          const miniPlanImage = await generateMiniPlanImage(planData);
+          const miniPlanImage = await generateMiniPlanImage(planData, record.equipment_type);
           if (miniPlanImage) {
-            // Mini plan section with header
-            doc.rect(50, y, 495, 25).fill('#dbeafe');
-            doc.fontSize(11).fillColor('#1e40af').font('Helvetica-Bold').text('LOCALISATION SUR PLAN', 60, y + 7);
-            y += 30;
+            if (y + 180 > 750) { doc.addPage(); y = 40; }
 
-            const planWidth = 200;
-            const planHeight = 140;
+            const planCardHeight = 170;
+            drawCard(margin, y, leftColWidth, planCardHeight);
+            cardY = drawSectionHeader(margin, y + cardPadding, 'Localisation sur plan', '#3b82f6');
 
             try {
-              doc.image(miniPlanImage, 50, y, { fit: [planWidth, planHeight], align: 'center' });
-              doc.rect(50, y, planWidth, planHeight).stroke('#93c5fd');
-
-              // Plan name label
-              doc.fontSize(8).fillColor('#6b7280').text(planData.display_name || 'Plan', 50, y + planHeight + 3, { width: planWidth, align: 'center' });
-
-              y += planHeight + 20;
-              miniPlanRendered = true;
+              const planImgWidth = leftColWidth - cardPadding * 2;
+              const planImgHeight = 120;
+              doc.image(miniPlanImage, margin + cardPadding, cardY, { fit: [planImgWidth, planImgHeight], align: 'center' });
+              doc.fontSize(8).fillColor('#6b7280').text(planData.display_name || 'Plan', margin + cardPadding, cardY + planImgHeight + 5, { width: planImgWidth, align: 'center' });
             } catch (imgErr) {
               console.warn('[TROUBLESHOOTING PDF] Mini plan image error:', imgErr.message);
             }
+
+            y += planCardHeight + 15;
           }
         }
       } catch (planErr) {
@@ -1263,129 +1410,70 @@ router.get('/:id/pdf', async (req, res) => {
       }
     }
 
-    // Title section
-    if (!miniPlanRendered) y = 220;
-    doc.rect(50, y, 495, 30).fill('#1e40af');
-    doc.fontSize(14).fillColor('#ffffff').text('DESCRIPTION DU PROBLÈME', 60, y + 9);
-    y += 40;
-
-    doc.fontSize(12).fillColor('#1f2937').font('Helvetica-Bold').text(record.title, 50, y, { width: 495 });
-    y += doc.heightOfString(record.title, { width: 495 }) + 15;
-
-    doc.fontSize(10).fillColor('#374151').font('Helvetica').text(record.description, 50, y, { width: 495 });
-    y += doc.heightOfString(record.description, { width: 495 }) + 20;
-
-    // Root cause if available
-    if (record.root_cause) {
-      if (y > 650) { doc.addPage(); y = 50; }
-      doc.rect(50, y, 495, 25).fill('#fef3c7');
-      doc.fontSize(11).fillColor('#92400e').font('Helvetica-Bold').text('CAUSE IDENTIFIÉE', 60, y + 7);
-      y += 35;
-      doc.fontSize(10).fillColor('#374151').font('Helvetica').text(record.root_cause, 50, y, { width: 495 });
-      y += doc.heightOfString(record.root_cause, { width: 495 }) + 20;
-    }
-
-    // Solution
-    if (record.solution) {
-      if (y > 650) { doc.addPage(); y = 50; }
-      doc.rect(50, y, 495, 25).fill('#d1fae5');
-      doc.fontSize(11).fillColor('#065f46').font('Helvetica-Bold').text('SOLUTION APPLIQUÉE', 60, y + 7);
-      y += 35;
-      doc.fontSize(10).fillColor('#374151').font('Helvetica').text(record.solution, 50, y, { width: 495 });
-      y += doc.heightOfString(record.solution, { width: 495 }) + 20;
-    }
-
-    // Parts replaced
-    if (record.parts_replaced) {
-      if (y > 650) { doc.addPage(); y = 50; }
-      doc.rect(50, y, 495, 25).fill('#e0e7ff');
-      doc.fontSize(11).fillColor('#3730a3').font('Helvetica-Bold').text('PIÈCES REMPLACÉES', 60, y + 7);
-      y += 35;
-      doc.fontSize(10).fillColor('#374151').font('Helvetica').text(record.parts_replaced, 50, y, { width: 495 });
-      y += doc.heightOfString(record.parts_replaced, { width: 495 }) + 20;
-    }
-
-    // AI Analysis
-    if (record.ai_diagnosis || record.ai_recommendations) {
-      if (y > 550) { doc.addPage(); y = 50; }
-
-      doc.rect(50, y, 495, 30).fill('#8b5cf6');
-      doc.fontSize(12).fillColor('#ffffff').text('ANALYSE PHOTO', 60, y + 9);
-      y += 40;
-
-      if (record.ai_diagnosis) {
-        doc.fontSize(10).fillColor('#5b21b6').font('Helvetica-Bold').text('Diagnostic:', 50, y);
-        y += 15;
-        doc.font('Helvetica').fillColor('#374151').text(record.ai_diagnosis, 50, y, { width: 495 });
-        y += doc.heightOfString(record.ai_diagnosis, { width: 495 }) + 15;
-      }
-
-      if (record.ai_recommendations) {
-        doc.fontSize(10).fillColor('#5b21b6').font('Helvetica-Bold').text('Recommandations:', 50, y);
-        y += 15;
-        doc.font('Helvetica').fillColor('#374151').text(record.ai_recommendations, 50, y, { width: 495 });
-        y += doc.heightOfString(record.ai_recommendations, { width: 495 }) + 20;
-      }
-    }
-
-    // Photos section
+    // === PHOTOS SECTION ===
     if (photos.length > 0) {
-      if (y > 500) { doc.addPage(); y = 50; }
+      if (y + 200 > 750) { doc.addPage(); y = 40; }
 
-      doc.rect(50, y, 495, 28).fill('#eff6ff');
-      doc.fontSize(13).fillColor('#1e40af').text(`PHOTOS (${photos.length})`, 60, y + 7);
-      y += 38;
+      // Photos header
+      doc.fontSize(12).fillColor('#111827').font('Helvetica-Bold').text(`Photos (${photos.length})`, margin, y);
+      y += 25;
 
-      const photoWidth = 235;
-      const photoHeight = 160;
-      const gap = 15;
+      const photoWidth = (contentWidth - 20) / 2;
+      const photoHeight = 140;
 
       for (let i = 0; i < photos.length; i++) {
         const photo = photos[i];
         const col = i % 2;
-        const x = 50 + col * (photoWidth + gap);
+        const x = margin + col * (photoWidth + 20);
 
-        if (i % 2 === 0 && y + photoHeight + 40 > 750) {
+        if (i % 2 === 0 && y + photoHeight + 30 > 750) {
           doc.addPage();
-          y = 50;
+          y = 40;
         }
 
         try {
-          doc.rect(x - 2, y - 2, photoWidth + 4, photoHeight + 4).fillAndStroke('#f8fafc', '#e2e8f0');
-          doc.image(photo.photo_data, x, y, {
-            width: photoWidth,
-            height: photoHeight,
-            fit: [photoWidth, photoHeight],
+          // Photo frame
+          doc.roundedRect(x, y, photoWidth, photoHeight, 6).fill('#f8fafc');
+          doc.roundedRect(x, y, photoWidth, photoHeight, 6).stroke('#e5e7eb');
+
+          doc.image(photo.photo_data, x + 2, y + 2, {
+            width: photoWidth - 4,
+            height: photoHeight - 4,
+            fit: [photoWidth - 4, photoHeight - 4],
             align: 'center',
             valign: 'center'
           });
 
           // Photo type badge
-          const typeLabels = { before: 'AVANT', during: 'PENDANT', after: 'APRÈS' };
-          const typeColors = { before: '#dc2626', during: '#f59e0b', after: '#22c55e' };
-          doc.rect(x + 5, y + 5, 55, 18).fill(typeColors[photo.photo_type] || '#6b7280');
-          doc.fontSize(8).fillColor('#ffffff').text(typeLabels[photo.photo_type] || photo.photo_type, x + 8, y + 10, { width: 50, align: 'center' });
+          const typeLabels = { before: 'Avant', during: 'Pendant', after: 'Après' };
+          const typeColors = { before: '#1f2937', during: '#f97316', after: '#22c55e' };
+          const badgeColor = typeColors[photo.photo_type] || '#6b7280';
+          doc.roundedRect(x + 8, y + 8, 50, 18, 4).fill(badgeColor);
+          doc.fontSize(8).fillColor('#ffffff').text(typeLabels[photo.photo_type] || photo.photo_type || '', x + 10, y + 13, { width: 46, align: 'center' });
 
-          if (photo.caption) {
-            doc.fontSize(8).fillColor('#4b5563').text(photo.caption, x, y + photoHeight + 5, { width: photoWidth, align: 'center' });
-          }
         } catch (e) {
-          doc.rect(x, y, photoWidth, photoHeight).fill('#f3f4f6');
+          doc.roundedRect(x, y, photoWidth, photoHeight, 6).fill('#f3f4f6');
           doc.fontSize(10).fillColor('#9ca3af').text('Image non disponible', x, y + photoHeight / 2 - 5, { width: photoWidth, align: 'center' });
         }
 
         if (col === 1 || i === photos.length - 1) {
-          y += photoHeight + (photo.caption ? 25 : 15);
+          y += photoHeight + 15;
         }
       }
     }
 
-    // Footer on each page
+    // === FOOTER on each page ===
     const pages = doc.bufferedPageRange();
     for (let i = 0; i < pages.count; i++) {
       doc.switchToPage(i);
+
+      // Footer background
+      doc.rect(0, 800, pageWidth, 42).fill('#111827');
+
+      // Footer text
       doc.fontSize(8).fillColor('#9ca3af');
-      doc.text(`Rapport généré le ${new Date().toLocaleDateString('fr-FR')} - Page ${i + 1}/${pages.count}`, 50, 780, { width: 495, align: 'center' });
+      doc.text(`© ${new Date().getFullYear()} Haleon-tool - Daniel Palha`, margin, 812, { width: contentWidth * 0.5 });
+      doc.text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Page ${i + 1}/${pages.count}`, margin + contentWidth * 0.5, 812, { width: contentWidth * 0.5, align: 'right' });
     }
 
     doc.end();
