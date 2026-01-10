@@ -491,7 +491,23 @@ router.post("/companies/:id/logo", adminOnly, uploadMemory.single('logo'), async
       return res.status(400).json({ error: "No image file provided" });
     }
 
-    const { buffer, mimetype } = req.file;
+    let { buffer, mimetype } = req.file;
+
+    // Convert image to sRGB color space to fix color rendering issues
+    // Some logos have Adobe RGB or other profiles that render black as gray
+    try {
+      const sharp = (await import('sharp')).default;
+      const processedBuffer = await sharp(buffer)
+        .toColorspace('srgb')  // Convert to sRGB
+        .png({ quality: 100 }) // Keep high quality as PNG
+        .toBuffer();
+      buffer = processedBuffer;
+      mimetype = 'image/png';
+      console.log('[Admin] Logo converted to sRGB PNG');
+    } catch (sharpErr) {
+      console.warn('[Admin] Could not process logo with sharp, using original:', sharpErr.message);
+      // Continue with original buffer if sharp fails
+    }
 
     const result = await pool.query(`
       UPDATE companies
