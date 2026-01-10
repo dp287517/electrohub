@@ -70,34 +70,38 @@ class AIAssistant {
         switchboardData,
         vsdData,
         mecaData,
-        controlsDashboard
+        controlsDashboard,
+        troubleshootingData
       ] = await Promise.allSettled([
         this.fetchSwitchboardContext(),
         this.fetchVSDContext(),
         this.fetchMecaContext(),
-        this.fetchControlsDashboard()
+        this.fetchControlsDashboard(),
+        this.fetchTroubleshootingContext()
       ]);
 
       const context = {
         timestamp: new Date().toISOString(),
         user: this.getCurrentUser(),
 
-        // Données agrégées
+        // Donnees agregees
         totalEquipments: 0,
         upcomingControls: 0,
         overdueControls: 0,
         nonConformities: 0,
+        pendingTroubleshooting: 0,
 
-        // Données par catégorie
+        // Donnees par categorie
         switchboards: switchboardData.status === 'fulfilled' ? switchboardData.value : null,
         vsd: vsdData.status === 'fulfilled' ? vsdData.value : null,
         meca: mecaData.status === 'fulfilled' ? mecaData.value : null,
         dashboard: controlsDashboard.status === 'fulfilled' ? controlsDashboard.value : null,
+        troubleshooting: troubleshootingData.status === 'fulfilled' ? troubleshootingData.value : null,
 
-        // Bâtiments et étages
+        // Batiments et etages
         buildings: {},
 
-        // Statistiques calculées
+        // Statistiques calculees
         stats: {}
       };
 
@@ -116,6 +120,12 @@ class AIAssistant {
       if (context.dashboard) {
         context.upcomingControls = context.dashboard.stats?.pending || 0;
         context.overdueControls = context.dashboard.stats?.overdue || 0;
+      }
+
+      // Depannages en cours
+      if (context.troubleshooting) {
+        context.pendingTroubleshooting = context.troubleshooting.inProgress || 0;
+        context.troubleshootingList = context.troubleshooting.records || [];
       }
 
       // Mettre en cache
@@ -182,7 +192,7 @@ class AIAssistant {
   }
 
   /**
-   * Récupère le dashboard des contrôles
+   * Recupere le dashboard des controles
    */
   async fetchControlsDashboard() {
     try {
@@ -195,7 +205,32 @@ class AIAssistant {
   }
 
   /**
-   * Agrège les équipements par bâtiment
+   * Recupere les depannages en cours
+   */
+  async fetchTroubleshootingContext() {
+    try {
+      const site = JSON.parse(localStorage.getItem('eh_user') || '{}')?.site || '';
+      const response = await fetch('/api/troubleshooting?status=in_progress&limit=10', {
+        credentials: 'include',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('eh_token') || ''}`,
+          'X-Site': site
+        }
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      return {
+        inProgress: data.records?.length || 0,
+        records: data.records || []
+      };
+    } catch (error) {
+      console.error('Erreur troubleshooting:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Agrege les equipements par batiment
    */
   aggregateByBuilding(context, equipments, type) {
     if (!Array.isArray(equipments)) return;

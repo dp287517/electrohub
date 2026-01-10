@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AnimatedAvatar, AVATAR_STYLES } from './AnimatedAvatar';
 import { VideoAvatar } from './VideoAvatar';
 import AvatarChat from './AvatarChat';
 import AvatarSelector from './AvatarSelector';
-import { X, Sparkles, AlertTriangle, Calendar, Bell } from 'lucide-react';
+import { X, Sparkles, AlertTriangle, Calendar, Bell, Wrench } from 'lucide-react';
 import { aiAssistant } from '../../lib/ai-assistant';
 
 /**
@@ -12,6 +13,7 @@ import { aiAssistant } from '../../lib/ai-assistant';
  */
 export default function FloatingAssistant() {
   const token = localStorage.getItem('eh_token');
+  const navigate = useNavigate();
 
   const [avatarStyle, setAvatarStyle] = useState(() => {
     const saved = localStorage.getItem('eh_avatar_style');
@@ -34,33 +36,52 @@ export default function FloatingAssistant() {
     localStorage.setItem('eh_avatar_style', avatarStyle);
   }, [avatarStyle]);
 
-  // Vérifier périodiquement s'il y a des alertes à afficher
+  // Verifier periodiquement s'il y a des alertes a afficher
   const checkForAlerts = useCallback(async () => {
     if (!token || hasSeenNotification) return;
 
     try {
       const context = await aiAssistant.getGlobalContext();
 
-      // Vérifier s'il y a des contrôles en retard
-      if (context.overdueControls > 0) {
+      // PRIORITE 1: Depannages en cours (non resolus)
+      if (context.pendingTroubleshooting > 0) {
+        const count = context.pendingTroubleshooting;
+        const firstRecord = context.troubleshootingList?.[0];
+        const equipName = firstRecord?.equipment_name || firstRecord?.equipment_code || '';
         setNotification({
           type: 'alert',
-          icon: AlertTriangle,
-          title: 'Contrôles en retard',
-          message: `Vous avez ${context.overdueControls} contrôle(s) en retard`,
-          action: 'Voir les détails'
+          icon: Wrench,
+          title: count === 1 ? 'Depannage en cours' : `${count} depannages en cours`,
+          message: count === 1
+            ? `${equipName} - A traiter rapidement !`
+            : `Plusieurs interventions en attente de resolution`,
+          action: 'Voir les depannages',
+          link: '/app/troubleshooting?status=in_progress'
         });
         setIsPulsing(true);
         return;
       }
 
-      // Vérifier s'il y a des contrôles à venir cette semaine
+      // PRIORITE 2: Controles en retard
+      if (context.overdueControls > 0) {
+        setNotification({
+          type: 'alert',
+          icon: AlertTriangle,
+          title: 'Controles en retard',
+          message: `Vous avez ${context.overdueControls} controle(s) en retard`,
+          action: 'Voir les details'
+        });
+        setIsPulsing(true);
+        return;
+      }
+
+      // PRIORITE 3: Controles a venir cette semaine
       if (context.upcomingControls > 3) {
         setNotification({
           type: 'info',
           icon: Calendar,
-          title: 'Contrôles à venir',
-          message: `${context.upcomingControls} contrôles programmés`,
+          title: 'Controles a venir',
+          message: `${context.upcomingControls} controles programmes`,
           action: 'Planifier'
         });
         setIsPulsing(true);
@@ -94,10 +115,16 @@ export default function FloatingAssistant() {
   const avatar = AVATAR_STYLES[avatarStyle] || AVATAR_STYLES.electro;
 
   const handleNotificationClick = () => {
+    const link = notification?.link;
     setHasSeenNotification(true);
     setNotification(null);
     setIsPulsing(false);
-    setShowChat(true);
+    // Si un lien est defini, naviguer vers ce lien au lieu d'ouvrir le chat
+    if (link) {
+      navigate(link);
+    } else {
+      setShowChat(true);
+    }
   };
 
   const dismissNotification = (e) => {

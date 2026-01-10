@@ -1075,6 +1075,7 @@ export default function TroubleshootingWizard({
 
   const handleViewTroubleshooting = () => {
     if (recordId) {
+      onClose(); // Close modal first
       navigate(`/app/troubleshooting/${recordId}`);
     }
   };
