@@ -191,6 +191,84 @@ function TicketRow({ ticket, onAssign, onView, userEmail }) {
   );
 }
 
+// Ticket Iframe Modal
+function TicketIframeModal({ ticket, onClose }) {
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+
+  if (!ticket) return null;
+
+  const ticketUrl = `https://haleon-tool.io/ticket/${ticket.bubble_ticket_id}`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[80vh] flex flex-col overflow-hidden animate-scaleIn">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-purple-500/10 to-indigo-500/10">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center">
+              <Ticket size={20} className="text-white" />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-900">{ticket.ticket_code}</h3>
+              <p className="text-xs text-gray-500 line-clamp-1">{ticket.description || 'Ticket Haleon Tool'}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <a
+              href={ticketUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-2 text-purple-600 hover:bg-purple-100 rounded-lg"
+              title="Ouvrir dans un nouvel onglet"
+            >
+              <ExternalLink size={18} />
+            </a>
+            <button
+              onClick={onClose}
+              className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"
+              title="Fermer"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Iframe container */}
+        <div className="flex-1 relative bg-gray-50">
+          {!iframeLoaded && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
+              <div className="text-center">
+                <RefreshCw className="w-8 h-8 text-purple-400 animate-spin mx-auto mb-2" />
+                <p className="text-sm text-gray-500">Chargement du ticket...</p>
+              </div>
+            </div>
+          )}
+          <iframe
+            src={ticketUrl}
+            className="w-full h-full border-0"
+            title={`Ticket ${ticket.ticket_code}`}
+            onLoad={() => setIframeLoaded(true)}
+            allow="clipboard-write"
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+          />
+        </div>
+      </div>
+
+      {/* Backdrop click to close */}
+      <div className="absolute inset-0 -z-10" onClick={onClose} />
+
+      {/* Animation styles */}
+      <style>{`
+        @keyframes scaleIn {
+          from { opacity: 0; transform: scale(0.95); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        .animate-scaleIn { animation: scaleIn 0.2s ease-out; }
+      `}</style>
+    </div>
+  );
+}
+
 // Main Widget
 export default function HaleonTicketsWidget({ userEmail, className = '' }) {
   const [loading, setLoading] = useState(true);
@@ -200,6 +278,7 @@ export default function HaleonTicketsWidget({ userEmail, className = '' }) {
   const [filter, setFilter] = useState('all'); // 'all', 'unassigned', 'mine'
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(null);
+  const [selectedTicket, setSelectedTicket] = useState(null); // For iframe modal
 
   // Load data
   const loadData = useCallback(async () => {
@@ -237,6 +316,46 @@ export default function HaleonTicketsWidget({ userEmail, className = '' }) {
     loadData();
   }, [loadData]);
 
+  // Auto-sync every 15 minutes
+  useEffect(() => {
+    const SYNC_INTERVAL = 15 * 60 * 1000; // 15 minutes in milliseconds
+
+    // Initial sync on mount (if not recently synced)
+    const lastSyncTime = localStorage.getItem('haleon_last_sync');
+    const now = Date.now();
+    const timeSinceLastSync = lastSyncTime ? now - parseInt(lastSyncTime) : SYNC_INTERVAL;
+
+    // If more than 15 minutes since last sync, sync now
+    if (timeSinceLastSync >= SYNC_INTERVAL) {
+      console.log('[HaleonTickets] Auto-sync: starting initial sync');
+      fetch('/api/haleon-tickets/sync', {
+        ...getAuthOptions(),
+        method: 'POST'
+      }).then(() => {
+        localStorage.setItem('haleon_last_sync', Date.now().toString());
+        setLastSync(new Date());
+        loadData();
+        console.log('[HaleonTickets] Auto-sync: initial sync completed');
+      }).catch(err => console.error('[HaleonTickets] Auto-sync error:', err));
+    }
+
+    // Set up interval for regular syncs
+    const intervalId = setInterval(() => {
+      console.log('[HaleonTickets] Auto-sync: starting scheduled sync');
+      fetch('/api/haleon-tickets/sync', {
+        ...getAuthOptions(),
+        method: 'POST'
+      }).then(() => {
+        localStorage.setItem('haleon_last_sync', Date.now().toString());
+        setLastSync(new Date());
+        loadData();
+        console.log('[HaleonTickets] Auto-sync: scheduled sync completed');
+      }).catch(err => console.error('[HaleonTickets] Auto-sync error:', err));
+    }, SYNC_INTERVAL);
+
+    return () => clearInterval(intervalId);
+  }, []); // Empty deps - only run once on mount
+
   // Sync tickets
   const handleSync = async () => {
     setSyncing(true);
@@ -245,6 +364,7 @@ export default function HaleonTicketsWidget({ userEmail, className = '' }) {
         ...getAuthOptions(),
         method: 'POST'
       });
+      localStorage.setItem('haleon_last_sync', Date.now().toString());
       setLastSync(new Date());
       await loadData();
     } catch (err) {
@@ -274,10 +394,9 @@ export default function HaleonTicketsWidget({ userEmail, className = '' }) {
     }
   };
 
-  // View ticket details
+  // View ticket details in iframe modal
   const handleView = (ticket) => {
-    // TODO: Open modal or navigate to detail
-    window.open(`https://haleon-tool.io/ticket/${ticket.bubble_ticket_id}`, '_blank');
+    setSelectedTicket(ticket);
   };
 
   // No teams assigned
@@ -419,6 +538,14 @@ export default function HaleonTicketsWidget({ userEmail, className = '' }) {
           </span>
         )}
       </div>
+
+      {/* Iframe Modal */}
+      {selectedTicket && (
+        <TicketIframeModal
+          ticket={selectedTicket}
+          onClose={() => setSelectedTicket(null)}
+        />
+      )}
     </div>
   );
 }
