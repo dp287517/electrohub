@@ -4,7 +4,7 @@ import {
   Sparkles, MessageCircle, FileText, AlertTriangle, CheckCircle,
   Download, ExternalLink, X, ChevronDown, ChevronUp, Zap,
   Search, Wrench, Calendar, BarChart3, Loader2, RefreshCw,
-  BookOpen, Link2, PlusCircle, History, Image, Send
+  BookOpen, Link2, PlusCircle, History, Image, Send, Eye
 } from 'lucide-react';
 import { post, get, API_BASE } from '../lib/api';
 import TroubleshootingWizard, { TroubleshootingHistory } from './TroubleshootingWizard';
@@ -27,6 +27,10 @@ export default function MiniElectro({
   const [showDocSearch, setShowDocSearch] = useState(false);
   const [showTroubleshooting, setShowTroubleshooting] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+
+  // Open troubleshooting alerts - dépannages non résolus
+  const [openTroubleshooting, setOpenTroubleshooting] = useState([]);
+  const [loadingOpenTS, setLoadingOpenTS] = useState(false);
 
   // Chat state - show by default for direct interaction
   const [showChat, setShowChat] = useState(true);
@@ -94,6 +98,39 @@ export default function MiniElectro({
       analyzeEquipment();
     }
   }, [equipment, isExpanded, analysis, analyzeEquipment]);
+
+  // Charger les dépannages ouverts pour cet équipement
+  useEffect(() => {
+    const loadOpenTroubleshooting = async () => {
+      if (!equipment?.id && !equipment?.name) return;
+      setLoadingOpenTS(true);
+      try {
+        // Chercher les dépannages non résolus pour cet équipement
+        const params = new URLSearchParams();
+        if (equipment.name) params.set('search', equipment.name);
+        if (equipmentType) params.set('equipment_type', equipmentType);
+        // Statuts non résolus
+        params.set('status', 'in_progress,pending_parts,pending_external,pending_review');
+        params.set('limit', '5');
+
+        const response = await get(`/api/troubleshooting/list?${params.toString()}`);
+        const openRecords = response?.records?.filter(r =>
+          r.status !== 'completed' &&
+          (r.equipment_name?.toLowerCase().includes(equipment.name?.toLowerCase() || '') ||
+           r.equipment_code?.toLowerCase().includes(equipment.code?.toLowerCase() || equipment.tag?.toLowerCase() || ''))
+        ) || [];
+        setOpenTroubleshooting(openRecords);
+      } catch (e) {
+        console.debug('Could not load open troubleshooting:', e.message);
+      } finally {
+        setLoadingOpenTS(false);
+      }
+    };
+
+    if (isExpanded && equipment) {
+      loadOpenTroubleshooting();
+    }
+  }, [equipment, equipmentType, isExpanded]);
 
   // Recherche de documentation
   const searchDocumentation = async () => {
@@ -312,6 +349,70 @@ export default function MiniElectro({
       {/* Contenu expandable */}
       {isExpanded && (
         <div className="px-2 sm:px-4 pb-4 space-y-3 sm:space-y-4 w-full max-w-full overflow-hidden">
+
+          {/* 🚨 Alerte dépannages ouverts */}
+          {openTroubleshooting.length > 0 && (
+            <div className="bg-gradient-to-r from-orange-50 to-amber-50 border border-orange-200 rounded-xl p-3 sm:p-4">
+              <div className="flex items-start gap-3">
+                <div className="p-2 bg-orange-100 rounded-lg">
+                  <AlertTriangle className="w-5 h-5 text-orange-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-semibold text-orange-800 text-sm sm:text-base flex items-center gap-2">
+                    Dépannage{openTroubleshooting.length > 1 ? 's' : ''} en cours
+                    <span className="px-2 py-0.5 bg-orange-200 text-orange-800 rounded-full text-xs">
+                      {openTroubleshooting.length}
+                    </span>
+                  </h4>
+                  <p className="text-xs sm:text-sm text-orange-700 mt-1">
+                    {agentName} : Où en sommes-nous sur {openTroubleshooting.length > 1 ? 'ces actions' : 'cette action'} ? On clôture ?
+                  </p>
+
+                  <div className="mt-3 space-y-2">
+                    {openTroubleshooting.slice(0, 3).map((ts) => (
+                      <div
+                        key={ts.id}
+                        className="flex items-center justify-between gap-2 p-2 bg-white/70 rounded-lg"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{ts.title}</p>
+                          <p className="text-xs text-gray-500">
+                            {ts.status === 'in_progress' ? '⏳ En cours' :
+                             ts.status === 'pending_parts' ? '🔩 Attente pièces' :
+                             ts.status === 'pending_external' ? '📞 Attente externe' : ts.status}
+                            {' • '}
+                            {new Date(ts.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })}
+                          </p>
+                        </div>
+                        <a
+                          href={`/app/troubleshooting/${ts.id}`}
+                          className="flex items-center gap-1 px-2.5 py-1 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-lg text-xs font-medium transition-colors"
+                        >
+                          <Eye size={12} />
+                          Voir
+                        </a>
+                      </div>
+                    ))}
+                    {openTroubleshooting.length > 3 && (
+                      <p className="text-xs text-orange-600 text-center">
+                        + {openTroubleshooting.length - 3} autre(s) dépannage(s) ouvert(s)
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 mt-3">
+                    <a
+                      href="/app/troubleshooting?status=in_progress"
+                      className="flex items-center gap-1 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-xs font-medium transition-colors"
+                    >
+                      Voir tous les ouverts
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Chat Interface - Direct et visible en premier */}
           {showChat && (
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden w-full">
