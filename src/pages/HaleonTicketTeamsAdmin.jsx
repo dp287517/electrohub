@@ -486,14 +486,48 @@ export default function HaleonTicketTeamsAdmin() {
 
         {/* Sync result */}
         {syncResult && (
-          <div className={`mb-6 p-4 rounded-xl ${syncResult.error ? 'bg-red-50 border border-red-200' : 'bg-green-50 border border-green-200'}`}>
-            {syncResult.error ? (
-              <p className="text-red-700"><AlertTriangle className="inline mr-2" size={16} />Erreur: {syncResult.error}</p>
-            ) : (
-              <p className="text-green-700">
-                <Check className="inline mr-2" size={16} />
-                Synchronisation réussie: {syncResult.teams_created} équipes créées, {syncResult.teams_updated} mises à jour, {syncResult.categories_synced} catégories
-              </p>
+          <div className="mb-6 space-y-3">
+            <div className={`p-4 rounded-xl ${syncResult.error ? 'bg-red-50 border border-red-200' : 'bg-green-50 border border-green-200'}`}>
+              {syncResult.error ? (
+                <p className="text-red-700"><AlertTriangle className="inline mr-2" size={16} />Erreur: {syncResult.error}</p>
+              ) : (
+                <p className="text-green-700">
+                  <Check className="inline mr-2" size={16} />
+                  Synchronisation réussie: {syncResult.teams_created} équipes créées, {syncResult.teams_updated} mises à jour, {syncResult.categories_synced} catégories
+                </p>
+              )}
+            </div>
+
+            {/* Alerte catégories non mappées */}
+            {syncResult.has_unmapped && syncResult.unmapped_categories?.length > 0 && (
+              <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="text-amber-600 flex-shrink-0 mt-0.5" size={20} />
+                  <div className="flex-1">
+                    <h4 className="font-medium text-amber-800 mb-2">
+                      ⚠️ {syncResult.unmapped_categories.length} catégorie(s) non mappée(s) détectée(s)
+                    </h4>
+                    <p className="text-sm text-amber-700 mb-3">
+                      Ces catégories Bubble n'ont pas de mapping vers une équipe. Contactez le support pour ajouter le mapping :
+                    </p>
+                    <div className="space-y-2">
+                      {syncResult.unmapped_categories.map((cat, i) => (
+                        <div key={i} className="flex items-center gap-2 p-2 bg-amber-100 rounded-lg text-sm">
+                          <div
+                            className="w-4 h-4 rounded"
+                            style={{ backgroundColor: cat.color || '#ccc' }}
+                          />
+                          <code className="font-mono text-amber-900 flex-1">'{cat.name}': 'NOM_EQUIPE'</code>
+                          <span className="text-amber-600 text-xs">(ID: {cat.equipeUserId?.slice(0, 15)}...)</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-xs text-amber-600 mt-3">
+                      💡 Copiez le nom de la catégorie et indiquez l'équipe correspondante pour mettre à jour le mapping.
+                    </p>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         )}

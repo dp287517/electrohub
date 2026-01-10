@@ -326,16 +326,30 @@ export function createHaleonTicketsRouter(pool) {
       const categories = categoriesData.response?.results || [];
       console.log(`[Haleon Tickets] ${categories.length} catégories trouvées`);
 
-      // 3. Construire le mapping EquipeUser ID → Nom d'équipe via les noms de catégories
+      // 3. Détecter les catégories non mappées et construire le mapping
+      const unmappedCategories = [];
       const equipeUserToName = new Map();
+
       for (const cat of categories) {
         const teamName = categoryNameToTeam[cat.Nom];
         if (teamName && cat.EquipeUser) {
           equipeUserToName.set(cat.EquipeUser, teamName);
           console.log(`[Haleon Tickets] Mapping: ${cat.EquipeUser} → ${teamName} (via "${cat.Nom}")`);
+        } else if (cat.Nom && !categoryNameToTeam[cat.Nom]) {
+          // Catégorie non mappée détectée
+          unmappedCategories.push({
+            name: cat.Nom,
+            equipeUserId: cat.EquipeUser || 'N/A',
+            color: cat.Color
+          });
+          console.log(`[Haleon Tickets] ⚠️ CATÉGORIE NON MAPPÉE: "${cat.Nom}" (EquipeUser: ${cat.EquipeUser})`);
         }
       }
       console.log(`[Haleon Tickets] ${equipeUserToName.size} mappings EquipeUser→nom trouvés`);
+
+      if (unmappedCategories.length > 0) {
+        console.log(`[Haleon Tickets] ⚠️ ${unmappedCategories.length} catégories non mappées détectées !`);
+      }
 
       // 4. Extraire les équipes uniques avec leurs vrais noms
       const teamsMap = new Map();
@@ -442,7 +456,9 @@ export function createHaleonTicketsRouter(pool) {
         success: true,
         teams_created: teamsCreated,
         teams_updated: teamsUpdated,
-        categories_synced: categories.length
+        categories_synced: categories.length,
+        unmapped_categories: unmappedCategories,
+        has_unmapped: unmappedCategories.length > 0
       });
     } catch (error) {
       console.error('[Haleon Tickets] Erreur sync équipes:', error);
