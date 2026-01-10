@@ -151,7 +151,12 @@ export default function SharedMapPreview({ shareToken, className = '' }) {
 
         // Calculate marker position (same as MiniEquipmentPreview)
         const x = (mapData.position.x_frac || 0) * imgW;
-        const y = (mapData.position.y_frac || 0) * imgH;
+        const raw_y_frac = mapData.position.y_frac || 0;
+        // Apply Y inversion for DataHub and Infrastructure types (they store inverted Y coords)
+        const y_frac = (mapData.equipmentType === 'datahub' || mapData.equipmentType === 'infrastructure')
+          ? (1 - raw_y_frac)
+          : raw_y_frac;
+        const y = y_frac * imgH;
 
         // Create marker
         const colors = EQUIPMENT_COLORS[mapData.equipmentType] || EQUIPMENT_COLORS.switchboard;
