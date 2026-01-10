@@ -633,6 +633,11 @@ export default function TroubleshootingDashboard() {
         </div>
       </div>
 
+      {/* Haleon Tickets Widget - Section prominente */}
+      <div className="max-w-7xl mx-auto px-4 py-4">
+        <HaleonTicketsWidget userEmail={getCurrentUserEmail()} className="shadow-lg" />
+      </div>
+
       {/* Tabs */}
       <div className="bg-white border-b sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4">
@@ -796,10 +801,8 @@ export default function TroubleshootingDashboard() {
           )}
         </div>
 
-        {/* Main content grid with widget sidebar */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main content - 2/3 width on large screens */}
-          <div className="lg:col-span-2">
+        {/* Main content */}
+        <div>
             {/* Tab content */}
             {loading ? (
           <div className="flex items-center justify-center py-12">
@@ -1119,12 +1122,6 @@ export default function TroubleshootingDashboard() {
             )}
           </>
         )}
-          </div>
-
-          {/* Sidebar - Haleon Tickets Widget */}
-          <div className="lg:col-span-1">
-            <HaleonTicketsWidget userEmail={getCurrentUserEmail()} />
-          </div>
         </div>
       </div>
 
