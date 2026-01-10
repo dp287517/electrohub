@@ -9479,6 +9479,7 @@ app.post('/api/equipment/links/cleanup-orphans', async (req, res) => {
     console.log(`[EQUIPMENT_LINKS] Cleaning up orphaned links for site: ${site}`);
 
     // Delete links where the source or target equipment no longer exists
+    // Note: glo_equipments and me_equipments have UUID ids, so we need to cast to text for comparison
     const result = await quickQuery(`
       DELETE FROM equipment_links el
       WHERE site = $1
@@ -9486,17 +9487,17 @@ app.post('/api/equipment/links/cleanup-orphans', async (req, res) => {
         -- Source equipment doesn't exist
         (source_type = 'switchboard' AND NOT EXISTS (SELECT 1 FROM switchboards WHERE id::text = el.source_id AND site = el.site))
         OR (source_type = 'hv' AND NOT EXISTS (SELECT 1 FROM hv_equipments WHERE id::text = el.source_id AND site = el.site))
-        OR (source_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.source_id))
+        OR (source_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id::text = el.source_id))
         OR (source_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.source_id AND site = el.site))
         OR (source_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.source_id))
-        OR (source_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id = el.source_id))
+        OR (source_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id::text = el.source_id))
         -- Target equipment doesn't exist
         OR (target_type = 'switchboard' AND NOT EXISTS (SELECT 1 FROM switchboards WHERE id::text = el.target_id AND site = el.site))
         OR (target_type = 'hv' AND NOT EXISTS (SELECT 1 FROM hv_equipments WHERE id::text = el.target_id AND site = el.site))
-        OR (target_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.target_id))
+        OR (target_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id::text = el.target_id))
         OR (target_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.target_id AND site = el.site))
         OR (target_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.target_id))
-        OR (target_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id = el.target_id))
+        OR (target_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id::text = el.target_id))
       )
       RETURNING *
     `, [site]);
@@ -9650,6 +9651,7 @@ async function cleanupOrphanedData() {
     totalPositions += posResult.rowCount;
 
     // 2. Cleanup orphaned equipment links (equipment that no longer exists)
+    // Note: glo_equipments and me_equipments have UUID ids, so we need to cast to text for comparison
     const linksResult = await quickQuery(`
       DELETE FROM equipment_links el
       WHERE site = $1
@@ -9657,17 +9659,17 @@ async function cleanupOrphanedData() {
         -- Source equipment doesn't exist
         (source_type = 'switchboard' AND NOT EXISTS (SELECT 1 FROM switchboards WHERE id::text = el.source_id AND site = el.site))
         OR (source_type = 'hv' AND NOT EXISTS (SELECT 1 FROM hv_equipments WHERE id::text = el.source_id AND site = el.site))
-        OR (source_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.source_id))
+        OR (source_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id::text = el.source_id))
         OR (source_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.source_id AND site = el.site))
         OR (source_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.source_id))
-        OR (source_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id = el.source_id))
+        OR (source_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id::text = el.source_id))
         -- Target equipment doesn't exist
         OR (target_type = 'switchboard' AND NOT EXISTS (SELECT 1 FROM switchboards WHERE id::text = el.target_id AND site = el.site))
         OR (target_type = 'hv' AND NOT EXISTS (SELECT 1 FROM hv_equipments WHERE id::text = el.target_id AND site = el.site))
-        OR (target_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id = el.target_id))
+        OR (target_type = 'glo' AND NOT EXISTS (SELECT 1 FROM glo_equipments WHERE id::text = el.target_id))
         OR (target_type = 'vsd' AND NOT EXISTS (SELECT 1 FROM vsd_equipments WHERE id::text = el.target_id AND site = el.site))
         OR (target_type = 'meca' AND NOT EXISTS (SELECT 1 FROM meca_equipments WHERE id::text = el.target_id))
-        OR (target_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id = el.target_id))
+        OR (target_type = 'mobile_equipment' AND NOT EXISTS (SELECT 1 FROM me_equipments WHERE id::text = el.target_id))
       )
       RETURNING id
     `, [site]);
