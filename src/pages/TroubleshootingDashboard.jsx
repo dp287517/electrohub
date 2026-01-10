@@ -930,15 +930,16 @@ export default function TroubleshootingDashboard() {
                             <Eye size={14} />
                             <span className="hidden xs:inline">Ouvrir</span>
                           </button>
-                        <a
-                          href={`${API_BASE}/api/troubleshooting/${record.id}/pdf`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
-                        >
-                          <Download size={14} />
-                          PDF
-                        </a>
+                          <a
+                            href={`${API_BASE}/api/troubleshooting/${record.id}/pdf`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
+                          >
+                            <Download size={14} />
+                            <span className="hidden xs:inline">PDF</span>
+                          </a>
+                        </div>
                       </div>
                     </div>
                   ))
