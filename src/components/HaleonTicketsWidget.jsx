@@ -191,17 +191,17 @@ function TicketRow({ ticket, onAssign, onView, userEmail }) {
   );
 }
 
-// Ticket Iframe Modal
-function TicketIframeModal({ ticket, onClose }) {
-  const [iframeLoaded, setIframeLoaded] = useState(false);
-
+// Ticket Detail Modal (no iframe - Bubble.io blocks embedding)
+function TicketDetailModal({ ticket, onClose, onAssign, userEmail }) {
   if (!ticket) return null;
 
   const ticketUrl = `https://haleon-tool.io/ticket/${ticket.bubble_ticket_id}`;
+  const isMyTicket = ticket.assigned_to_email?.toLowerCase() === userEmail?.toLowerCase();
+  const daysOld = getDaysOld(ticket.bubble_created_at);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[80vh] flex flex-col overflow-hidden animate-scaleIn">
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden animate-scaleIn">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-purple-500/10 to-indigo-500/10">
           <div className="flex items-center gap-3">
@@ -209,48 +209,123 @@ function TicketIframeModal({ ticket, onClose }) {
               <Ticket size={20} className="text-white" />
             </div>
             <div>
-              <h3 className="font-bold text-gray-900">{ticket.ticket_code}</h3>
-              <p className="text-xs text-gray-500 line-clamp-1">{ticket.description || 'Ticket Haleon Tool'}</p>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-gray-900">{ticket.ticket_code}</h3>
+                <span className={`w-2 h-2 rounded-full ${getPriorityColor(ticket.priority_normalized)}`} />
+              </div>
+              <span className={`text-xs px-2 py-0.5 rounded border ${getStatusColor(ticket.status_normalized)}`}>
+                {getStatusLabel(ticket.status_normalized)}
+              </span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <a
-              href={ticketUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-2 text-purple-600 hover:bg-purple-100 rounded-lg"
-              title="Ouvrir dans un nouvel onglet"
-            >
-              <ExternalLink size={18} />
-            </a>
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"
-              title="Fermer"
-            >
-              <X size={18} />
-            </button>
-          </div>
+          <button
+            onClick={onClose}
+            className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"
+            title="Fermer"
+          >
+            <X size={18} />
+          </button>
         </div>
 
-        {/* Iframe container */}
-        <div className="flex-1 relative bg-gray-50">
-          {!iframeLoaded && (
-            <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
-              <div className="text-center">
-                <RefreshCw className="w-8 h-8 text-purple-400 animate-spin mx-auto mb-2" />
-                <p className="text-sm text-gray-500">Chargement du ticket...</p>
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Description */}
+          <div>
+            <h4 className="text-sm font-semibold text-gray-700 mb-1">Description</h4>
+            <p className="text-sm text-gray-800 bg-gray-50 p-3 rounded-lg">
+              {ticket.description || 'Aucune description'}
+            </p>
+          </div>
+
+          {/* Location */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 mb-1">Bâtiment</h4>
+              <div className="flex items-center gap-1 text-sm text-gray-800">
+                <Building2 size={14} className="text-gray-400" />
+                {ticket.building || '-'}
               </div>
             </div>
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 mb-1">Zone</h4>
+              <div className="flex items-center gap-1 text-sm text-gray-800">
+                <MapPin size={14} className="text-gray-400" />
+                {ticket.zone || '-'}
+              </div>
+            </div>
+          </div>
+
+          {/* Details */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 mb-1">Équipe</h4>
+              <p className="text-sm text-gray-800">{ticket.team_name || '-'}</p>
+            </div>
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 mb-1">Priorité</h4>
+              <p className="text-sm text-gray-800">{getPriorityLabel(ticket.priority_normalized)}</p>
+            </div>
+          </div>
+
+          {/* Dates */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 mb-1">Créé le</h4>
+              <div className="flex items-center gap-1 text-sm text-gray-800">
+                <Clock size={14} className="text-gray-400" />
+                {ticket.bubble_created_at ?
+                  new Date(ticket.bubble_created_at).toLocaleDateString('fr-FR', {
+                    day: 'numeric', month: 'short', year: 'numeric'
+                  }) : '-'}
+                {daysOld > 7 && (
+                  <span className="text-xs text-orange-600 ml-1">({daysOld}j)</span>
+                )}
+              </div>
+            </div>
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 mb-1">Assigné à</h4>
+              <div className="flex items-center gap-1 text-sm text-gray-800">
+                <User size={14} className="text-gray-400" />
+                {ticket.assigned_to_name || ticket.assigned_to_email || 'Non assigné'}
+                {isMyTicket && (
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 ml-1">Moi</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Requestor */}
+          {ticket.requestor_email && (
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 mb-1">Demandeur</h4>
+              <p className="text-sm text-gray-800">{ticket.requestor_name || ticket.requestor_email}</p>
+            </div>
           )}
-          <iframe
-            src={ticketUrl}
-            className="w-full h-full border-0"
-            title={`Ticket ${ticket.ticket_code}`}
-            onLoad={() => setIframeLoaded(true)}
-            allow="clipboard-write"
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-          />
+        </div>
+
+        {/* Actions */}
+        <div className="p-4 border-t bg-gray-50 flex gap-2">
+          {ticket.status_normalized === 'unassigned' && (
+            <button
+              onClick={() => {
+                onAssign(ticket.bubble_ticket_id);
+                onClose();
+              }}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition-colors font-medium"
+            >
+              <UserPlus size={16} />
+              M'attribuer ce ticket
+            </button>
+          )}
+          <a
+            href={ticketUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`${ticket.status_normalized === 'unassigned' ? '' : 'flex-1'} flex items-center justify-center gap-2 px-4 py-2.5 bg-white border-2 border-purple-200 text-purple-700 rounded-xl hover:bg-purple-50 transition-colors font-medium`}
+          >
+            <ExternalLink size={16} />
+            Ouvrir dans Haleon Tool
+          </a>
         </div>
       </div>
 
@@ -539,11 +614,13 @@ export default function HaleonTicketsWidget({ userEmail, className = '' }) {
         )}
       </div>
 
-      {/* Iframe Modal */}
+      {/* Ticket Detail Modal */}
       {selectedTicket && (
-        <TicketIframeModal
+        <TicketDetailModal
           ticket={selectedTicket}
           onClose={() => setSelectedTicket(null)}
+          onAssign={handleAssign}
+          userEmail={userEmail}
         />
       )}
     </div>

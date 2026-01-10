@@ -7306,6 +7306,24 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
       GROUP BY equipment_type
     `, [site]);
 
+    // Pending controls for next 30 days only
+    const pending30d = await quickQuery(`
+      SELECT COUNT(*) as count FROM control_schedules
+      WHERE site = $1
+        AND next_due_date >= CURRENT_DATE
+        AND next_due_date <= CURRENT_DATE + INTERVAL '30 days'
+        AND status != 'done'
+    `, [site]);
+
+    const pending30dByType = await quickQuery(`
+      SELECT equipment_type, COUNT(*) as count FROM control_schedules
+      WHERE site = $1
+        AND next_due_date >= CURRENT_DATE
+        AND next_due_date <= CURRENT_DATE + INTERVAL '30 days'
+        AND status != 'done'
+      GROUP BY equipment_type
+    `, [site]);
+
     // Overdue controls from control_schedules (global + by equipment type)
     const overdue = await quickQuery(`
       SELECT COUNT(*) as count FROM control_schedules
@@ -7386,26 +7404,33 @@ app.get('/api/switchboard/controls/dashboard', async (req, res) => {
     // Build stats by equipment type from control_schedules only
     const overdueByEquipment = {};
     const pendingByEquipment = {};
+    const pending30dByEquipment = {};
     for (const row of overdueByType.rows) {
       overdueByEquipment[row.equipment_type || 'switchboard'] = Number(row.count);
     }
     for (const row of pendingByType.rows) {
       pendingByEquipment[row.equipment_type || 'switchboard'] = Number(row.count);
     }
+    for (const row of pending30dByType.rows) {
+      pending30dByEquipment[row.equipment_type || 'switchboard'] = Number(row.count);
+    }
 
     // Calculate totals from control_schedules only (properly filtered by site)
     const totalOverdue = Number(overdue.rows[0]?.count || 0);
     const totalPending = Number(pending.rows[0]?.count || 0);
+    const totalPending30d = Number(pending30d.rows[0]?.count || 0);
 
     res.json({
       stats: {
         pending: totalPending,
+        pending_30d: totalPending30d,
         overdue: totalOverdue,
         completed_30d: Number(recent.rows[0]?.count || 0),
         templates: Number(templates.rows[0]?.count || 0),
         // Stats by equipment type for dashboard badges
         overdueByEquipment,
-        pendingByEquipment
+        pendingByEquipment,
+        pending30dByEquipment
       },
       upcoming: upcoming.rows,
       overdue_list: overdueList.rows
