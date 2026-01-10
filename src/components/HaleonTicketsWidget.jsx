@@ -83,6 +83,123 @@ function getDaysOld(dateStr) {
   return Math.floor((now - date) / (1000 * 60 * 60 * 24));
 }
 
+// Check if a value is a Bubble ID (format: timestamp x random)
+function isBubbleId(value) {
+  if (!value || typeof value !== 'string') return false;
+  return /^\d{13,}x\d+$/.test(value);
+}
+
+// Get a clean display value - hide Bubble IDs
+function getDisplayValue(value, fallback = '-') {
+  if (!value) return fallback;
+  if (isBubbleId(value)) return fallback;
+  return value;
+}
+
+// Extract readable values from raw_data
+function extractReadableData(rawData) {
+  if (!rawData) return {};
+
+  let data;
+  try {
+    data = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
+  } catch (e) {
+    console.warn('[HaleonTickets] Failed to parse raw_data:', e);
+    return {};
+  }
+
+  // Try to find human-readable versions of fields
+  // Bubble sometimes has _text or _display suffixes, or uses French/English variations
+  const result = {
+    building: null,
+    zone: null,
+    assignedTo: null,
+    createdBy: null,
+    createdAt: null
+  };
+
+  // Building - look for text version or code (multiple naming conventions)
+  const buildingFields = [
+    'Bâtiment_text', 'batiment_text', 'building_text', 'Building_text',
+    'Bat_Code', 'BatCode', 'bat_code', 'batCode',
+    'NomBâtiment', 'nom_batiment', 'building_name', 'BuildingName',
+    'batiment_nom', 'Batiment_nom', 'bâtiment_nom',
+    'batiment', 'Batiment', 'bâtiment' // Only use if not a Bubble ID
+  ];
+  for (const field of buildingFields) {
+    const value = data[field];
+    if (value && typeof value === 'string' && !isBubbleId(value)) {
+      result.building = value;
+      break;
+    }
+  }
+
+  // Zone - look for text version
+  const zoneFields = [
+    'Zone_text', 'zone_text', 'zone_name', 'ZoneName',
+    'NomZone', 'nom_zone', 'Zone_nom', 'zone_nom',
+    'zone', 'Zone' // Only use if not a Bubble ID
+  ];
+  for (const field of zoneFields) {
+    const value = data[field];
+    if (value && typeof value === 'string' && !isBubbleId(value)) {
+      result.zone = value;
+      break;
+    }
+  }
+
+  // Assigned to - look for name or email
+  const assignedFields = [
+    'AssigneANom', 'assigne_a_nom', 'AssignedToName', 'assigned_to_name',
+    'Attribué à_name', 'attribue_a_name', 'attribue_name',
+    'AssignedToEmail', 'assigned_to_email', 'assignee_email', 'Assignee_email',
+    'responsable_nom', 'ResponsableNom', 'responsable_email', 'ResponsableEmail'
+  ];
+  for (const field of assignedFields) {
+    const value = data[field];
+    if (value && typeof value === 'string' && !isBubbleId(value)) {
+      result.assignedTo = value;
+      break;
+    }
+  }
+
+  // Creator/Demandeur - look for name or email
+  const creatorFields = [
+    'CréateurNom', 'createur_nom', 'CreatorName', 'creator_name',
+    'CréateurDuTicket_name', 'createur_du_ticket_name',
+    'CreatorEmail', 'creator_email', 'createur_email', 'CréateurEmail',
+    'demandeur_nom', 'DemandeurNom', 'demandeur_name', 'DemandeurName',
+    'demandeur_email', 'DemandeurEmail', 'requestor_email', 'RequestorEmail',
+    'requestor_name', 'RequestorName', 'auteur_nom', 'AuteurNom', 'auteur_email', 'AuteurEmail'
+  ];
+  for (const field of creatorFields) {
+    const value = data[field];
+    if (value && typeof value === 'string' && !isBubbleId(value)) {
+      result.createdBy = value;
+      break;
+    }
+  }
+
+  // Creation date - check multiple field names
+  const dateFields = [
+    'Creation Date', 'creation_date', 'CreationDate', 'created_date',
+    'Created Date', 'date_creation', 'DateCreation', 'createdAt',
+    'Created', 'created_at', 'date', 'Date'
+  ];
+  for (const field of dateFields) {
+    const value = data[field];
+    if (value && typeof value === 'string') {
+      // Must look like a date (contains - or /)
+      if (value.includes('-') || value.includes('/') || value.includes('T')) {
+        result.createdAt = value;
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
 // Build Bubble.io ticket URL - format: ?screen=parcourirC&code=CODE
 function getTicketUrl(ticketCode) {
   // Extract the numeric code from ticket_code (e.g., "TICKET#220091" -> "220091")
@@ -153,10 +270,15 @@ function StatMini({ label, value, color, icon: Icon }) {
 
 // Ticket row - improved responsive
 function TicketRow({ ticket, onAssign, onView, userEmail }) {
-  const isOld = getDaysOld(ticket.bubble_created_at) > 7;
-  const isVeryOld = getDaysOld(ticket.bubble_created_at) > 14;
+  const readableData = extractReadableData(ticket.raw_data);
+  const createdAt = ticket.bubble_created_at || readableData.createdAt;
+  const isOld = getDaysOld(createdAt) > 7;
+  const isVeryOld = getDaysOld(createdAt) > 14;
   const isMyTicket = ticket.assigned_to_email?.toLowerCase() === userEmail?.toLowerCase();
   const photos = getTicketPhotos(ticket.raw_data);
+
+  // Get clean display values
+  const displayBuilding = readableData.building || getDisplayValue(ticket.building);
 
   return (
     <div
@@ -193,15 +315,17 @@ function TicketRow({ ticket, onAssign, onView, userEmail }) {
             {ticket.description || 'Sans description'}
           </p>
 
-          {/* Meta - mobile optimized */}
+          {/* Meta - mobile optimized - only show non-empty values */}
           <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-gray-500">
-            <span className="flex items-center gap-1">
-              <Building2 size={10} className="sm:w-3 sm:h-3" />
-              {ticket.building || '-'}
-            </span>
+            {displayBuilding !== '-' && (
+              <span className="flex items-center gap-1">
+                <Building2 size={10} className="sm:w-3 sm:h-3" />
+                {displayBuilding}
+              </span>
+            )}
             <span className="flex items-center gap-1">
               <Clock size={10} className="sm:w-3 sm:h-3" />
-              {formatDate(ticket.bubble_created_at)}
+              {formatDate(createdAt)}
               {isOld && <AlertTriangle size={10} className="text-orange-500" />}
             </span>
           </div>
@@ -248,9 +372,21 @@ function TicketDetailModal({ ticket, onClose, onAssign, userEmail, onRefresh }) 
 
   const ticketUrl = getTicketUrl(ticket.ticket_code);
   const isMyTicket = ticket.assigned_to_email?.toLowerCase() === userEmail?.toLowerCase();
-  const daysOld = getDaysOld(ticket.bubble_created_at);
   const photos = getTicketPhotos(ticket.raw_data);
   const canClose = isMyTicket && ticket.status_normalized === 'assigned';
+
+  // Extract readable data from raw_data
+  const readableData = extractReadableData(ticket.raw_data);
+
+  // Get clean display values - prefer readable extracted data, then check if stored value is not a Bubble ID
+  const displayBuilding = readableData.building || getDisplayValue(ticket.building);
+  const displayZone = readableData.zone || getDisplayValue(ticket.zone);
+  const displayAssignedTo = readableData.assignedTo || getDisplayValue(ticket.assigned_to_name) || getDisplayValue(ticket.assigned_to_email) || 'Non assigné';
+  const displayCreatedBy = readableData.createdBy || getDisplayValue(ticket.created_by_name) || getDisplayValue(ticket.requestor_name) || getDisplayValue(ticket.created_by_email) || getDisplayValue(ticket.requestor_email);
+
+  // Get creation date - try multiple sources
+  const createdAt = ticket.bubble_created_at || readableData.createdAt;
+  const daysOld = getDaysOld(createdAt);
 
   const handleAssign = async () => {
     setAssigning(true);
@@ -328,19 +464,19 @@ function TicketDetailModal({ ticket, onClose, onAssign, userEmail, onRefresh }) 
 
         {/* Content - scrollable */}
         <div className="flex-1 overflow-y-auto">
-          {/* Quick info bar */}
+          {/* Quick info bar - only show fields with real values */}
           <div className="grid grid-cols-3 gap-1 p-2 bg-gray-50 border-b text-center text-xs">
             <div>
               <div className="text-gray-500">Bâtiment</div>
-              <div className="font-medium truncate">{ticket.building || '-'}</div>
+              <div className="font-medium truncate">{displayBuilding}</div>
             </div>
             <div>
               <div className="text-gray-500">Zone</div>
-              <div className="font-medium truncate">{ticket.zone || '-'}</div>
+              <div className="font-medium truncate">{displayZone}</div>
             </div>
             <div>
               <div className="text-gray-500">Créé</div>
-              <div className="font-medium">{formatDate(ticket.bubble_created_at)}</div>
+              <div className="font-medium">{formatDate(createdAt)}</div>
             </div>
           </div>
 
@@ -387,18 +523,16 @@ function TicketDetailModal({ ticket, onClose, onAssign, userEmail, onRefresh }) 
               <div>
                 <div className="text-xs text-gray-500">Assigné à</div>
                 <div className="text-sm font-medium flex items-center gap-1">
-                  {ticket.assigned_to_name || ticket.assigned_to_email || 'Non assigné'}
+                  {displayAssignedTo}
                   {isMyTicket && <span className="text-xs px-1 py-0.5 rounded bg-purple-100 text-purple-700">Moi</span>}
                 </div>
               </div>
             </div>
 
-            {(ticket.created_by_email || ticket.requestor_email) && (
+            {displayCreatedBy && displayCreatedBy !== '-' && (
               <div>
                 <div className="text-xs text-gray-500">Demandeur</div>
-                <div className="text-sm font-medium">
-                  {ticket.created_by_name || ticket.requestor_name || ticket.created_by_email || ticket.requestor_email}
-                </div>
+                <div className="text-sm font-medium">{displayCreatedBy}</div>
               </div>
             )}
 
@@ -551,45 +685,110 @@ export default function HaleonTicketsWidget({ userEmail, className = '' }) {
     loadData();
   }, [loadData]);
 
-  // Auto-sync every 15 minutes
+  // Auto-sync every 15 minutes + visibility change handling for mobile
   useEffect(() => {
-    const SYNC_INTERVAL = 15 * 60 * 1000; // 15 minutes in milliseconds
+    const SYNC_INTERVAL = 15 * 60 * 1000; // 15 minutes
+    const BACKGROUND_SYNC_THRESHOLD = 5 * 60 * 1000; // 5 minutes - sync if app was in background this long
+
+    // Track when app went to background
+    let backgroundTime = null;
+
+    // Sync function
+    const doSync = async (reason = 'scheduled') => {
+      console.log(`[HaleonTickets] Auto-sync: starting ${reason} sync`);
+      try {
+        await fetch('/api/haleon-tickets/sync', {
+          ...getAuthOptions(),
+          method: 'POST'
+        });
+        localStorage.setItem('haleon_last_sync', Date.now().toString());
+        setLastSync(new Date());
+        await loadData();
+        console.log(`[HaleonTickets] Auto-sync: ${reason} sync completed`);
+      } catch (err) {
+        console.error('[HaleonTickets] Auto-sync error:', err);
+        // On mobile, still try to load local data on sync failure
+        await loadData();
+      }
+    };
 
     // Initial sync on mount (if not recently synced)
     const lastSyncTime = localStorage.getItem('haleon_last_sync');
     const now = Date.now();
     const timeSinceLastSync = lastSyncTime ? now - parseInt(lastSyncTime) : SYNC_INTERVAL;
 
-    // If more than 15 minutes since last sync, sync now
     if (timeSinceLastSync >= SYNC_INTERVAL) {
-      console.log('[HaleonTickets] Auto-sync: starting initial sync');
-      fetch('/api/haleon-tickets/sync', {
-        ...getAuthOptions(),
-        method: 'POST'
-      }).then(() => {
-        localStorage.setItem('haleon_last_sync', Date.now().toString());
-        setLastSync(new Date());
-        loadData();
-        console.log('[HaleonTickets] Auto-sync: initial sync completed');
-      }).catch(err => console.error('[HaleonTickets] Auto-sync error:', err));
+      doSync('initial');
+    } else {
+      // Even if we don't sync, load data from cache
+      loadData();
     }
 
     // Set up interval for regular syncs
-    const intervalId = setInterval(() => {
-      console.log('[HaleonTickets] Auto-sync: starting scheduled sync');
-      fetch('/api/haleon-tickets/sync', {
-        ...getAuthOptions(),
-        method: 'POST'
-      }).then(() => {
-        localStorage.setItem('haleon_last_sync', Date.now().toString());
-        setLastSync(new Date());
-        loadData();
-        console.log('[HaleonTickets] Auto-sync: scheduled sync completed');
-      }).catch(err => console.error('[HaleonTickets] Auto-sync error:', err));
-    }, SYNC_INTERVAL);
+    const intervalId = setInterval(() => doSync('scheduled'), SYNC_INTERVAL);
 
-    return () => clearInterval(intervalId);
-  }, []); // Empty deps - only run once on mount
+    // Handle visibility change (mobile app going to background/foreground)
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // App went to background
+        backgroundTime = Date.now();
+        console.log('[HaleonTickets] App went to background');
+      } else {
+        // App came back to foreground
+        console.log('[HaleonTickets] App came back to foreground');
+        if (backgroundTime) {
+          const timeInBackground = Date.now() - backgroundTime;
+          console.log(`[HaleonTickets] Was in background for ${Math.round(timeInBackground / 1000)}s`);
+
+          // If app was in background for more than 5 minutes, sync
+          if (timeInBackground >= BACKGROUND_SYNC_THRESHOLD) {
+            doSync('visibility-change');
+          } else {
+            // Just reload data without full sync
+            loadData();
+          }
+        }
+        backgroundTime = null;
+      }
+    };
+
+    // Handle page show (iOS Safari, mobile browsers)
+    const handlePageShow = (event) => {
+      if (event.persisted) {
+        // Page was restored from bfcache (back-forward cache)
+        console.log('[HaleonTickets] Page restored from cache, reloading data');
+        loadData();
+
+        // Check if we need a full sync
+        const lastSync = localStorage.getItem('haleon_last_sync');
+        if (lastSync && Date.now() - parseInt(lastSync) >= BACKGROUND_SYNC_THRESHOLD) {
+          doSync('page-restore');
+        }
+      }
+    };
+
+    // Handle focus (when switching tabs/apps)
+    const handleFocus = () => {
+      console.log('[HaleonTickets] Window focused, checking for updates');
+      const lastSync = localStorage.getItem('haleon_last_sync');
+      if (lastSync && Date.now() - parseInt(lastSync) >= BACKGROUND_SYNC_THRESHOLD) {
+        doSync('focus');
+      } else {
+        loadData();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pageshow', handlePageShow);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [loadData]); // Include loadData in deps
 
   // Sync tickets
   const handleSync = async () => {

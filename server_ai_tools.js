@@ -1281,10 +1281,24 @@ Montre d'abord les détails du ticket et demande si l'utilisateur confirme.`,
 // ============================================================================
 
 /**
- * Crée les handlers de tools avec accès au pool de connexion et au site
+ * Crée les handlers de tools avec accès au pool de connexion, au site et au contexte utilisateur
+ * @param {Object} pool - Pool de connexion PostgreSQL
+ * @param {string} site - Site courant
+ * @param {Object} userContext - Contexte utilisateur optionnel (email, name, role)
  */
-function createToolHandlers(pool, site) {
-  return {
+function createToolHandlers(pool, site, userContext = {}) {
+  // Inject user context into params for all handlers
+  const wrapWithUserContext = (handler) => async (params) => {
+    const enrichedParams = {
+      ...params,
+      _user_email: userContext.email || params._user_email || '',
+      _user_name: userContext.name || params._user_name || '',
+      _user_role: userContext.role || params._user_role || ''
+    };
+    return handler(enrichedParams);
+  };
+
+  const handlers = {
     // -----------------------------------------------------------------------
     // DÉPANNAGES
     // -----------------------------------------------------------------------
@@ -5819,6 +5833,17 @@ function createToolHandlers(pool, site) {
       }
     }
   };
+
+  // Wrap handlers that need user context (Haleon tickets)
+  // This ensures _user_email and _user_name are always available
+  const ticketHandlers = ['get_haleon_tickets_stats', 'search_haleon_tickets', 'assign_haleon_ticket'];
+  for (const handlerName of ticketHandlers) {
+    if (handlers[handlerName]) {
+      handlers[handlerName] = wrapWithUserContext(handlers[handlerName]);
+    }
+  }
+
+  return handlers;
 }
 
 // ============================================================================
