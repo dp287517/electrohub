@@ -885,8 +885,15 @@ function createChatV2Router(pool) {
       // Charger les noms personnalisés des agents
       const customNames = await loadCustomAgentNames(pool);
 
-      // Créer les handlers de tools
-      const toolHandlers = createToolHandlers(pool, site);
+      // Extract user context for tool handlers (needed for Haleon tickets)
+      const userContext = {
+        email: clientContext?.user?.email || '',
+        name: clientContext?.user?.name || '',
+        role: clientContext?.user?.role || ''
+      };
+
+      // Créer les handlers de tools avec contexte utilisateur
+      const toolHandlers = createToolHandlers(pool, site, userContext);
 
       // Préparer les messages
       const messages = [
@@ -1143,7 +1150,15 @@ function createChatV2Router(pool) {
       sendEvent('status', { status: 'processing', message: 'Analyse de votre question...' });
 
       const customNames = await loadCustomAgentNames(pool);
-      const toolHandlers = createToolHandlers(pool, site);
+
+      // Extract user context for tool handlers (needed for Haleon tickets)
+      const userContext = {
+        email: clientContext?.user?.email || '',
+        name: clientContext?.user?.name || '',
+        role: clientContext?.user?.role || ''
+      };
+
+      const toolHandlers = createToolHandlers(pool, site, userContext);
 
       const messages = [
         { role: 'system', content: buildSystemPrompt(site, clientContext, customNames) },
