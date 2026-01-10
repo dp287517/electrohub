@@ -445,9 +445,16 @@ function MiniLeafletMap({
         map.setMaxBounds(bounds.pad(0.4));
 
         // Calculate view based on all markers
+        // Note: DataHub and Infrastructure use inverted Y coordinates (stored as 1 - y_frac)
+        // We need to convert them back to standard coordinates for correct display
         const markerLatLngs = allPositions.map(pos => {
           const x = (pos.x_frac || 0) * imgW;
-          const y = (pos.y_frac || 0) * imgH;
+          const raw_y_frac = pos.y_frac || 0;
+          // Apply inversion for DataHub and Infrastructure types
+          const y_frac = (equipmentType === 'datahub' || equipmentType === 'infrastructure')
+            ? (1 - raw_y_frac)
+            : raw_y_frac;
+          const y = y_frac * imgH;
           return L.latLng(y, x);
         });
 
@@ -467,7 +474,12 @@ function MiniLeafletMap({
 
         allPositions.forEach((pos, index) => {
           const x = (pos.x_frac || 0) * imgW;
-          const y = (pos.y_frac || 0) * imgH;
+          const raw_y_frac = pos.y_frac || 0;
+          // Apply Y inversion for DataHub and Infrastructure types
+          const y_frac = (equipmentType === 'datahub' || equipmentType === 'infrastructure')
+            ? (1 - raw_y_frac)
+            : raw_y_frac;
+          const y = y_frac * imgH;
           const latLng = L.latLng(y, x);
 
           const markerIcon = createMarkerIcon({

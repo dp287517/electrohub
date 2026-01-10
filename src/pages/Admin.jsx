@@ -1178,7 +1178,7 @@ function CompanyModal({ company, saving, onClose, onSave, onRefresh }) {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/png,image/jpeg,image/jpg,image/gif,image/webp"
                   onChange={handleLogoUpload}
                   className="hidden"
                 />
@@ -1191,7 +1191,7 @@ function CompanyModal({ company, saving, onClose, onSave, onRefresh }) {
                   {uploadingLogo ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
                   {logoPreview ? 'Change Logo' : 'Upload Logo'}
                 </button>
-                <p className="text-xs text-gray-500 mt-1">PNG, JPG up to 5MB</p>
+                <p className="text-xs text-gray-500 mt-1">PNG, JPEG, JPG, GIF, WebP - max 5MB</p>
               </div>
             </div>
           </div>

@@ -217,39 +217,48 @@ export default function SharedTroubleshootingView() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Header - Same style as TroubleshootingDetail */}
-      <div className="bg-gradient-to-r from-orange-500 via-red-500 to-pink-500 text-white">
-        <div className="max-w-6xl mx-auto px-4 py-6">
+      {/* Header - Same style as TroubleshootingDetail (black theme) */}
+      <div className="bg-gradient-to-r from-slate-800 via-slate-900 to-black text-white">
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
           {/* Shared indicator */}
-          <div className="flex items-center gap-2 text-white/80 mb-4">
+          <div className="flex items-center gap-2 text-white/80 mb-3 sm:mb-4">
             <Share2 size={16} />
-            <span className="text-sm">Dépannage partagé - Vue en lecture seule</span>
-            <span className="ml-auto flex items-center gap-1 text-sm">
+            <span className="text-xs sm:text-sm">Dépannage partagé - Vue en lecture seule</span>
+            <span className="ml-auto flex items-center gap-1 text-xs sm:text-sm">
               <Eye size={14} />
               {shareInfo?.viewCount || 1} vue(s)
             </span>
           </div>
 
           <div className="flex items-start justify-between">
-            <div className="flex items-start gap-4">
-              <div className="p-3 bg-white/20 rounded-xl">
-                <Wrench size={28} />
+            <div className="flex items-start gap-3 sm:gap-4">
+              <div className="flex-shrink-0 p-2.5 sm:p-3 bg-white/20 rounded-xl">
+                <Wrench size={22} className="sm:w-7 sm:h-7" />
               </div>
-              <div>
-                <h1 className="text-2xl sm:text-3xl font-bold">{record.title}</h1>
-                <div className="flex flex-wrap items-center gap-4 mt-2 text-white/80">
+              <div className="flex-1 min-w-0">
+                <h1 className="text-lg sm:text-2xl lg:text-3xl font-bold leading-tight line-clamp-2">{record.title}</h1>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 sm:mt-2 text-white/80 text-xs sm:text-sm">
                   <span className="flex items-center gap-1">
-                    <Calendar size={16} />
-                    {new Date(record.created_at).toLocaleDateString('fr-FR', {
-                      weekday: 'long',
-                      day: 'numeric',
-                      month: 'long',
-                      year: 'numeric'
-                    })}
+                    <Calendar size={14} className="sm:w-4 sm:h-4" />
+                    <span className="hidden sm:inline">
+                      {new Date(record.created_at).toLocaleDateString('fr-FR', {
+                        weekday: 'long',
+                        day: 'numeric',
+                        month: 'long',
+                        year: 'numeric'
+                      })}
+                    </span>
+                    <span className="sm:hidden">
+                      {new Date(record.created_at).toLocaleDateString('fr-FR', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric'
+                      })}
+                    </span>
                   </span>
                   {record.technician_name && (
                     <span className="flex items-center gap-1">
-                      <Users size={16} />
+                      <Users size={14} className="sm:w-4 sm:h-4" />
                       {record.technician_name}
                     </span>
                   )}
