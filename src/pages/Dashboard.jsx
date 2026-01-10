@@ -320,7 +320,7 @@ export default function Dashboard() {
   const [mounted, setMounted] = useState(false);
   const [departments, setDepartments] = useState([]);
   const [sites, setSites] = useState([]);
-  const [stats, setStats] = useState({ overdue: 0, pending: 0, completed: 0, total: 0, overdueByEquipment: {}, pendingByEquipment: {} });
+  const [stats, setStats] = useState({ overdue: 0, pending: 0, pending_30d: 0, completed: 0, total: 0, overdueByEquipment: {}, pendingByEquipment: {}, pending30dByEquipment: {} });
   const [proceduresStats, setProceduresStats] = useState({ pendingAttention: 0 });
   const [doorsStats, setDoorsStats] = useState({ pendingAttention: 0 });
   const [ticketsStats, setTicketsStats] = useState({ total: 0, unassigned: 0, my_tickets: 0, urgent: 0, user_teams: [] });
@@ -359,10 +359,12 @@ export default function Dashboard() {
         setStats({
           overdue: controls.stats?.overdue || controls.overdue_count || 0,
           pending: controls.stats?.pending || controls.pending_count || 0,
+          pending_30d: controls.stats?.pending_30d || 0,
           completed: controls.stats?.completed_30d || controls.stats?.completed_this_week || 0,
           total: controls.stats?.total || 0,
           overdueByEquipment: controls.stats?.overdueByEquipment || {},
-          pendingByEquipment: controls.stats?.pendingByEquipment || {}
+          pendingByEquipment: controls.stats?.pendingByEquipment || {},
+          pending30dByEquipment: controls.stats?.pending30dByEquipment || {}
         });
       }
 
@@ -435,12 +437,13 @@ export default function Dashboard() {
   // Calculate filtered stats based on allowed equipment types
   const filteredStats = useMemo(() => {
     if (!canSeeEquipmentStats) {
-      return { overdue: 0, pending: 0, completed: 0, total: 0 };
+      return { overdue: 0, pending: 0, pending_30d: 0, completed: 0, total: 0 };
     }
 
     // Filter stats by allowed equipment types
     let overdue = 0;
     let pending = 0;
+    let pending_30d = 0;
 
     Object.entries(stats.overdueByEquipment || {}).forEach(([type, count]) => {
       if (allowedEquipmentTypes.includes(type)) {
@@ -454,9 +457,16 @@ export default function Dashboard() {
       }
     });
 
+    Object.entries(stats.pending30dByEquipment || {}).forEach(([type, count]) => {
+      if (allowedEquipmentTypes.includes(type)) {
+        pending_30d += count;
+      }
+    });
+
     return {
       overdue,
       pending,
+      pending_30d,
       completed: stats.completed, // This is global, would need backend filtering for precise count
       total: stats.total
     };
@@ -601,7 +611,7 @@ export default function Dashboard() {
             />
             <StatCard
               icon={Clock}
-              value={filteredStats.pending}
+              value={filteredStats.pending_30d}
               label="À faire (30j.)"
               color="from-amber-400 via-orange-500 to-red-600"
               glow="hover:shadow-orange-500/30"
@@ -621,8 +631,8 @@ export default function Dashboard() {
             />
             <StatCard
               icon={Ticket}
-              value={ticketsStats.total + troubleshootingStats.total}
-              label="Interventions"
+              value={ticketsStats.total}
+              label="Tickets ouverts"
               color="from-purple-400 via-violet-500 to-indigo-600"
               glow="hover:shadow-violet-500/30"
               onClick={() => navigate('/app/troubleshooting')}
