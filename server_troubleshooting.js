@@ -1148,12 +1148,45 @@ router.get('/:id/pdf', async (req, res) => {
     ]);
 
     if (recordRes.rows.length === 0) {
-      return res.status(404).json({ error: 'Enregistrement non trouvé' });
+      return res.status(404).json({ error: 'Enregistrement non trouve' });
     }
 
     const record = recordRes.rows[0];
     const photos = photosRes.rows;
     const settings = settingsRes.rows[0] || {};
+
+    // Get or create share token for online view link
+    let shareToken = null;
+    let shareUrl = null;
+    try {
+      // Check if token already exists
+      const existingToken = await pool.query(`
+        SELECT token FROM troubleshooting_share_tokens
+        WHERE troubleshooting_id = $1 AND (expires_at IS NULL OR expires_at > NOW())
+        ORDER BY created_at DESC LIMIT 1
+      `, [id]);
+
+      if (existingToken.rows.length > 0) {
+        shareToken = existingToken.rows[0].token;
+      } else {
+        // Create new share token
+        const crypto = await import('crypto');
+        shareToken = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 90); // 90 days expiry for PDF links
+
+        await pool.query(`
+          INSERT INTO troubleshooting_share_tokens (token, troubleshooting_id, created_by_email, expires_at)
+          VALUES ($1, $2, $3, $4)
+        `, [shareToken, id, 'pdf-export', expiresAt]);
+      }
+
+      // Build share URL
+      const appUrl = process.env.APP_URL || process.env.BASE_URL || 'https://electrohub.haleon-tool.com';
+      shareUrl = `${appUrl}/shared/troubleshooting/${shareToken}`;
+    } catch (tokenErr) {
+      console.warn('[TROUBLESHOOTING PDF] Could not create share token:', tokenErr.message);
+    }
 
     // Create PDF with modern styling
     const doc = new PDFDocument({ size: 'A4', margin: 0, bufferPages: true });
@@ -1193,8 +1226,8 @@ router.get('/:id/pdf', async (req, res) => {
 
     // Title
     doc.fontSize(18).fillColor('#ffffff').font('Helvetica-Bold');
-    const titleText = record.title || 'Rapport de dépannage';
-    doc.text(titleText, logoEndX + 10, 28, { width: 350 });
+    const titleText = record.title || 'Rapport de depannage';
+    doc.text(titleText, logoEndX + 10, 28, { width: 300 });
 
     // Date and technician
     doc.fontSize(10).fillColor('rgba(255,255,255,0.8)').font('Helvetica');
@@ -1206,11 +1239,22 @@ router.get('/:id/pdf', async (req, res) => {
       doc.text(`Technicien: ${record.technician_name}`, logoEndX + 10, 70);
     }
 
+    // "Voir en ligne" button with link (top right, above badges)
+    if (shareUrl) {
+      doc.roundedRect(pageWidth - margin - 90, 55, 85, 22, 6).fill('#3b82f6');
+      doc.fontSize(9).fillColor('#ffffff').font('Helvetica-Bold');
+      doc.text('Voir en ligne', pageWidth - margin - 88, 61, {
+        width: 81,
+        align: 'center',
+        link: shareUrl
+      });
+    }
+
     // Status and Severity badges (top right)
     const statusLabels = {
-      in_progress: 'En cours', completed: 'Résolu', pending_review: 'En attente',
-      pending_parts: 'Attente pièces', pending_external: 'Attente externe',
-      open: 'Ouvert', resolved: 'Résolu', closed: 'Clôturé'
+      in_progress: 'En cours', completed: 'Resolu', pending_review: 'En attente',
+      pending_parts: 'Attente pieces', pending_external: 'Attente externe',
+      open: 'Ouvert', resolved: 'Resolu', closed: 'Cloture'
     };
     const statusColors = {
       in_progress: '#f97316', completed: '#22c55e', pending_review: '#6b7280',
@@ -1218,13 +1262,13 @@ router.get('/:id/pdf', async (req, res) => {
       open: '#ef4444', resolved: '#22c55e', closed: '#6b7280'
     };
     const severityColors = { critical: '#dc2626', major: '#f97316', minor: '#eab308', cosmetic: '#6b7280' };
-    const severityLabels = { critical: 'Critique', major: 'Majeur', minor: 'Mineur', cosmetic: 'Cosmétique' };
+    const severityLabels = { critical: 'Critique', major: 'Majeur', minor: 'Mineur', cosmetic: 'Cosmetique' };
 
     // Status badge
     const statusColor = statusColors[record.status] || '#6b7280';
     const statusLabel = statusLabels[record.status] || record.status || 'N/A';
     doc.roundedRect(pageWidth - margin - 150, 25, 70, 22, 11).fill(statusColor);
-    doc.fontSize(9).fillColor('#ffffff').text(statusLabel, pageWidth - margin - 148, 31, { width: 66, align: 'center' });
+    doc.fontSize(9).fillColor('#ffffff').font('Helvetica').text(statusLabel, pageWidth - margin - 148, 31, { width: 66, align: 'center' });
 
     // Severity badge
     const sevColor = severityColors[record.severity] || '#6b7280';
@@ -1245,10 +1289,11 @@ router.get('/:id/pdf', async (req, res) => {
       doc.roundedRect(x, cardY, width, height, 8).stroke('#e5e7eb');
     };
 
-    // Helper function for section headers inside cards
+    // Helper function for section headers inside cards (using circle instead of special char)
     const drawSectionHeader = (x, headerY, text, iconColor = '#f97316') => {
-      doc.fontSize(11).fillColor(iconColor).font('Helvetica-Bold').text('●', x + cardPadding, headerY);
-      doc.fillColor('#111827').text(text, x + cardPadding + 15, headerY);
+      // Draw a small filled circle instead of special character
+      doc.circle(x + cardPadding + 5, headerY + 5, 4).fill(iconColor);
+      doc.fontSize(11).fillColor('#111827').font('Helvetica-Bold').text(text, x + cardPadding + 15, headerY);
       return headerY + 20;
     };
 
@@ -1261,7 +1306,7 @@ router.get('/:id/pdf', async (req, res) => {
     descHeight = Math.max(80, descTextHeight + 50);
 
     drawCard(margin, y, leftColWidth, descHeight);
-    let cardY = drawSectionHeader(margin, y + cardPadding, 'Description du problème');
+    let cardY = drawSectionHeader(margin, y + cardPadding, 'Description du probleme');
     doc.fontSize(10).fillColor('#374151').font('Helvetica');
     doc.text(descText, margin + cardPadding, cardY, { width: leftColWidth - cardPadding * 2 });
 
@@ -1275,7 +1320,7 @@ router.get('/:id/pdf', async (req, res) => {
       if (y + causeHeight > 750) { doc.addPage(); y = 40; }
 
       drawCard(margin, y, leftColWidth, causeHeight);
-      cardY = drawSectionHeader(margin, y + cardPadding, 'Cause identifiée', '#eab308');
+      cardY = drawSectionHeader(margin, y + cardPadding, 'Cause identifiee', '#eab308');
       doc.fontSize(10).fillColor('#374151').font('Helvetica');
       doc.text(record.root_cause, margin + cardPadding, cardY, { width: leftColWidth - cardPadding * 2 });
 
@@ -1290,7 +1335,7 @@ router.get('/:id/pdf', async (req, res) => {
       if (y + solHeight > 750) { doc.addPage(); y = 40; }
 
       drawCard(margin, y, leftColWidth, solHeight);
-      cardY = drawSectionHeader(margin, y + cardPadding, 'Solution appliquée', '#22c55e');
+      cardY = drawSectionHeader(margin, y + cardPadding, 'Solution appliquee', '#22c55e');
       doc.fontSize(10).fillColor('#374151').font('Helvetica');
       doc.text(record.solution, margin + cardPadding, cardY, { width: leftColWidth - cardPadding * 2 });
 
@@ -1305,7 +1350,7 @@ router.get('/:id/pdf', async (req, res) => {
       if (y + partsHeight > 750) { doc.addPage(); y = 40; }
 
       drawCard(margin, y, leftColWidth, partsHeight);
-      cardY = drawSectionHeader(margin, y + cardPadding, 'Pièces remplacées', '#6366f1');
+      cardY = drawSectionHeader(margin, y + cardPadding, 'Pieces remplacees', '#6366f1');
       doc.fontSize(10).fillColor('#374151').font('Helvetica');
       doc.text(record.parts_replaced, margin + cardPadding, cardY, { width: leftColWidth - cardPadding * 2 });
 
@@ -1318,7 +1363,7 @@ router.get('/:id/pdf', async (req, res) => {
     // Equipment Card
     const equipCardHeight = 100;
     drawCard(rightColX, sidebarY, rightColWidth, equipCardHeight);
-    cardY = drawSectionHeader(rightColX, sidebarY + cardPadding, 'Équipement', '#f97316');
+    cardY = drawSectionHeader(rightColX, sidebarY + cardPadding, 'Equipement', '#f97316');
 
     doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Type', rightColX + cardPadding, cardY);
     doc.fontSize(10).fillColor('#111827').font('Helvetica-Bold').text(getEquipmentTypeLabel(record.equipment_type), rightColX + cardPadding, cardY + 12);
@@ -1338,12 +1383,12 @@ router.get('/:id/pdf', async (req, res) => {
       cardY = drawSectionHeader(rightColX, sidebarY + cardPadding, 'Localisation', '#3b82f6');
 
       if (record.building_code) {
-        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Bâtiment', rightColX + cardPadding, cardY);
+        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Batiment', rightColX + cardPadding, cardY);
         doc.fontSize(10).fillColor('#111827').font('Helvetica').text(record.building_code, rightColX + cardPadding, cardY + 12);
         cardY += 25;
       }
       if (record.floor) {
-        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Étage', rightColX + cardPadding, cardY);
+        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Etage', rightColX + cardPadding, cardY);
         doc.fontSize(10).fillColor('#111827').font('Helvetica').text(record.floor, rightColX + cardPadding, cardY + 12);
       }
 
@@ -1357,7 +1402,7 @@ router.get('/:id/pdf', async (req, res) => {
       cardY = drawSectionHeader(rightColX, sidebarY + cardPadding, 'Temps', '#8b5cf6');
 
       if (record.started_at) {
-        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Début', rightColX + cardPadding, cardY);
+        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Debut', rightColX + cardPadding, cardY);
         doc.fontSize(10).fillColor('#111827').font('Helvetica').text(
           new Date(record.started_at).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
           rightColX + cardPadding, cardY + 12
@@ -1366,13 +1411,13 @@ router.get('/:id/pdf', async (req, res) => {
       }
 
       if (record.duration_minutes) {
-        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Durée intervention', rightColX + cardPadding, cardY);
+        doc.fontSize(9).fillColor('#6b7280').font('Helvetica').text('Duree intervention', rightColX + cardPadding, cardY);
         doc.fontSize(10).fillColor('#111827').font('Helvetica').text(formatDuration(record.duration_minutes), rightColX + cardPadding, cardY + 12);
         cardY += 28;
       }
 
       if (record.downtime_minutes) {
-        doc.fontSize(9).fillColor('#dc2626').font('Helvetica').text('Temps d\'arrêt', rightColX + cardPadding, cardY);
+        doc.fontSize(9).fillColor('#dc2626').font('Helvetica').text('Temps d\'arret', rightColX + cardPadding, cardY);
         doc.fontSize(11).fillColor('#dc2626').font('Helvetica-Bold').text(formatDuration(record.downtime_minutes), rightColX + cardPadding, cardY + 12);
       }
 
@@ -1445,7 +1490,7 @@ router.get('/:id/pdf', async (req, res) => {
           });
 
           // Photo type badge
-          const typeLabels = { before: 'Avant', during: 'Pendant', after: 'Après' };
+          const typeLabels = { before: 'Avant', during: 'Pendant', after: 'Apres' };
           const typeColors = { before: '#1f2937', during: '#f97316', after: '#22c55e' };
           const badgeColor = typeColors[photo.photo_type] || '#6b7280';
           doc.roundedRect(x + 8, y + 8, 50, 18, 4).fill(badgeColor);
@@ -1473,7 +1518,7 @@ router.get('/:id/pdf', async (req, res) => {
       // Footer text
       doc.fontSize(8).fillColor('#9ca3af');
       doc.text(`© ${new Date().getFullYear()} Haleon-tool - Daniel Palha`, margin, 812, { width: contentWidth * 0.5 });
-      doc.text(`Généré le ${new Date().toLocaleDateString('fr-FR')} - Page ${i + 1}/${pages.count}`, margin + contentWidth * 0.5, 812, { width: contentWidth * 0.5, align: 'right' });
+      doc.text(`Genere le ${new Date().toLocaleDateString('fr-FR')} - Page ${i + 1}/${pages.count}`, margin + contentWidth * 0.5, 812, { width: contentWidth * 0.5, align: 'right' });
     }
 
     doc.end();
@@ -1571,7 +1616,7 @@ router.get('/report/pdf', async (req, res) => {
 
     // Date range
     const dateRangeText = date_from || date_to
-      ? `Période: ${date_from ? new Date(date_from).toLocaleDateString('fr-FR') : 'Début'} - ${date_to ? new Date(date_to).toLocaleDateString('fr-FR') : 'Aujourd\'hui'}`
+      ? `Période: ${date_from ? new Date(date_from).toLocaleDateString('fr-FR') : 'Debut'} - ${date_to ? new Date(date_to).toLocaleDateString('fr-FR') : 'Aujourd\'hui'}`
       : 'Toutes les interventions';
     doc.fontSize(10).fillColor('#9ca3af').text(dateRangeText, 50, y, { width: 495, align: 'center' });
     y += 50;
@@ -1587,7 +1632,7 @@ router.get('/report/pdf', async (req, res) => {
       ['Total interventions:', summary.total],
       ['Pannes critiques:', summary.critical],
       ['Pannes majeures:', summary.major],
-      ['Temps d\'arrêt total:', `${summary.totalDowntime} min`],
+      ['Temps d\'arret total:', `${summary.totalDowntime} min`],
       ['Durée moyenne réparation:', `${summary.avgDuration} min`]
     ];
 
