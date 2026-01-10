@@ -561,8 +561,42 @@ export function createHaleonTicketsRouter(pool) {
     try {
       console.log('[Haleon Tickets] Synchronisation des tickets depuis Bubble...');
 
-      // Récupérer tous les tickets récents (sans filtre car Statut est une Option Set)
-      // On filtre côté serveur ensuite
+      // 1. D'abord récupérer les catégories pour avoir le mapping EquipeUser ID → Team name
+      const categoryNameToTeam = {
+        'Déplacement de mobiliers et agencements': 'Technicien Facility',
+        'Nettoyage (Propreté des locaux)': 'Cleaning',
+        'Meeting room, printer, écrans, TV (only support)': 'Employee Experience et Services',
+        'Chauffage, ventilation (HVAC)': 'Thermistes',
+        'Réparations mineures et entretiens de base': 'Technicien Facility',
+        'Déchets (transport ou récupération)': 'Waste',
+        'Transfert (palettes et colis)': 'Technicien Facility',
+        'EPI et habits jetables': 'Softservice',
+        'Maintenance infrastructure (bâtiment)': 'Infra',
+        'Maintenance Electrique': 'Elec',
+        'Consommables bureautiques': 'Softservice',
+        'Espaces verts et extérieurs': 'Infra',
+        'Restauration, fitness': 'Employee Experience et Services',
+        'Aménagement Meeting Room, salle': 'Technicien Facility',
+        'Haleon-Tool Support': 'Haleon-tool Support',
+        'Consignation Electrique / Utilités': 'Consignation',
+        'Machine (café), fontaines à eau, distrib. snack': 'My Greenshop',
+        'Accessoires IT': 'Softservice'
+      };
+
+      // Récupérer les catégories pour construire le mapping Category ID → Team name
+      const categoriesData = await bubbleFetch('/obj/TICKET:%20Cat%C3%A9gorie?limit=100');
+      const categories = categoriesData.response?.results || [];
+
+      const categoryIdToTeamName = new Map();
+      for (const cat of categories) {
+        const teamName = categoryNameToTeam[cat.Nom];
+        if (teamName) {
+          categoryIdToTeamName.set(cat._id, teamName);
+        }
+      }
+      console.log(`[Haleon Tickets] ${categoryIdToTeamName.size} mappings catégorie→équipe chargés`);
+
+      // 2. Récupérer tous les tickets récents (sans filtre car Statut est une Option Set)
       const ticketsData = await bubbleFetch(
         `/obj/TICKET?limit=200&sort_field=Modified%20Date&descending=true`
       );
@@ -579,6 +613,10 @@ export function createHaleonTicketsRouter(pool) {
       let synced = 0;
       for (const ticket of tickets) {
         const ticketCode = ticket['TicketCode/ text - search'] || `TICKET#${ticket.CodeTicket || 'N/A'}`;
+
+        // Trouver le nom de l'équipe via la catégorie
+        const categoryId = ticket['Catégorie'];
+        const teamName = categoryIdToTeamName.get(categoryId) || ticket['Catégorie Equipe/User'] || null;
 
         await pool.query(`
           INSERT INTO haleon_tickets_cache (
@@ -615,8 +653,8 @@ export function createHaleonTicketsRouter(pool) {
           normalizeStatus(ticket.Statut),
           ticket.UrgenceSLA,
           normalizePriority(ticket.UrgenceSLA),
-          ticket['Catégorie'],
-          ticket['Catégorie Equipe/User'],
+          categoryId,
+          teamName,
           ticket['Bâtiment'],
           ticket['Bat Etage'],
           ticket.Zone,
